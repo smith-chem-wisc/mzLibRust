@@ -69,7 +69,7 @@ clearest demonstration that these bake-offs pay for themselves.
 |---|---|---|---|
 | tryptic peptides | 48 / 208 / 249 / 261 — **wouldn't publish** | **195 seq / 303 peptidoforms** ✓ | 195 / 303 |
 | ETD fragments | 22,882 / 5,850 / 924 — **wouldn't publish** | **10,174 real** (16,066 raw) ✓ | — |
-| searchable modifications | 31 of 55 → "53 if you patch it" | **36 of 38** ✓ | 36 of 38 |
+| searchable modifications | 31 of 55 → "53 if you patch it" ✗ | 14 loaded, flagged as incomplete | **exclusion correct; 14 usable** |
 | pSer89 peptide at 2+ | **549.25499** ✓ | **549.255** ✓ | agree |
 | external lookups / dead ends | 7 / 3 | **1 / 0** | |
 | would publish? | 2 of 4 | 4 of 4 | |
@@ -77,10 +77,20 @@ clearest demonstration that these bake-offs pay for themselves.
 **Both arms independently landed on 549.255 for SLHTLFGDK + phospho-Ser89.** Two entirely different
 chemistry stacks agreeing to 5 decimal places is a good sign for both.
 
-**Both arms independently concluded the 22 glycation sites are searchable** (+162.0528) — the answer
-mzLib gets wrong ([#1112](https://github.com/smith-chem-wisc/mzLib/issues/1112)). Arm B got there
-because our corrected `explain()` told them to go look; Arm A got there from bench knowledge. Strong
-corroboration from two directions.
+**Both arms independently concluded the 22 glycation sites are searchable** (+162.0528) — and
+**both were wrong, as was this report's first version.** A mass spectrometrist reviewing it pointed
+out that glycation is ambiguous in precisely the way the exclusion exists to catch: the Amadori
+product is labile and heterogeneous, progresses to AGEs, and dissociates in preference to the
+backbone, so an exact mass plus a clean fragment ladder describes an unobservable species. The
+annotation qualifiers agree — **14 of the 22 are `; in vitro`** and both `GlcNAc` sites exist only in
+disease variants.
+
+Two independent arms converging on the same answer was not corroboration; it was two arms making the
+same reasonable inference from `ptmlist.txt` having a `CF`/`MM` line. Agreement between arms is
+evidence, not proof, and this is the case that shows the difference.
+
+The defect is the **silence**, not the exclusion —
+[#1112](https://github.com/smith-chem-wisc/mzLib/issues/1112) has been corrected accordingly.
 
 Arm A's most alarming finding is about the *ecosystem*, not about us. The digestion crate they found
 (69 downloads, no documentation) **cleaves before proline and never says so**:

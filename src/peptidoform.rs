@@ -262,14 +262,16 @@ impl ModificationCensus {
                 .collect::<Vec<_>>()
                 .join(", ");
             sentences.push(format!(
-                "Excluded by type: {named} — mzLib only loads 'modified residue' and 'lipid \
-                 moiety-binding region' annotations, so these were discarded because of their \
-                 feature type. Some genuinely have no defined composition and no mass can be \
-                 assigned; others do have one and are excluded anyway (see \
-                 smith-chem-wisc/mzLib#1112). Check the individual annotations before concluding \
-                 a modification was unusable. Legacy wording, retained until #1112 lands: no \
-                 mass can be assigned and a peptide carrying one is not identifiable by mass \
-                 spectrometry."
+                "Excluded by type: {named} — mzLib loads only 'modified residue' and 'lipid \
+                 moiety-binding region' annotations, so these were dropped on feature type alone. \
+                 The exclusion is usually right: a glycation or glycosylation annotation describes \
+                 a labile, heterogeneous adduct, so assigning it one exact mass and a clean \
+                 fragment ladder would invent a species you cannot observe. But the reason is not \
+                 reported, and the qualifier is not read — on albumin, 14 of the 24 excluded here \
+                 are marked 'in vitro' and 2 exist only in disease variants, which are different \
+                 grounds for exclusion needing different judgements from you. Read the annotations \
+                 on the UniProt entry before concluding anything about a specific site; this \
+                 census can only tell you the count (smith-chem-wisc/mzLib#1112)."
             ));
         }
 

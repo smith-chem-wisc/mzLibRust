@@ -136,6 +136,58 @@ both uncompressed, warning nobody. The trap is now cross-referenced from the fie
 That generalises: **put the warning where the mistake is made, not where the concept is defined.**
 Worth applying to pyMzLib's `download(extensions=…)` docstring too.
 
+## 5. Glycosylation-site annotations are dropped silently — and the exclusion is *right*
+
+**Status:** [mzLib#1112](https://github.com/smith-chem-wisc/mzLib/issues/1112), with a correction
+posted to the issue.
+**Found by:** a bake-off arm that resolved 22 of albumin's 24 excluded annotations to a defined mass
+and concluded they were usable. **That conclusion was wrong, and so was our first report of it.**
+
+`ProteinXmlEntry.ParseFeatureEndElement` turns a UniProt feature into a modification only for
+`modified residue` and `lipid moiety-binding region`. `glycosylation site` is discarded before any
+lookup, so it never reaches `unknownModifications` and nothing reports it.
+
+The first version of this finding argued mzLib should load them, because UniProt's `ptmlist.txt`
+gives `N-linked (Glc) (glycation) lysine` a formula (`C6H10O5`) and a mass (`162.052823`).
+**A mass spectrometrist corrected that, and they were right:**
+
+- **Glycation is ambiguous in exactly the way the exclusion exists to catch.** The Amadori product is
+  labile and heterogeneous, progresses to advanced glycation end products, and dissociates in
+  preference to the peptide backbone. Emitting one exact mass and a clean c/z ladder would describe a
+  species you cannot observe. The presence of `CF`/`MM` in `ptmlist.txt` is **not** sufficient
+  evidence that a modification is usable. The same argument applies to `lipid moiety-binding region`,
+  which mzLib *does* load.
+- **Most of these are not modifications of the real protein anyway.** By qualifier: **14** of the 22
+  glycation annotations are `; in vitro`, 1 is `; alternate`, and both `N-linked (GlcNAc...)` sites
+  exist only in the Redhill and Casebrook variants. mzLib reads none of those qualifiers, for **any**
+  feature type — including the `modified residue` ones it does load.
+
+**So the defect is the silence, not the exclusion.** A caller gets 14 with no indication that 24 more
+were annotated, that they were dropped on feature type rather than chemistry, or that most were in
+vitro. The revised ask upstream is to *report* the excluded annotations — type, description and
+position — not to load them.
+
+**Lesson for this crate:** our `explain()` originally said the excluded sites "have no defined
+chemical composition", which was false; we then corrected it to imply they should have been loaded,
+which was also false. Both times the trap-disclosure was itself the misinformation. It now states
+what actually happened (dropped on feature type), why that is usually correct, and that the census
+can only give a count — so the reader must go and read the annotations. See finding 6.
+
+## 6. `ModificationCensus` reports a tally, not the annotations
+
+**Status:** open; needs a bridge change (`CensusAnnotatedFeatures` in `pkg/bridge/Peptidoform.cs`).
+**Found by:** the biologist bake-off arm, whose *single* external lookup in the whole task was
+leaving the crate to read the excluded annotation strings from UniProt.
+
+`by_type` gives a feature-type name, a count, and a loaded flag. It cannot distinguish "no defined
+composition" from "in vitro" from "variant-only" — three exclusions needing three different
+decisions. The user is told *that* something was excluded but has no way to check *what*, so they
+cannot evaluate the reason and must leave the tool.
+
+This is the same failure mode as findings 4 and 5 in miniature: disclosure that stops one level short
+of actionable. The fix is to carry the description string and position through the census, which
+requires the bridge to emit them — so both bindings gain it at once.
+
 ## Already known, carried over from pyMzLib
 
 These were found during the pyMzLib build and are relevant to anyone reading this crate's source:
