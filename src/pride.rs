@@ -136,6 +136,16 @@ pub struct DownloadOptions {
     pub category: Option<String>,
     /// Keep only files with these extensions, e.g. `[".raw", ".mzML"]`. Empty keeps all.
     /// Combined with `category` as AND.
+    ///
+    /// **A compressed file's extension is `.gz`, not what it is compressed from.** This is the
+    /// most common way to get an empty result: PXD000001's peak list is
+    /// `PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz`, so `[".mgf"]` matches **nothing** — while
+    /// `[".gz"]` over-matches to three unrelated files. To select one compressed type, combine
+    /// [`Self::category`] with the extension (`category: "PEAK"`, `extensions: [".gz"]`), or skip
+    /// these filters entirely and pass the files you want to [`download_files`].
+    ///
+    /// A filter that matched nothing is an error here, not an empty success — see
+    /// [`PrideFile::extension`].
     pub extensions: Vec<String>,
     /// When `false`, a file already present at the destination is left alone and not re-fetched —
     /// a cheap resume for a large project.
@@ -147,7 +157,7 @@ pub struct DownloadOptions {
 
 impl DownloadOptions {
     /// Whether existing files should be replaced. Defaults to `true`, matching pyMzLib.
-    fn overwrite(&self) -> bool {
+    fn overwrite_or_default(&self) -> bool {
         self.overwrite.unwrap_or(true)
     }
 }
@@ -338,7 +348,7 @@ fn build_download_args(
         args.push(reject_flag_like("extensions", &wanted.join(","))?);
     }
 
-    if !options.overwrite() {
+    if !options.overwrite_or_default() {
         args.push("--no-overwrite".to_owned());
     }
 
@@ -521,6 +531,12 @@ fn check_filter_matched(
 ///
 /// [`MzLibError::Usage`] if the accession is malformed; [`MzLibError::ProjectNotFound`] if PRIDE
 /// returns nothing (a typo and a private project are indistinguishable to PRIDE, so also to us);
+///
+/// Note that the accession check is **grammatical only** — a letter prefix and a run of digits.
+/// `"PXD0000019999"` is well-formed and costs a live round trip before it fails, so no offline
+/// check will catch a transposed digit. That is deliberate: PXD accessions are not fixed-width
+/// forever, and rejecting a valid future accession would be worse than one wasted request.
+///
 /// [`MzLibError::ServiceUnavailable`] if EBI was unreachable.
 pub fn list_files(accession: &str) -> Result<Vec<PrideFile>> {
     list_files_with(accession, &ListOptions::default())
@@ -569,6 +585,10 @@ pub fn download(
 /// 5 MB", "the three newest", or "everything except the MGF" cannot be said in that vocabulary at
 /// all. They can all be said with an iterator.
 ///
+/// The returned paths say **where each file is**, not what was transferred just now: with
+/// [`DownloadOptions::overwrite`] set to `false`, a file already present is left alone and its path
+/// is still returned. Do not read the length of this vector as a byte-count of work done.
+///
 /// # Errors
 ///
 /// [`MzLibError::Usage`] if the selection is empty, spans several projects, or includes a file
@@ -579,12 +599,22 @@ pub fn download_files(
     options: &DownloadOptions,
 ) -> Result<Vec<PathBuf>> {
     let (args, stdin) =
-        build_download_files_args(files, destination.as_ref(), options.overwrite())?;
+        build_download_files_args(files, destination.as_ref(), options.overwrite_or_default())?;
     let data = bridge::invoke(&args, Some(&stdin), options.timeout)?;
     Ok(parse_paths(&data))
 }
 
-/// Sum the sizes of some files — e.g. to see what a download will cost before starting it.
+/// Sum the sizes of some files.
+///
+/// **This is the size PRIDE reports, which is not always the number of bytes you will transfer.**
+/// For compressed files PRIDE frequently reports the *decompressed* size: in PXD000001 the reported
+/// size of `PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz` is 16,448,103 bytes, which is exactly what
+/// `gzip -l` reports as its uncompressed length — the actual download is 5,984,662 bytes, 2.75×
+/// smaller. The `.mztab.gz` in the same project behaves the same way; the `.xml.gz` does not.
+/// PRIDE's own metadata is inconsistent here, so neither this crate nor mzLib can correct it.
+///
+/// Use this to answer "how much data is in this project", and treat it as an upper bound on
+/// transfer time. If you need the real figure for a compressed file, only the download knows.
 #[must_use]
 pub fn total_size_bytes(files: &[PrideFile]) -> u64 {
     files.iter().map(|file| file.file_size_bytes).sum()

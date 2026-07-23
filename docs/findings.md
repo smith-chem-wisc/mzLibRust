@@ -84,6 +84,58 @@ certainly right — FlashLFQ's own `GetIntensity` returns 0 for a peptide it did
 
 ---
 
+## 3. PRIDE reports decompressed sizes for some compressed files — documentation, both bindings
+
+**Status:** documented in this crate; **needs back-porting to pyMzLib**.
+**Found by:** the PRIDE bake-off arm, which saw a 5.98 MB file land where the manifest promised
+16.4 MB and correctly suspected a truncated download before checking.
+
+For PXD000001, `file_size_bytes` versus what actually arrives:
+
+| File | PRIDE reports | bytes written | `gzip -l` uncompressed |
+|---|---|---|---|
+| `…pride.mgf.gz` | 16,448,103 | 5,984,662 | **16,448,103** |
+| `…pride.mztab.gz` | 497,985 | 103,845 | **497,985** |
+| `…xml.gz` | 10,677,205 | 10,668,000 | 48,038,607 |
+
+For two of the three, PRIDE's reported size is *exactly* the decompressed length. All three pass
+`gzip -t`, so these are complete downloads, not truncations. PRIDE's metadata is simply inconsistent,
+and neither mzLib nor a binding can correct it.
+
+Why it matters: `total_size_bytes()` is documented as the way to see what a download will cost
+before starting it, and for the file a user most likely wants here it overstates the transfer by
+**2.75×**. The near-miss is the real point — the bake-off agent's first hypothesis was a truncated
+download, which would have been a serious and wrong bug report.
+
+**Handling here:** [`total_size_bytes`](../src/pride.rs) now carries the caveat with these numbers,
+and is described as an upper bound rather than a cost estimate.
+
+**Back-port:** pyMzLib's `pride.total_size_bytes()` and `PrideFile.size_mb` have the identical
+docstring promise and the identical problem.
+
+## 4. The `.gz` trap is prevented by documentation, and it works — evidence
+
+Not a defect; recorded because it is the clearest evidence the "disclose the traps" convention pays
+for itself, and because it says where the disclosure has to *live*.
+
+The bake-off agent was asked to download "only the compressed MGF". The natural filter,
+`extensions: [".mgf"]`, matches **zero** files — PXD000001's peak list is
+`PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz`, extension `.gz`. The agent did not hit it, and said why:
+`PrideFile::extension`'s doc-comment volunteers the `x.mgf.gz` example unprompted.
+
+It then ran the wrong filter deliberately, and got:
+
+> `No file in PXD000001 matched extensions [".mgf"]. Use list_files() to see what the project actually contains — note that compressed files such as 'x.mgf.gz' have the extension '.gz'.`
+
+An error rather than an empty success, **with the fix inside the error**, and no stray empty
+destination directory left behind.
+
+The lesson for documentation placement: the warning was on `extension()`, but *the person about to
+make the mistake is reading `DownloadOptions::extensions`* — whose examples were `.raw` and `.mzML`,
+both uncompressed, warning nobody. The trap is now cross-referenced from the field that causes it.
+That generalises: **put the warning where the mistake is made, not where the concept is defined.**
+Worth applying to pyMzLib's `download(extensions=…)` docstring too.
+
 ## Already known, carried over from pyMzLib
 
 These were found during the pyMzLib build and are relevant to anyone reading this crate's source:
