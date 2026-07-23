@@ -1,0 +1,1 @@
+{"n": 1, "action": "read mzLibRust README.md", "outcome": "worked", "note": "README front page has a FlashLFQ example with quantify_with, QuantifyOptions{match_between_runs:true}, and mbr_rescued_peptide_count(). Also explains 0.0 peptide intensity = not measured and None protein intensity = unresolvable."}

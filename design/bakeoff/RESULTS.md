@@ -1,5 +1,29 @@
 # Bake-off results
 
+> ## ⚠ Wrong persona — the comparison below is not valid as a bake-off
+>
+> This run used **"a proteomics researcher who writes some Rust"**. The lab's established
+> phenotype, defined in `pyMzLib/design/bakeoff-flashlfq/DESIGN.md` and used for every previous
+> bake-off, is a biologist who is **"not an experienced coder … leans on docs, does not read library
+> source."**
+>
+> The agents here did the opposite: they read library source, reverse-engineered sage's internal
+> types, and wrote 375–598 lines of verification scaffolding apiece. This run also omitted the
+> mandatory `external_lookup` JSONL instrumentation and the "would-you-put-it-in-a-figure" metric.
+>
+> **What that invalidates:** the head-to-head comparison. "Nobody was confidently wrong" is an
+> artifact of using careful experts — they self-corrected by construction. The effort counts too: a
+> biologist does not write 806 lines, they give up or ship something wrong. This tested *can an
+> expert reach the right answer* (yes, on both toolchains) rather than *do the docs carry a
+> biologist through*, which is the question the methodology exists to answer.
+>
+> **What still stands:** every defect in "Defects filed" and every entry in the documentation table.
+> Those were verified independently against ground truth and do not depend on the persona.
+>
+> A corrected MBR head-to-head with the true biologist phenotype is running; results in
+> `mbr_armA_log.jsonl` / `mbr_armB_log.jsonl` and a revision below.
+
+
 Six independent agents, three tasks × two toolchains, scored against the ground truth in
 [DESIGN.md](DESIGN.md) — which was established by driving the bridge executable directly, so the
 crate could not score itself.
