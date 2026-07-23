@@ -1,0 +1,9 @@
+/target
+Cargo.lock
+
+# The staged bridge payload. Built by pyMzLib's publish-bridge.ps1 (or downloaded at build time
+# once the release assets exist); never committed — it is ~130 MB of self-contained .NET.
+/_dotnet
+
+# Local scratch
+*.tmp

@@ -1,0 +1,91 @@
+mzLibRust
+Copyright (c) Smith Chemistry Group, University of Wisconsin-Madison.
+
+Licensed under the GNU Lesser General Public License v3.0 or later (LGPL-3.0-or-later).
+See LICENSE (the LGPL) and LICENSE.GPL-3.0 (the GPL, which the LGPL incorporates by
+reference).
+
+This distribution is not source-only: mzLibRust drives, and is intended to be shipped
+alongside, compiled third-party software so that using it requires nothing but cargo.
+What follows is the required attribution for everything in that payload. It mirrors
+pyMzLib's NOTICE, because both bindings carry the same bridge.
+
+--------------------------------------------------------------------------------
+mzLib  -  LGPL-3.0-or-later
+--------------------------------------------------------------------------------
+
+mzLibRust redistributes mzLib in compiled form, inside the `mzlib-bridge` executable.
+
+  Source:  https://github.com/smith-chem-wisc/mzLib
+  Commit:  reported at runtime by mzlib::bridge_version()
+
+Your rights under LGPL-3.0 section 4 include modifying the mzLib portion of this work
+and relinking it. Two things are done deliberately to keep that practical rather than
+theoretical:
+
+  1. The bridge is published WITHOUT trimming and WITHOUT ReadyToRun compilation
+     (see pyMzLib's pkg/build/publish-bridge.ps1). The mzLib assemblies therefore
+     remain as ordinary, replaceable IL inside the single-file bundle rather than
+     being merged or ahead-of-time compiled into it.
+
+  2. The complete source of mzLibRust and of the bridge is public, and the
+     MZLIB_BRIDGE environment variable lets any user point this crate at a bridge
+     they built themselves from a modified mzLib — no rebuild of this crate required.
+     That variable is a licence affordance as much as a development convenience.
+
+--------------------------------------------------------------------------------
+.NET Runtime  -  MIT
+--------------------------------------------------------------------------------
+
+The bridge executable is a self-contained .NET application and therefore includes the
+.NET runtime and base class libraries.
+
+  Copyright (c) .NET Foundation and Contributors
+  Source:  https://github.com/dotnet/runtime
+  Licence: MIT (https://github.com/dotnet/runtime/blob/main/LICENSE.TXT)
+
+--------------------------------------------------------------------------------
+Intel compiler runtime (libmmd)  -  Intel Simplified Software License
+--------------------------------------------------------------------------------
+
+The payload includes `libmmd.dll`, an Intel redistributable math runtime, which arrives
+transitively through mzLib's dependency on TorchSharp. It is redistributed under the
+terms Intel grants for its redistributable libraries.
+
+  https://www.intel.com/content/www/us/en/developer/articles/license/onemkl-license-faq.html
+
+(smith-chem-wisc/mzLib#1103 tracks making TorchSharp optional, which would remove this
+dependency and roughly 238 MB from the payload for both bindings.)
+
+--------------------------------------------------------------------------------
+Newtonsoft.Json  -  MIT
+--------------------------------------------------------------------------------
+
+  Copyright (c) 2007 James Newton-King
+  https://github.com/JamesNK/Newtonsoft.Json/blob/master/LICENSE.md
+
+--------------------------------------------------------------------------------
+Reference data files
+--------------------------------------------------------------------------------
+
+The payload carries controlled-vocabulary and reference data used by mzLib:
+
+  unimod.xml          Unimod protein modification database (unimod.org), free to use
+                      and redistribute with attribution.
+  PSI-MOD.obo.xml     HUPO Proteomics Standards Initiative protein modification
+                      ontology, CC-BY.
+  ptmlist.txt,        UniProt Knowledgebase reference data, CC-BY 4.0
+  UniProtKB_*.txt     (https://www.uniprot.org/help/license).
+
+--------------------------------------------------------------------------------
+Rust dependencies
+--------------------------------------------------------------------------------
+
+This crate itself depends only on serde, serde_json, thiserror and chrono, each
+dual-licensed MIT OR Apache-2.0.
+
+--------------------------------------------------------------------------------
+
+If you believe something here is attributed incorrectly or incompletely, please open an
+issue at https://github.com/smith-chem-wisc/mzLibRust/issues - we would rather fix it
+than argue about it.

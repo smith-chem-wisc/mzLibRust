@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # The offline suite must pass with no network and no bridge staged. That is the contract: a
+  # contributor should be able to clone, `cargo test`, and be green without a 130 MB payload.
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.74.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+
+  # Live canaries against PRIDE Archive and UniProt, through a real bridge. Scheduled rather than
+  # per-push: they cost network time, and they SKIP on an outage, so a red result here is a genuine
+  # contract break — mzLib, PRIDE or UniProt changing under us.
+  live:
+    name: live canaries
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch the bridge
+        run: |
+          echo "Staging the mzLib bridge for linux-x64."
+          echo "Until pyMzLib publishes raw bridge binaries as release assets (mzLib #1103 makes"
+          echo "that cheaper), this step is the one piece of the distribution story still manual."
+          exit 1
+      - run: cargo test --features live
+        env:
+          MZLIB_BRIDGE: ${{ github.workspace }}/_dotnet/linux-x64/mzlib-bridge
