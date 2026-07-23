@@ -8,7 +8,6 @@ repository = "https://github.com/smith-chem-wisc/mzLibRust"
 # mzLib is LGPL-3.0, and this crate exists to redistribute and drive it. Anything more permissive
 # here would be a licence violation, not a preference — the same reasoning pyMzLib's wheel follows.
 license = "LGPL-3.0-or-later"
-license-file = "LICENSE"
 keywords = ["proteomics", "mass-spectrometry", "mzlib", "flashlfq", "pride"]
 categories = ["science", "api-bindings"]
 readme = "README.md"

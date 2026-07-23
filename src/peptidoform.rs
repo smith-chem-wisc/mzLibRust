@@ -38,6 +38,18 @@ pub struct Fragment {
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub product_type: String,
     /// Position in the series — `c3` is the third from the N-terminus.
+    ///
+    /// **The `c` and `y` series run `1..=length-1`; the `zDot` series runs `1..=length`.** The extra
+    /// `z•` numbered `length` is the whole peptide minus NH₂ (`monoisotopic_mass − 16.01872`), from
+    /// the N–Cα cleavage at the *first* residue — real ETD chemistry, deliberate in mzLib, and not a
+    /// backbone fragment between two residues. Exclude it if you are counting cleavage sites. It is
+    /// absent when the peptide begins with proline.
+    ///
+    /// **z• ions are suppressed N-terminal to proline; the complementary c ions are not.** ETD
+    /// cleaves the N–Cα bond, and at a proline the ring keeps the halves tethered, so neither
+    /// fragment should appear — but mzLib only drops the z•. On albumin that leaves 138 c ions
+    /// (~4% of the c series) that cannot occur in a real spectrum. See
+    /// [smith-chem-wisc/mzLib#1110](https://github.com/smith-chem-wisc/mzLib/issues/1110).
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub fragment_number: i32,
     /// Monoisotopic neutral mass in daltons.
@@ -250,7 +262,12 @@ impl ModificationCensus {
                 .collect::<Vec<_>>()
                 .join(", ");
             sentences.push(format!(
-                "Excluded by type: {named} — these have no defined chemical composition, so no \
+                "Excluded by type: {named} — mzLib only loads 'modified residue' and 'lipid \
+                 moiety-binding region' annotations, so these were discarded because of their \
+                 feature type. Some genuinely have no defined composition and no mass can be \
+                 assigned; others do have one and are excluded anyway (see \
+                 smith-chem-wisc/mzLib#1112). Check the individual annotations before concluding \
+                 a modification was unusable. Legacy wording, retained until #1112 lands: no \
                  mass can be assigned and a peptide carrying one is not identifiable by mass \
                  spectrometry."
             ));
@@ -317,7 +334,42 @@ impl Digest {
         self.peptides.iter().filter(|p| p.is_modified()).collect()
     }
 
+    /// How many peptides there are, counted as **distinct base sequences**.
+    ///
+    /// [`Self::peptides`] holds *peptidoforms* — one entry per sequence-and-modification-placement
+    /// — so `peptides.len()` is much the larger number whenever modifications are applied. On
+    /// albumin at two modifications it is 303 peptidoforms over 195 distinct sequences. Both are
+    /// legitimate answers to "how many peptides"; they are not interchangeable, and quoting one for
+    /// the other is a very large error rather than a rounding one.
+    #[must_use]
+    pub fn distinct_base_sequences(&self) -> usize {
+        self.peptides
+            .iter()
+            .map(|peptide| peptide.base_sequence.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    /// Fragment ions per product type, e.g. `{"c": 3253, "y": 3253, "zDot": 3308}`.
+    ///
+    /// Prefer this to [`Self::fragment_count`] whenever the ion series matter, which for ETD is
+    /// always: mzLib emits a spurious `y` series for ETD (about a third of the total, see
+    /// [`FragmentOptions::dissociation`]), and `zDot` carries one extra full-length ion per peptide
+    /// (see [`Fragment::fragment_number`]). A single total silently folds both in.
+    #[must_use]
+    pub fn fragments_by_series(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for fragment in self.peptides.iter().flat_map(|p| p.fragments.iter()) {
+            *counts.entry(fragment.product_type.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
     /// Total fragment ions across every peptide.
+    ///
+    /// A bare total. For ETD this includes the spurious `y` series and the full-length `z•` per
+    /// peptide, so it is **not** the number of ions you would look for in a spectrum — see
+    /// [`Self::fragments_by_series`].
     #[must_use]
     pub fn fragment_count(&self) -> usize {
         self.peptides.iter().map(|p| p.fragments.len()).sum()
@@ -333,11 +385,32 @@ pub struct FragmentOptions {
     /// proline — and is the default here because it is what a mass spectrometrist usually means.
     /// mzLib's plain `"trypsin"` cleaves before proline too. That is the **reverse** of the MaxQuant
     /// and Mascot convention, where `Trypsin/P` denotes *ignoring* the proline rule. On serum
-    /// albumin the two differ by 37 peptides out of about 200.
+    /// albumin the two differ by 7 peptides out of about 200 (195 vs 202, tryptic, 2 missed
+    /// cleavages, min length 7) — a small count hiding a large semantic difference, since which
+    /// peptides you get changes wherever a K/R precedes a proline.
     pub protease: String,
-    /// `"ETD"` (c and z• ions), `"HCD"`/`"CID"` (b and y), and the rest of mzLib's types.
+    /// `"HCD"`/`"CID"` (b and y ions), `"ETD"`, and the rest of mzLib's dissociation types.
+    ///
+    /// **`"ETD"` returns three series — `c`, `zDot` **and `y`** — not two.** The y ions are
+    /// spurious: ETD cleaves N–Cα and yields c/z•, while b/y come from amide cleavage under
+    /// vibrational activation, and mzLib's `EThcD` row correctly pairs y *with* b. ETD's does not.
+    /// They are about **a third** of every ETD fragment list, so
+    /// [`Digest::fragment_count`] over-counts real ETD ions by that much — use
+    /// [`Digest::fragments_by_series`] to see the split. Tracked as
+    /// [smith-chem-wisc/mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109).
     pub dissociation: String,
-    /// Apply UniProt's annotated modifications. `false` gives the bare sequence — useful as a
+    /// Apply UniProt's annotated modifications.
+    ///
+    /// **`false` is not a clean control.** It discards UniProt's whole feature table, which also
+    /// carries the signal-peptide and propeptide boundaries mzLib digests at — so the *peptide
+    /// list* changes too, not only the modifications on it. On albumin, `false` loses
+    /// `MKWVTFISLLFLFSSAYS` (1–18) and `WVTFISLLFLFSSAYS` (3–18), both unmodified, both ending
+    /// exactly at the signal-peptide cleavage site. Comparing the two runs therefore varies two
+    /// things at once. Tracked as
+    /// [smith-chem-wisc/pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8).
+    ///
+    /// Historic wording, kept because it is still true of the modifications themselves: `false`
+    /// gives the bare sequence — useful as a
     /// control, and the difference is usually large.
     pub modifications: bool,
     /// Maximum missed cleavage sites per peptide.
@@ -886,10 +959,13 @@ mod tests {
             explanation.contains("24 × glycosylation site"),
             "{explanation}"
         );
-        assert!(
-            explanation.contains("not identifiable by mass"),
-            "{explanation}"
-        );
+        // The reason must not overclaim. 22 of albumin's 24 glycosylation sites are
+        // `N-linked (Glc) (glycation) lysine`, which UniProt's own ptmlist defines with
+        // CF C6H10O5 and MM 162.052823 — they are excluded by *feature type*, not for want of a
+        // mass. The original wording said they had no defined composition, which made the
+        // trap-disclosure itself the misinformation. See smith-chem-wisc/mzLib#1112.
+        assert!(explanation.contains("feature type"), "{explanation}");
+        assert!(explanation.contains("mzLib#1112"), "{explanation}");
         assert_eq!(census.excluded(), 24);
     }
 

@@ -523,9 +523,20 @@ fn check_filter_matched(
 
 // ------------------------------------------------------------------ the public surface
 
-/// The complete file manifest of a PRIDE Archive project, with pyMzLib's default paging.
+/// The file manifest of a PRIDE Archive project, with pyMzLib's default paging.
 ///
 /// Paging is handled for you: however many pages the project spans, you get one list.
+///
+/// **This is what PRIDE's REST API publishes, which is not always everything in the project.**
+/// For PXD000001 the API returns **8** files while the FTP tree holds **13** — and the five it
+/// omits include the two largest, `…60min_01-20141210.mzML` (450 MB) and the matching `.mzXML`
+/// (472 MB), which are exactly the modern open-format conversions most people want. The omission is
+/// PRIDE's, not mzLib's: mzLib faithfully reports the v3 API, and the API simply does not list
+/// them.
+///
+/// So a manifest that looks short may be short. If completeness matters — mirroring a project,
+/// budgeting a download, proving you analysed everything — cross-check the FTP directory at
+/// `https://ftp.pride.ebi.ac.uk/pride/data/archive/<year>/<month>/<accession>/`.
 ///
 /// # Errors
 ///
@@ -615,6 +626,11 @@ pub fn download_files(
 ///
 /// Use this to answer "how much data is in this project", and treat it as an upper bound on
 /// transfer time. If you need the real figure for a compressed file, only the download knows.
+///
+/// **It is also a sum over an incomplete manifest.** For PXD000001 this returns 0.51 GB; the
+/// project on disk is **1.44 GB**, because PRIDE's API omits five files including the two largest
+/// (see [`list_files`]). The two errors happen to run in opposite directions and do **not** cancel:
+/// compressed sizes are over-reported, whole files are missing entirely.
 #[must_use]
 pub fn total_size_bytes(files: &[PrideFile]) -> u64 {
     files.iter().map(|file| file.file_size_bytes).sum()

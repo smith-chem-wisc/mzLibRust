@@ -105,6 +105,14 @@ pub struct Peptide {
     /// mirrors FlashLFQ's `QuantifiedPeptides.tsv` and does **not** fully reflect
     /// match-between-runs: many transferred peptides read `0.0` / `"NotDetected"` here. For
     /// MBR-inclusive quantities use [`FlashLfqResults::peaks`].
+    ///
+    /// **The two surfaces also aggregate differently, so their magnitudes disagree.** Where a
+    /// peptide has several peaks in one run, this roll-up reports **one** of them rather than their
+    /// sum — `LKEYEAAVEQLK` has peaks of 722,818 and 18,613 in K562_4, and the roll-up says
+    /// 722,818. If you follow the advice above and pivot [`FlashLfqResults::peaks`] yourself, decide
+    /// deliberately whether to sum or take the maximum, and know that neither will reproduce
+    /// `QuantifiedPeptides.tsv` exactly. Counting *presence* is unaffected; summing *intensity* is
+    /// not.
     #[serde(default, deserialize_with = "bridge::deserialize_intensities")]
     pub intensities: HashMap<String, f64>,
     /// Run base name → how it was quantified there.
@@ -156,6 +164,16 @@ pub struct ProteinGroup {
     /// `None`) when the peptide matrix for the protein is degenerate — too few peptides per run to
     /// resolve, or several runs reporting the same intensity — protecting you from a
     /// fabricated-looking number. Missing, as opposed to *un-resolvable*, is `Some(0.0)`.
+    ///
+    /// **Calibration: `Some(0.0)` is the overwhelmingly common outcome, not `None`.** On the K562
+    /// pair, 847 of 943 protein groups are `0.0` in both runs and only **2** are `None`. Most of
+    /// the zeros are the default [`QuantifyOptions::use_shared_peptides_for_protein_quant`] doing
+    /// its job: 842 of those 847 groups have no *unique* peptide, so nothing contributes to their
+    /// quant. Setting that option to `true` drops the all-zero count from 847 to 34.
+    ///
+    /// So `Option<f64>` draws the line where the *arithmetic* is degenerate, not where *you* are
+    /// stuck. If your question is "which proteins do I have no usable number for", that is
+    /// `None` **plus** the zeros — 849 here, not 2.
     #[serde(default)]
     pub intensities: HashMap<String, Option<f64>>,
 }
@@ -305,9 +323,42 @@ impl FlashLfqResults {
 
     /// Distinct peptides quantified in at least one run only by match-between-runs.
     ///
-    /// The honest answer to "how many peptides did MBR rescue" — distinct modified sequences among
-    /// [`Self::mbr_peaks`]. This equals [`Self::mbr_peak_count`] only when no peptide was rescued
-    /// in more than one run.
+    /// Exactly: **the number of distinct `sequence` values among peaks whose `detection_type` is
+    /// `"MBR"`.** Stated in code terms because the prose version — "peptides quantified in at least
+    /// one run *only* by match-between-runs" — is subtly different, and on real data the two
+    /// diverge.
+    ///
+    /// The gap is peptides that have **both** an MBR peak *and* a zero-intensity `MSMS` peak in the
+    /// same run: FlashLFQ identified the peptide there but could not integrate a peak from the
+    /// identification, so it transferred one as well. Those were identified in that run, so under
+    /// the strict "never identified there" reading they are not rescues. On the K562 pair that is 5
+    /// peptides — this method returns 140, the strict count is 135.
+    ///
+    /// Neither number is wrong; they answer different questions. If you want the strict one:
+    ///
+    /// ```no_run
+    /// # use mzlib::flashlfq::FlashLfqResults;
+    /// # fn strict(result: &FlashLfqResults) -> usize {
+    /// use std::collections::HashSet;
+    /// let identified: HashSet<(&str, &str)> = result
+    ///     .peaks
+    ///     .iter()
+    ///     .filter(|p| p.detection_type == "MSMS")
+    ///     .map(|p| (p.file_name.as_str(), p.sequence.as_str()))
+    ///     .collect();
+    /// result
+    ///     .mbr_peaks()
+    ///     .iter()
+    ///     .filter(|p| !identified.contains(&(p.file_name.as_str(), p.sequence.as_str())))
+    ///     .map(|p| p.sequence.as_str())
+    ///     .collect::<HashSet<_>>()
+    ///     .len()
+    /// # }
+    /// ```
+    ///
+    /// Do not read `mbr_rescued_peptide_count() == mbr_peak_count()` as reassurance that nothing
+    /// was double-counted. On this data both are 140, and they coincide only because every MBR peak
+    /// happened to carry a distinct sequence.
     #[must_use]
     pub fn mbr_rescued_peptide_count(&self) -> usize {
         self.mbr_peaks()
@@ -389,6 +440,16 @@ pub struct QuantifyOptions {
     /// Filter identifications on PEP q-value rather than q-value.
     pub use_pep_q_value: bool,
     /// Worker threads; `-1` lets FlashLFQ choose.
+    ///
+    /// **This is not only a performance knob — it changes results.** With `-1`, FlashLFQ's peptide
+    /// roll-up nondeterministically drops some MBR intensities, so peptide and protein numbers vary
+    /// between runs on byte-identical inputs. On the K562 pair, 6 peptides flip between `0.0` and a
+    /// real intensity, which flips a borderline protein group between `None` and a number: it came
+    /// back unquantifiable in 5 of 6 runs and quantified in the 6th. The `peaks` are stable
+    /// throughout — only the roll-up wobbles.
+    ///
+    /// **Set `max_threads: 1` for anything you intend to publish or reproduce.** Tracked as
+    /// [smith-chem-wisc/mzLib#1111](https://github.com/smith-chem-wisc/mzLib/issues/1111).
     pub max_threads: i32,
     /// If given, FlashLFQ also writes `QuantifiedPeaks.tsv`, `QuantifiedPeptides.tsv` and
     /// `QuantifiedProteins.tsv` there.
