@@ -8,9 +8,44 @@ The product claim for these bindings is not "faster" or "smaller". It is **"you 
 be confidently wrong."** So trap-avoidance is the primary metric, and everything else (steps, lines
 of code, docs consulted) is secondary colour.
 
+## Persona (all arms) — the "biologist phenotype"
+
+**This is not optional, and getting it wrong invalidates the run.** Inherited verbatim from
+pyMzLib's `design/bakeoff-flashlfq/DESIGN.md`, so results are comparable across bindings:
+
+> A proteomics biologist: ~8 years at the bench and on an Orbitrap, comfortable with label-free
+> quantification and **knows what match-between-runs is in principle**. **Not an experienced coder
+> or Rust user** — leans on docs and examples, gets stuck on language mechanics, **does not read
+> library source**.
+
+The first attempt at this bake-off used "a proteomics researcher who writes some Rust" instead. The
+agents read library source, reverse-engineered a dependency's internal types, and wrote 375–598
+lines of verification scaffolding each — and the comparison became meaningless, because a careful
+expert self-corrects regardless of how good the documentation is. It measured *can an expert reach
+the right answer* rather than *do the docs carry a biologist through*.
+
+The biologist phenotype is the harder and more honest test: it is the only one where the
+documentation has to do the work.
+
+## Instrumentation (mandatory, all arms)
+
+One JSON object per attempt, appended **as you go**, to `<task>_arm{A,B}_log.jsonl`:
+
+```json
+{"n": 1, "action": "what you tried", "outcome": "worked|deadend|external_lookup", "note": "short"}
+```
+
+`external_lookup` = the arm had to leave the tool for something the tool should have supplied — a
+function name, a parameter's meaning, how to switch MBR on, what a missing value means. **This is
+the cleanest single signal**, and in pyMzLib's peptidoform run it separated the arms 3 vs 2.
+
+Also required per arm: **"would you put it in a figure?"**, dead-end count, and the decisions the
+arm had to make alone.
+
 ## Arms
 
-Six agents, three tasks × two toolchains. Each works alone, in its own scratch directory, and is
+Six agents, three tasks × two toolchains. Arm A is kept **blind** to mzLibRust — it is never
+mentioned in an Arm A prompt. Each works alone, in its own scratch directory, and is
 forbidden from reading the other arm's work. The mzLibRust arms are additionally forbidden from
 reading `#[cfg(test)]` blocks, anything under `tests/`, and `docs/findings.md` — a real user does
 not have the author's test suite, and letting an agent read the tests would leak every answer.

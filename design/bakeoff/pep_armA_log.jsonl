@@ -1,0 +1,5 @@
+{"n": 1, "action": "searched crates.io/lib.rs for a rust proteomics crate", "outcome": "worked", "note": "found rustyms (fragments, proforma), sage (digestion), mzdata (file IO)"}
+{"n": 2, "action": "read rustyms docs.rs front page for digestion/protease", "outcome": "external_lookup", "note": "rustyms has no protease/trypsin digestion and no UniProt reader; had to go look elsewhere"}
+{"n": 3, "action": "searched crates.io for a uniprot crate", "outcome": "worked", "note": "found `uniprot` crate that parses UniProtKB XML; docs don't show how to fetch by accession"}
+{"n": 4, "action": "cargo add rustyms + rsomics-fasta-digest + uniprot; ran digest() on P02768.fasta", "outcome": "worked", "note": "49 peptides, trypsin, 0 missed cleavages, len 5-50"}
+{"n": 5, "action": "looked up digest() signature on docs.rs because crate is 0% documented", "outcome": "external_lookup", "note": "had to read docs.rs fn page to learn args are (path, enzyme, missed_cleavages, min_len, max_len, writer)"}

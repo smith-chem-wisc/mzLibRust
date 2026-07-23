@@ -1,0 +1,4 @@
+﻿{"n": 1, "action": "searched crates.io + lib.rs for a PRIDE / ProteomeXchange crate", "outcome": "deadend", "note": "zero proteomics-repository crates; q=pride returns pride flags, q=proteomexchange returns 0"}
+{"n": 2, "action": "decided to build client myself with reqwest + serde_json", "outcome": "worked", "note": "no crate exists, so hand-roll HTTP"}
+{"n": 3, "action": "guessed/probed PRIDE endpoint URLs; v3 /files/byProject?accession= and v2 equivalent both return a 1-char empty body with HTTP 200", "outcome": "deadend", "note": "silent empty success, no error - would have believed 0 files if I had not tried other shapes"}
+{"n": 4, "action": "looked up PRIDE REST API docs + probed until /pride/ws/archive/v3/projects/{acc}/files worked", "outcome": "external_lookup", "note": "no crate told me the endpoint; docs pages rendered empty, found it by trial"}
