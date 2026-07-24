@@ -198,11 +198,28 @@ pub fn bridge_path() -> Result<PathBuf> {
         return Ok(candidate);
     }
 
+    // Whatever `build.rs` staged — a payload it downloaded, or one it found already in the source
+    // tree. Checked before the source-tree path so a released crate, whose sources are read-only,
+    // still resolves.
+    if let Some(staged) = option_env!("MZLIB_BRIDGE_STAGED") {
+        let candidate = PathBuf::from(staged);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
     let candidate = staged_root().join(platform_tag()?).join(executable_name());
     if !candidate.is_file() {
         return Err(MzLibError::BridgeNotFound(format!(
-            "No mzLib bridge for this platform at '{}'. In a source checkout, build one and set \
-             {BRIDGE_ENV_VAR} to its path.",
+            "No mzLib bridge for this platform at '{}'.\n\
+             \n\
+             Three ways to fix it, cheapest first:\n\
+               1. Set {BRIDGE_ENV_VAR} to a bridge executable you already have — for example the \
+             one pyMzLib stages under pkg/python/src/pymzlib/_dotnet/<rid>/.\n\
+               2. Build one with pyMzLib's pkg/build/publish-bridge.ps1 and stage it at '{}'.\n\
+               3. Set MZLIB_BRIDGE_URL (and MZLIB_BRIDGE_SHA256) before building, and the build \
+             script will download it.",
+            candidate.display(),
             candidate.display()
         )));
     }

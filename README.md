@@ -65,14 +65,40 @@ peptide roll-up drops most transfers.
 
 ## Getting the bridge
 
-The crate needs a staged bridge executable. Resolution order:
+**You do not need one to build, test, document or lint the crate.** `cargo test` runs 118 offline
+tests with no network and no .NET on the machine. A bridge is required only for calls that actually
+reach mzLib, and a missing one is a runtime error with instructions, never a build failure — so
+contributors are never blocked by a 130 MB payload they may not want.
 
-1. `MZLIB_BRIDGE` — a path to a bridge binary. The dev and offline escape hatch.
-2. `_dotnet/<runtime-identifier>/mzlib-bridge[.exe]` beside the crate.
+`build.rs` resolves it in this order:
 
-Build one with pyMzLib's `pkg/build/publish-bridge.ps1`, which cross-publishes any .NET runtime
-identifier. Download-at-build via `build.rs` lands once pyMzLib's CI publishes the raw bridge
-binaries as release assets.
+1. **`MZLIB_BRIDGE`** — a path to a bridge you already have. Always wins, checked at runtime too.
+2. **`_dotnet/<runtime-identifier>/mzlib-bridge[.exe]`** beside the crate.
+3. **Downloaded** from `MZLIB_BRIDGE_URL`, verified against `MZLIB_BRIDGE_SHA256` when you set it.
+
+The quickest route, if you have a pyMzLib checkout — it already stages a bridge for its wheel:
+
+```powershell
+.\scripts\stage-bridge.ps1 -PyMzLibRoot ..\pyMzLib          # copy the one pyMzLib staged
+.\scripts\stage-bridge.ps1 -PyMzLibRoot ..\pyMzLib -Build   # or build a fresh one (needs .NET)
+```
+
+The script probes the staged binary by asking it for its version, because a payload that cannot
+report that will certainly fail when the crate calls it.
+
+Or simply:
+
+```bash
+export MZLIB_BRIDGE=/path/to/mzlib-bridge
+cargo test --features live
+```
+
+`MZLIB_BRIDGE` is also a **licence affordance**, not only a convenience: it is how you point this
+crate at a bridge built from a modified mzLib, exercising your LGPL §4 right to relink without
+rebuilding anything here. See `NOTICE`.
+
+Download-at-build becomes the default path once pyMzLib's CI publishes the raw bridge binaries as
+release assets; the machinery for it is already in `build.rs`.
 
 ## Testing
 
