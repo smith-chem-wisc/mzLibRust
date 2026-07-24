@@ -1,0 +1,62 @@
+name: mzLibRust
+created: 2026-07-23   # PLAN written; adopted as /project 2026-07-24
+phase: BUILD
+
+goal: >
+  mzLib callable from Rust — a separate crate, the Rust sibling of pyMzLib, built on the SAME
+  language-neutral bridge (D6). A port of a proven design, not green-field. This workspace also
+  hosts the emerging mzLibR (R) sibling.
+
+# Part of the bridge umbrella (E:/CodeReview/bridge). Shared contract + principle + the
+# upstream-mzLib fix queue live there; this project owns the Rust-specific product.
+umbrella: E:/CodeReview/bridge
+
+decisions:
+  - date: 2026-07-23
+    id: RUST-D6
+    text: >
+      Reuse pyMzLib's language-neutral wire contract (D6) unchanged. The whole effort is cheap
+      precisely because the .NET side does not change — the Rust consumer speaks the identical
+      contract. See PLAN.md §1 and bridge/design/CONTRACT.md.
+  - date: 2026-07-23
+    id: RUST-DIST
+    text: >
+      Distribution is the one genuinely new decision vs pyMzLib: a crate cannot carry the ~130 MB
+      .NET payload, so the bridge binary is fetched at build time (download-at-build) rather than
+      bundled in the crate. See PLAN.md §3.
+  - date: 2026-07-23
+    id: RUST-TYPES
+    text: >
+      The None/0 availability lesson maps onto Rust's type system: Option<f64> for values a format
+      may not provide (proteins) vs f64 where always present (peptides); complete-design MBR. This is
+      the Rust projection of the bridge principle (bridge/design/PRINCIPLE.md).
+
+gaps:
+  - id: RG-dist
+    text: "Finalize + implement download-at-build distribution (PLAN §3 — grill first)."
+  - id: RG-grill
+    text: "Work the PLAN §8 grill list of open decisions before M2/M3."
+  - id: RG-mzlibr
+    text: "mzLibR (R sibling) is being edited from this workspace; decide if it becomes its own project."
+
+skip_log: []
+
+repos:
+  - name: mzLibRust
+    role: product (the Rust crate)
+    upstream: smith-chem-wisc/mzLibRust
+    branch: main
+  - name: mzLib
+    role: upstream library wrapped via the bridge
+    canonical_clone: E:/GitClones/mzLib
+
+github:
+  remote: "https://github.com/smith-chem-wisc/mzLibRust.git"
+  private: false
+
+dir_map:
+  ".": "Rust crate root (Cargo.toml/lock, src)"
+  PLAN.md: "design — the port plan seeded into decisions/gaps above"
+
+normalizations:
+  - "PLAN.md could move to design/ for canonical layout; left at root for now (adopt is non-destructive)."
