@@ -210,20 +210,32 @@ pub fn bridge_path() -> Result<PathBuf> {
 
     let candidate = staged_root().join(platform_tag()?).join(executable_name());
     if !candidate.is_file() {
-        return Err(MzLibError::BridgeNotFound(format!(
-            "No mzLib bridge for this platform at '{}'.\n\
-             \n\
-             Three ways to fix it, cheapest first:\n\
-               1. Set {BRIDGE_ENV_VAR} to a bridge executable you already have — for example the \
-             one pyMzLib stages under pkg/python/src/pymzlib/_dotnet/<rid>/.\n\
-               2. Build one with pyMzLib's pkg/build/publish-bridge.ps1 and stage it at '{}'.\n\
-               3. Set MZLIB_BRIDGE_URL (and MZLIB_BRIDGE_SHA256) before building, and the build \
-             script will download it.",
-            candidate.display(),
-            candidate.display()
+        return Err(MzLibError::BridgeNotFound(missing_bridge_message(
+            &candidate,
         )));
     }
     Ok(candidate)
+}
+
+/// What to tell someone who has no bridge staged.
+///
+/// Split out from [`bridge_path`] so it can be tested for its content without the test depending on
+/// whether the machine running it happens to have a bridge staged — which made the original test
+/// pass in CI and fail for any developer who had one.
+fn missing_bridge_message(candidate: &Path) -> String {
+    format!(
+        "No mzLib bridge for this platform at '{}'.\n\
+         \n\
+         Three ways to fix it, cheapest first:\n\
+           1. Set {BRIDGE_ENV_VAR} to a bridge executable you already have — for example the one \
+         pyMzLib stages under pkg/python/src/pymzlib/_dotnet/<rid>/.\n\
+           2. Run scripts/stage-bridge.ps1, or build one with pyMzLib's \
+         pkg/build/publish-bridge.ps1 and stage it at '{}'.\n\
+           3. Set MZLIB_BRIDGE_URL (and MZLIB_BRIDGE_SHA256) before building, and the build script \
+         will download it.",
+        candidate.display(),
+        candidate.display()
+    )
 }
 
 /// Where a staged bridge lives relative to the crate.
@@ -724,12 +736,39 @@ mod tests {
     #[test]
     fn missing_payload_names_the_path_and_the_way_out() {
         // The message has to be actionable: a bare "not found" leaves the user with nowhere to go.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        std::env::remove_var(BRIDGE_ENV_VAR);
-        let error = bridge_path().unwrap_err();
-        let message = error.to_string();
+        //
+        // Asserted against the message builder rather than by calling `bridge_path()` with the
+        // environment stripped. The original version did the latter, which meant it only passed on
+        // a machine with NO bridge staged — green in CI, red for any developer who had staged one.
+        // A test whose result depends on the developer's machine is worse than no test.
+        let message =
+            missing_bridge_message(Path::new("/somewhere/_dotnet/linux-x64/mzlib-bridge"));
+
         assert!(message.contains("_dotnet"), "{message}");
         assert!(message.contains(BRIDGE_ENV_VAR), "{message}");
+        // All three remedies, because naming only one sends the reader looking for the others.
+        assert!(message.contains("MZLIB_BRIDGE_URL"), "{message}");
+        assert!(message.contains("stage-bridge.ps1"), "{message}");
+    }
+
+    #[test]
+    fn a_staged_bridge_is_found_without_any_environment_variable() {
+        // The distribution promise: if `build.rs` staged something, the crate finds it with no
+        // MZLIB_BRIDGE set. Skips rather than fails when nothing is staged, since the offline
+        // suite must pass on a machine that has never seen a .NET binary.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var(BRIDGE_ENV_VAR);
+
+        match bridge_path() {
+            Ok(found) => assert!(found.is_file(), "{} should exist", found.display()),
+            Err(error) => {
+                let message = error.to_string();
+                assert!(
+                    message.contains("No mzLib bridge"),
+                    "with nothing staged the failure must be the actionable one: {message}"
+                );
+            }
+        }
     }
 
     #[test]
