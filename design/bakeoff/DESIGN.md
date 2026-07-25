@@ -114,9 +114,9 @@ Peptide counts vary with two defaults, and both defaults move the answer:
 - **The min-length trap.** The default of 7 discards 48 peptides here — a fifth of the digest — with
   no indication. On a histone it is roughly a third.
 - **The census.** UniProt annotates **38** modification-like features; **14** are usable; **24** are
-  glycosylation sites with no defined composition and therefore no mass. Reporting "14
-  modifications" without the denominator is correct-but-misleading, which is what
-  `ModificationCensus::explain()` exists to prevent.
+  glycosylation sites, excluded on feature type — not for want of a mass (22 are `N-linked (Glc)
+  (glycation) lysine`, which has one). Reporting "14 modifications" without the denominator is
+  correct-but-misleading, which is what `ModificationCensus::explain()` exists to prevent.
 - **The ETD trap.** mzLib emits `c`, `zDot` **and `y`** for ETD — the y ions are spurious and about
   a third of the fragment list. See smith-chem-wisc/mzLib#1109. An arm that reports "c and z ions"
   is repeating the textbook rather than reading its output; an arm that notices the y ions has done
