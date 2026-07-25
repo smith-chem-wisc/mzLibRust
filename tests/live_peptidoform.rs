@@ -14,8 +14,8 @@ mod support;
 use mzlib::peptidoform::{fragments, fragments_with, FragmentOptions};
 use support::{external_service, require_bridge};
 
-/// Human serum albumin: large, heavily annotated, and mostly annotated with glycosylation sites
-/// that have no defined mass — which is what makes it the right protein for the census.
+/// Human serum albumin: large, heavily annotated, and mostly annotated with glycosylation sites,
+/// which mzLib excludes on feature type — which is what makes it the right protein for the census.
 const ALBUMIN: &str = "P02768";
 
 /// Histone H3.1: where modification-isoform combinatorics actually bite.
@@ -125,7 +125,7 @@ fn fragment_series_close_on_the_precursor_mass() {
 
 #[test]
 fn the_annotation_census_reports_what_was_excluded() {
-    // Albumin's annotations are mostly glycosylation sites, which have no defined mass.
+    // Albumin's annotations are mostly glycosylation sites, which mzLib excludes on feature type.
     let Some(()) = require_bridge() else { return };
 
     let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare(0, 7))) else {
@@ -135,8 +135,14 @@ fn the_annotation_census_reports_what_was_excluded() {
 
     assert!(census.annotated > census.applied);
     assert!(census.excluded() > 0);
+    // The exclusion is reported at feature-type granularity, not modification-name level.
     assert!(
         census.explain().contains("glycosylation"),
+        "{}",
+        census.explain()
+    );
+    assert!(
+        census.explain().contains("feature type"),
         "{}",
         census.explain()
     );
