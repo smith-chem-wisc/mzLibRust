@@ -104,15 +104,15 @@ Peptide counts vary with two defaults, and both defaults move the answer:
 |---|---|---|
 | `trypsin\|P` (Keil rule — what a mass spectrometrist means) | 7 | **195** |
 | `trypsin` (also cleaves before proline) | 7 | 202 |
-| `trypsin\|P` | 1 | 254 |
-| `trypsin` | 1 | 269 |
+| `trypsin\|P` | 1 | 243 |
+| `trypsin` | 1 | 257 |
 
 - **The protease trap.** mzLib's `trypsin|P` *applies* the proline rule; its plain `trypsin` does
   not. That is the **reverse** of MaxQuant/Mascot, where `Trypsin/P` means the rule is *ignored*.
   Someone reaching for the familiar-looking name gets the opposite of their intent, in either
   direction, silently. (smith-chem-wisc/mzLib#1106)
-- **The min-length trap.** The default of 7 discards 59 peptides here — 23% of the digest — with no
-  indication. On a histone it is roughly a third.
+- **The min-length trap.** The default of 7 discards 48 peptides here — a fifth of the digest — with
+  no indication. On a histone it is roughly a third.
 - **The census.** UniProt annotates **38** modification-like features; **14** are usable; **24** are
   glycosylation sites with no defined composition and therefore no mass. Reporting "14
   modifications" without the denominator is correct-but-misleading, which is what
