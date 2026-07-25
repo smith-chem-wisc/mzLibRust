@@ -7,3 +7,8 @@ Cargo.lock
 
 # Local scratch
 *.tmp
+
+# /project workspace scaffolding lives in the PRIVATE workspace repo (trishorts/mzlibrust-project), not here.
+.project/
+/CLAUDE.md
+/RESUME.md
