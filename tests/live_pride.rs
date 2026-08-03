@@ -32,6 +32,51 @@ fn the_api_still_answers_and_the_manifest_still_parses() {
 }
 
 #[test]
+fn the_ftp_listing_is_more_complete_than_the_rest_manifest() {
+    let Some(()) = require_bridge() else { return };
+
+    let Some(rest) = external_service("PRIDE Archive", mzlib::pride::list_files(PROJECT)) else {
+        return;
+    };
+    let Some(ftp) = external_service("PRIDE Archive", mzlib::pride::list_ftp_files(PROJECT)) else {
+        return;
+    };
+
+    // The whole reason list_ftp_files exists. A comparison, not a hard count, so it survives PRIDE
+    // re-curating the project - while still catching the walk finding nothing, or the REST manifest
+    // quietly becoming complete (which would leave the extra verb without a purpose).
+    assert!(
+        !ftp.is_empty(),
+        "the FTP walk returned nothing for a project known to have files"
+    );
+    assert!(
+        ftp.len() > rest.len(),
+        "the FTP listing ({}) should exceed the REST manifest ({})",
+        ftp.len(),
+        rest.len()
+    );
+
+    let first = &ftp[0];
+    assert!(!first.relative_path.is_empty(), "relative_path");
+    assert!(
+        first.url.starts_with("https://"),
+        "url must be the HTTPS location"
+    );
+
+    // Not FTP-total > REST-total: PRIDE over-reports decompressed .gz sizes, so that inequality is
+    // not durable. What is: the total is positive and at least its largest single file.
+    let largest = ftp
+        .iter()
+        .map(|f| f.approximate_size_bytes)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        largest > 0 && mzlib::pride::approximate_total_size_bytes(&ftp) >= largest,
+        "the approximate total must be positive and cover its largest file"
+    );
+}
+
+#[test]
 fn the_fields_the_rust_layer_reads_are_still_populated() {
     let Some(()) = require_bridge() else { return };
 

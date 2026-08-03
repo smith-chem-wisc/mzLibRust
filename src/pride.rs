@@ -110,6 +110,48 @@ impl PrideFile {
     }
 }
 
+/// One file found by walking a PRIDE project's FTP directory tree — the COMPLETE listing.
+///
+/// PRIDE's REST manifest ([`list_files`]) is knowingly incomplete: for PXD000001 it returns 8
+/// files while the FTP tree holds 13, omitting the two largest. When completeness or a true project
+/// size matters, [`list_ftp_files`] walks the directory (subdirectories included) and returns
+/// everything (mzLib #1121). The trade-off is the size: [`PrideFtpFile::approximate_size_bytes`]
+/// is PRIDE's rounded index value, not the exact transfer size.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrideFtpFile {
+    /// Path relative to the project's FTP root, e.g. `"run1.raw"` or, for a file in a subdirectory,
+    /// `"generated/summary.mztab"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub relative_path: String,
+    /// The bare file name — the last segment of [`PrideFtpFile::relative_path`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub file_name: String,
+    /// The HTTPS URL the file can be downloaded from.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub url: String,
+    /// PRIDE's rounded index size in bytes — good for a project-size estimate, but not exact. For
+    /// the precise transfer size of one file, issue an HTTP HEAD against [`PrideFtpFile::url`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub approximate_size_bytes: u64,
+}
+
+impl PrideFtpFile {
+    /// The approximate size in megabytes, for eyeballing a project's footprint.
+    #[must_use]
+    pub fn approximate_size_mb(&self) -> f64 {
+        self.approximate_size_bytes as f64 / 1_000_000.0
+    }
+
+    /// The file's lowercase extension including the dot, e.g. `".raw"`. Empty if none.
+    #[must_use]
+    pub fn extension(&self) -> String {
+        Path::new(&self.file_name)
+            .extension()
+            .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
+            .unwrap_or_default()
+    }
+}
+
 /// How a manifest is fetched. Defaults match pyMzLib's: 100 files per API call, 300 s.
 #[derive(Debug, Clone)]
 pub struct ListOptions {
@@ -477,6 +519,21 @@ fn parse_manifest(data: &serde_json::Value, accession: &str) -> Result<Vec<Pride
     Ok(files)
 }
 
+/// Parse the `files` array of a `pride ftp-files` payload. Simpler than [`parse_manifest`]: there is
+/// no per-file project accession to stamp, and the empty/not-found decision is made by the caller.
+fn parse_ftp_files(data: &serde_json::Value) -> Result<Vec<PrideFtpFile>> {
+    let raw = data
+        .get("files")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if raw.is_null() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value(raw).map_err(|error| {
+        MzLibError::Protocol(format!("PRIDE FTP listing could not be read: {error}"))
+    })
+}
+
 /// Read the written paths out of a `pride download` payload.
 fn parse_paths(data: &serde_json::Value) -> Vec<PathBuf> {
     data.get("paths")
@@ -566,6 +623,69 @@ pub fn list_files_with(accession: &str, options: &ListOptions) -> Result<Vec<Pri
     parse_manifest(&data, &canonical)
 }
 
+/// Return the COMPLETE file list of a PRIDE project, read from its FTP directory tree.
+///
+/// The authoritative counterpart to [`list_files`]: where that returns PRIDE's REST manifest —
+/// incomplete for some projects, omitting for PXD000001 the two largest of 13 files — this walks
+/// the FTP directory (subdirectories included) and returns everything the project holds (mzLib
+/// #1121). Sizes are PRIDE's rounded index sizes, so [`approximate_total_size_bytes`] is an
+/// estimate over the *whole* project, unlike [`total_size_bytes`].
+///
+/// This is a **listing** surface only. [`download`] and [`download_files`] operate on the REST
+/// manifest, so a file that appears *only* here — the whole point of this function — is fetched
+/// directly from its [`PrideFtpFile::url`] with an ordinary HTTPS client.
+///
+/// # Errors
+///
+/// [`MzLibError::Usage`] if the accession is malformed; [`MzLibError::ProjectNotFound`] if no
+/// project has that accession (or it lacks the publication date that locates its FTP directory), or
+/// the directory listed no files; [`MzLibError::ServiceUnavailable`] if EBI was unreachable.
+pub fn list_ftp_files(accession: &str) -> Result<Vec<PrideFtpFile>> {
+    list_ftp_files_with(accession, Some(Duration::from_secs(300)))
+}
+
+/// [`list_ftp_files`], with the timeout stated explicitly.
+///
+/// # Errors
+///
+/// As [`list_ftp_files`].
+pub fn list_ftp_files_with(
+    accession: &str,
+    timeout: Option<Duration>,
+) -> Result<Vec<PrideFtpFile>> {
+    let canonical = normalise_accession(accession)?;
+    let args = [
+        "pride".to_owned(),
+        "ftp-files".to_owned(),
+        "--accession".to_owned(),
+        canonical.clone(),
+    ];
+
+    let data = match bridge::invoke(&args, None, timeout) {
+        Ok(data) => data,
+        // mzLib resolves the project (via the REST API) before walking the tree, so an unknown
+        // accession comes back as an MzLibException, not an empty list. Map it to the same
+        // ProjectNotFound that list_files raises; a mid-walk transport failure keeps its Bridge error.
+        Err(MzLibError::Bridge { error_type, .. }) if error_type == "MzLibException" => {
+            return Err(MzLibError::ProjectNotFound(format!(
+                "PRIDE has no project '{canonical}' (or it lacks the publication date needed to \
+                 locate its FTP directory). Check for a typo - a private project looks the same."
+            )));
+        }
+        Err(other) => return Err(other),
+    };
+
+    let files = parse_ftp_files(&data)?;
+    if files.is_empty() {
+        return Err(MzLibError::ProjectNotFound(format!(
+            "The FTP directory for '{canonical}' listed no files. Either the project is genuinely \
+             empty or PRIDE's directory-index format has changed; list_files() may still return \
+             its REST manifest."
+        )));
+    }
+    Ok(files)
+}
+
 /// Download a project's files, optionally filtered, and return where they landed.
 ///
 /// Files are streamed to a temporary name and moved into place only once complete, so an
@@ -636,6 +756,18 @@ pub fn total_size_bytes(files: &[PrideFile]) -> u64 {
     files.iter().map(|file| file.file_size_bytes).sum()
 }
 
+/// Sum the approximate sizes of some FTP files — the honest project-size estimate.
+///
+/// The counterpart to [`total_size_bytes`] with the trade-offs reversed: it sums over the COMPLETE
+/// FTP listing ([`list_ftp_files`]), so no files are missing, but each size is PRIDE's rounded
+/// directory-index value, so the total is an estimate, not an exact byte count. For PXD000001 it
+/// lands near the true 1.44 GB, where [`total_size_bytes`] reports 0.51 GB over the incomplete REST
+/// manifest. For the exact bytes of one file, HTTP HEAD its [`PrideFtpFile::url`].
+#[must_use]
+pub fn approximate_total_size_bytes(files: &[PrideFtpFile]) -> u64 {
+    files.iter().map(|file| file.approximate_size_bytes).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +822,54 @@ mod tests {
         let files = recorded_files();
         let expected: u64 = files.iter().map(|f| f.file_size_bytes).sum();
         assert_eq!(total_size_bytes(&files), expected);
+    }
+
+    // ---------------------------------------------------------- ftp-files (mzLib #1121)
+
+    const FTP_FIXTURE: &str = include_str!("../tests/fixtures/pride_ftp_PXD000001.json");
+
+    fn recorded_ftp() -> Vec<PrideFtpFile> {
+        let data: serde_json::Value =
+            serde_json::from_str(FTP_FIXTURE).expect("ftp fixture should be valid JSON");
+        parse_ftp_files(&data).expect("ftp fixture should parse")
+    }
+
+    #[test]
+    fn ftp_files_parse_every_file_including_the_rest_hidden_one() {
+        let files = recorded_ftp();
+        assert_eq!(files.len(), 4);
+        // The whole point of the verb: a subdirectory file the REST manifest hides is present.
+        assert!(files
+            .iter()
+            .any(|f| f.relative_path == "generated/summary.mztab"));
+    }
+
+    #[test]
+    fn ftp_nested_file_keeps_its_path_but_a_bare_leaf_name() {
+        let nested = recorded_ftp()
+            .into_iter()
+            .find(|f| f.relative_path.contains('/'))
+            .expect("a nested file");
+        assert_eq!(nested.relative_path, "generated/summary.mztab");
+        assert_eq!(nested.file_name, "summary.mztab");
+        assert_eq!(nested.extension(), ".mztab");
+        assert!(nested.url.starts_with("https://"));
+    }
+
+    #[test]
+    fn approximate_total_size_sums_the_complete_listing() {
+        let files = recorded_ftp();
+        let expected: u64 = files.iter().map(|f| f.approximate_size_bytes).sum();
+        assert_eq!(approximate_total_size_bytes(&files), expected);
+
+        let run = files
+            .iter()
+            .find(|f| f.file_name == "run1.raw")
+            .expect("run1.raw");
+        assert!(
+            (run.approximate_size_mb() - run.approximate_size_bytes as f64 / 1_000_000.0).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
