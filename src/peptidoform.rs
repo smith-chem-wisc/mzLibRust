@@ -363,12 +363,11 @@ impl Digest {
             .len()
     }
 
-    /// Fragment ions per product type, e.g. `{"c": 3253, "y": 3253, "zDot": 3308}`.
+    /// Fragment ions per product type, e.g. `{"c": 3253, "zDot": 3308}`.
     ///
     /// Prefer this to [`Self::fragment_count`] whenever the ion series matter, which for ETD is
-    /// always: mzLib emits a spurious `y` series for ETD (about a third of the total, see
-    /// [`FragmentOptions::dissociation`]), and `zDot` carries one extra full-length ion per peptide
-    /// (see [`Fragment::fragment_number`]). A single total silently folds both in.
+    /// always: `zDot` carries one extra full-length ion per peptide (see
+    /// [`Fragment::fragment_number`]), which a single total silently folds in.
     #[must_use]
     pub fn fragments_by_series(&self) -> std::collections::BTreeMap<String, usize> {
         let mut counts = std::collections::BTreeMap::new();
@@ -380,8 +379,8 @@ impl Digest {
 
     /// Total fragment ions across every peptide.
     ///
-    /// A bare total. For ETD this includes the spurious `y` series and the full-length `z•` per
-    /// peptide, so it is **not** the number of ions you would look for in a spectrum — see
+    /// A bare total. For ETD this includes the full-length `z•` per peptide, so it is **not**
+    /// exactly the number of backbone-cleavage ions you would look for in a spectrum — see
     /// [`Self::fragments_by_series`].
     #[must_use]
     pub fn fragment_count(&self) -> usize {
@@ -404,13 +403,8 @@ pub struct FragmentOptions {
     pub protease: String,
     /// `"HCD"`/`"CID"` (b and y ions), `"ETD"`, and the rest of mzLib's dissociation types.
     ///
-    /// **`"ETD"` returns three series — `c`, `zDot` **and `y`** — not two.** The y ions are
-    /// spurious: ETD cleaves N–Cα and yields c/z•, while b/y come from amide cleavage under
-    /// vibrational activation, and mzLib's `EThcD` row correctly pairs y *with* b. ETD's does not.
-    /// They are about **a third** of every ETD fragment list, so
-    /// [`Digest::fragment_count`] over-counts real ETD ions by that much — use
-    /// [`Digest::fragments_by_series`] to see the split. Tracked as
-    /// [smith-chem-wisc/mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109).
+    /// `"ETD"` returns the `c` and `zDot` series (radical N–Cα cleavage yields c/z•, not the b/y of
+    /// vibrational activation). mzLib #1114 removed the spurious `y` series ETD used to emit.
     pub dissociation: String,
     /// Apply UniProt's annotated modifications.
     ///
@@ -730,19 +724,12 @@ mod tests {
     }
 
     #[test]
-    fn etd_produces_c_and_z_ions_and_also_y_which_it_should_not() {
-        // The dissociation type actually reached the engine — the defaults are opinions, and this
-        // is the one that changes which ions come back.
-        //
-        // It also pins a live mzLib defect, smith-chem-wisc/mzLib#1109: ETD (and ECD) are mapped
-        // to { c, y, zDot }, so a third of every ETD fragment list is y ions. ETD cleaves the
-        // N–Cα bond and yields c and z• ions; b and y come from amide cleavage under vibrational
-        // activation. If the y ions modelled residual activation, b ions would accompany them —
-        // which is exactly what mzLib's EThcD row does. y without b has no mechanism.
-        //
-        // The assertion therefore records what mzLib DOES, not what it should do, and fails the
-        // moment the upstream fix lands — which is the point. A test that quietly asserted the
-        // wrong behaviour would let the fix look like a regression.
+    fn etd_produces_c_and_zdot_but_no_y_ions() {
+        // The dissociation type actually reached the engine, and mzLib #1114 removed y from the
+        // ETD/ECD product sets: radical N–Cα cleavage yields c/z• only, while b/y come from amide
+        // cleavage under vibrational activation (mzLib's EThcD row is where y belongs). This pins
+        // the post-#1114 contract — c and zDot, never y — so a fixture or bridge that regressed
+        // below f6b0f0d1 fails here instead of resurrecting the retired "spurious ETD y" note.
         let digest = recorded_digest();
         assert_eq!(digest.dissociation, "ETD");
         let series: std::collections::HashSet<&str> = digest
@@ -765,31 +752,9 @@ mod tests {
             "b ions would mean amide cleavage: {series:?}"
         );
         assert!(
-            series.contains("y"),
-            "mzLib#1109 has ETD emitting y ions; if this now fails, the upstream fix has landed \
-             and this test plus the `spurious_etd_y_ions` note should be retired: {series:?}"
-        );
-    }
-
-    #[test]
-    fn the_scale_of_the_spurious_etd_y_ions_is_recorded() {
-        // Quantifying it is what makes mzLib#1109 actionable rather than a shrug: a third of the
-        // theoretical ion list for ETD data is ions ETD does not make.
-        let digest = recorded_digest();
-        let total = digest.fragment_count();
-        let y_ions = digest
-            .peptides
-            .iter()
-            .flat_map(|p| p.fragments.iter())
-            .filter(|f| f.product_type == "y")
-            .count();
-
-        assert!(y_ions > 0);
-        let fraction = y_ions as f64 / total as f64;
-        assert!(
-            (0.30..0.40).contains(&fraction),
-            "expected roughly a third of ETD products to be y ions, got {fraction:.3} \
-             ({y_ions}/{total})"
+            !series.contains("y"),
+            "mzLib #1114 removed y from ETD; its return means the fixture or bridge regressed \
+             below f6b0f0d1: {series:?}"
         );
     }
 
