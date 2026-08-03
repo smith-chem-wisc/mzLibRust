@@ -1,0 +1,31 @@
+{
+  "accession": "PXD000001",
+  "file_count": 4,
+  "approximate_total_size_bytes": 670905958,
+  "files": [
+    {
+      "relative_path": "README.txt",
+      "file_name": "README.txt",
+      "url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2012/03/PXD000001/README.txt",
+      "approximate_size_bytes": 1638
+    },
+    {
+      "relative_path": "run1.raw",
+      "file_name": "run1.raw",
+      "url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2012/03/PXD000001/run1.raw",
+      "approximate_size_bytes": 220200960
+    },
+    {
+      "relative_path": "hidden_from_rest.mzML",
+      "file_name": "hidden_from_rest.mzML",
+      "url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2012/03/PXD000001/hidden_from_rest.mzML",
+      "approximate_size_bytes": 449839104
+    },
+    {
+      "relative_path": "generated/summary.mztab",
+      "file_name": "summary.mztab",
+      "url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2012/03/PXD000001/generated/summary.mztab",
+      "approximate_size_bytes": 864256
+    }
+  ]
+}
