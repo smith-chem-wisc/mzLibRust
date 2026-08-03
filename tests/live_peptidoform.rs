@@ -47,6 +47,39 @@ fn the_workflow_still_answers_end_to_end() {
 }
 
 #[test]
+fn the_documented_ground_truth_digest_counts_reproduce() {
+    // Pins the bake-off ground truth (design/bakeoff/DESIGN.md, Task 2) against the live bridge so a
+    // documented count cannot quietly rot again — the exact failure smith-chem-wisc/mzLibRust#1
+    // caught, where the table read 254/269 while the real digest yields 243/257. Distinct base
+    // sequences, ETD, both termini, 2 missed cleavages, up to 2 modifications applied — the defaults.
+    let Some(()) = require_bridge() else { return };
+
+    // (protease, min_length, expected distinct base sequences)
+    let cases = [
+        ("trypsin|P", 7, 195),
+        ("trypsin|P", 1, 243),
+        ("trypsin", 7, 202),
+        ("trypsin", 1, 257),
+    ];
+    for (protease, min_length, expected) in cases {
+        let options = FragmentOptions {
+            protease: protease.to_owned(),
+            min_length,
+            ..Default::default()
+        };
+        let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &options)) else {
+            return;
+        };
+        assert_eq!(
+            digest.distinct_base_sequences(),
+            expected,
+            "{protease} min_length={min_length}: albumin ground truth is {expected} distinct base \
+             sequences"
+        );
+    }
+}
+
+#[test]
 fn etd_produces_c_and_z_ions() {
     // The dissociation type must reach mzLib, or the caller silently gets the wrong chemistry.
     // On the y ions ETD also emits, see smith-chem-wisc/mzLib#1109 and the offline test that pins
