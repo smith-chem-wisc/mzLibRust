@@ -201,14 +201,20 @@ pub struct FeatureType {
 
 /// What UniProt annotates, and what could actually be used.
 ///
-/// A modification is only usable for mass spectrometry if it has a defined target **and** a defined
-/// mass. A glycosylation site annotated as "N-linked (GlcNAc...) asparagine" has neither a fixed
-/// composition nor a fixed mass, so there is nothing to add to a peptide, and a peptide carrying an
-/// ambiguous-mass PTM is not identifiable by mass anyway. Such annotations are therefore excluded.
+/// mzLib loads only `modified residue` and `lipid moiety-binding region` annotations; every other
+/// feature type is dropped **on feature type alone**, before any mass lookup. So the census sees the
+/// world at feature-*type* granularity — one entry per type in [`ModificationCensus::by_type`], never
+/// per modification *name*. On serum albumin the 24 excluded features all sit under the single type
+/// `glycosylation site`; at UniProt's finer name level 22 of those 24 are specifically
+/// `N-linked (Glc) (glycation) lysine`, which *does* have a defined mass — but the census never
+/// surfaces that name, so "22" is a fact you confirm by reading the UniProt entry, not a number this
+/// type reports. Read the exclusion as "wrong feature type", **not** "no defined mass".
 ///
-/// That exclusion is correct. What this type exists for is that you should not have to *guess* it
-/// happened: for serum albumin, 14 modifications are applied out of 38 annotated, and without this
-/// the 14 arrives with no indication that a rule was ever applied.
+/// The exclusion is still correct: glycation and glycosylation are labile, heterogeneous adducts, so
+/// assigning one an exact mass and a clean fragment ladder would describe a species you cannot
+/// observe. What this type exists for is that you should not have to *guess* it happened: for serum
+/// albumin, 14 modifications are applied out of 38 annotated, and without this the 14 arrives with no
+/// indication that a rule was ever applied. See smith-chem-wisc/mzLib#1112.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModificationCensus {
     /// Distinct residue positions carrying at least one modification.
@@ -239,6 +245,11 @@ impl ModificationCensus {
     }
 
     /// A one-paragraph, human-readable account of what was used and what was not.
+    ///
+    /// It names the excluded feature *types* and their counts — the only granularity the census
+    /// has. It never reports a modification-*name*-level breakdown (e.g. "22 of 24 are glycation"),
+    /// because [`ModificationCensus::by_type`] does not carry names; such a figure comes from
+    /// reading the UniProt entry, not from this census.
     #[must_use]
     pub fn explain(&self) -> String {
         if self.excluded() == 0 {
@@ -267,11 +278,11 @@ impl ModificationCensus {
                  The exclusion is usually right: a glycation or glycosylation annotation describes \
                  a labile, heterogeneous adduct, so assigning it one exact mass and a clean \
                  fragment ladder would invent a species you cannot observe. But the reason is not \
-                 reported, and the qualifier is not read — on albumin, 14 of the 24 excluded here \
-                 are marked 'in vitro' and 2 exist only in disease variants, which are different \
-                 grounds for exclusion needing different judgements from you. Read the annotations \
-                 on the UniProt entry before concluding anything about a specific site; this \
-                 census can only tell you the count (smith-chem-wisc/mzLib#1112)."
+                 reported, and the qualifier is not read — some annotations are marked 'in vitro' \
+                 and some exist only in disease variants, which are different grounds for exclusion \
+                 needing different judgements from you. Read the annotations on the UniProt entry \
+                 before concluding anything about a specific site; this census can only tell you \
+                 the count (smith-chem-wisc/mzLib#1112)."
             ));
         }
 
@@ -969,6 +980,36 @@ mod tests {
         assert!(explanation.contains("feature type"), "{explanation}");
         assert!(explanation.contains("mzLib#1112"), "{explanation}");
         assert_eq!(census.excluded(), 24);
+    }
+
+    #[test]
+    fn census_explain_stays_at_feature_type_granularity() {
+        // The census sees feature *types*, not modification *names*: by_type carries
+        // "glycosylation site", never "N-linked (Glc) (glycation) lysine". So explain() must
+        // attribute the exclusion to feature type and never present a name-level count — e.g.
+        // "22 of 24 are glycation" — or a protein-specific qualifier tally as a census fact.
+        // Pins smith-chem-wisc/mzLibRust#2: a documented number at the wrong granularity.
+        let census = recorded_digest().modification_census; // albumin: 24 × glycosylation site
+        let explanation = census.explain();
+
+        assert!(
+            explanation.contains("24 × glycosylation site"),
+            "{explanation}"
+        );
+        assert!(explanation.contains("feature type"), "{explanation}");
+        // Facts the census cannot produce must not appear as its output.
+        assert!(
+            !explanation.contains("N-linked"),
+            "name-level modification detail leaked into census output: {explanation}"
+        );
+        assert!(
+            !explanation.contains("22 of"),
+            "name-level '22 of 24' count leaked into census output: {explanation}"
+        );
+        assert!(
+            !explanation.contains("14 of the 24"),
+            "protein-specific qualifier tally baked into general census output: {explanation}"
+        );
     }
 
     #[test]
