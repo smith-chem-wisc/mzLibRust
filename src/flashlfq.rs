@@ -158,7 +158,15 @@ pub struct ProteinGroup {
     /// The organism, when the result file carried one.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub organism: String,
-    /// Run base name → protein intensity in that run.
+    /// Sample label → protein intensity in that sample.
+    ///
+    /// **The key is a *sample*, not a file.** FlashLFQ rolls peptides up to proteins per sample,
+    /// grouping runs by condition and biological replicate first. [`quantify`] and [`quantify_with`]
+    /// give every run its own sample, so the label here is the run base name and the distinction
+    /// costs you nothing. It would bite if runs were ever grouped into replicates: the key would
+    /// then be the sample (`"condition_replicate"`), and several runs would share one entry. Compare
+    /// [`Peptide::intensities`], which is keyed per run in every case — peptides are measured in
+    /// files, proteins are resolved across samples.
     ///
     /// **May be `None`**: FlashLFQ's median-polish protein quant emits NaN (returned here as
     /// `None`) when the peptide matrix for the protein is degenerate — too few peptides per run to
@@ -179,10 +187,13 @@ pub struct ProteinGroup {
 }
 
 impl ProteinGroup {
-    /// This protein's intensity in the named run.
+    /// This protein's intensity in the named sample.
     ///
     /// `None` means FlashLFQ could not resolve a number (a degenerate peptide matrix);
-    /// `Some(0.0)` means simply not measured in this run.
+    /// `Some(0.0)` means simply not measured in this sample.
+    ///
+    /// The name is a *sample* label — which, for results from [`quantify`] and [`quantify_with`],
+    /// is the run base name, since each run is its own sample. See [`ProteinGroup::intensities`].
     #[must_use]
     pub fn intensity(&self, file_name: &str) -> Option<f64> {
         self.intensities
