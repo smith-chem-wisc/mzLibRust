@@ -11,7 +11,7 @@ availability-versus-correctness error classification. This crate is the thin, id
 over it, which is why it exists at all: a second binding costs a transport module and some typed
 structs, not a second implementation of mzLib.
 
-## Four capabilities, the same four pyMzLib has
+## Five capabilities, the same five pyMzLib has
 
 ```rust
 // PRIDE Archive — what is in a project, and pull it down.
@@ -43,7 +43,25 @@ println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiabl
 
 let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 29
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
+
+// Prediction — 37 Koina models across five families.
+let r = mzlib::prediction::retention_time("Prosit_2019_irt", &["PEPTIDEK", "ELVISLIVESK"])?;
+println!("{:?} in {}", r.columns.floats("retention_time")?, r.retention_time_unit);
+//   [Some(5.5165), Some(129.7723)] in indexed_retention_time   <- iRT, NOT minutes
 ```
+
+### Prediction: check `models()` before you send anything
+
+Each entry carries the constraints that decide whether a peptide can be sent at all — `max_peptide_length`
+is 30 for most models, and `allowed_unimod_ids` being empty means the model accepts no modifications.
+
+`Constraint` is a **tri-state**, because mzLib encodes one in a nullable set whose emptiness means the
+opposite of what it looks like: `null` is *not applicable* and *empty* is *required, any value*. Read
+raw, `Prosit_2020_intensity_CID` looks permissive about collision energy when it accepts none, and
+`Prosit_2020_intensity_HCD` looks like it accepts none when it requires one.
+
+Koina is a public, shared, community-run GPU. `Politeness` exists for a large job; its defaults are
+mzLib's and are deliberately not raised.
 
 ### Reading: one universal function, four typed views
 
@@ -103,7 +121,7 @@ peptide roll-up drops most transfers.
 
 ## Getting the bridge
 
-**You do not need one to build, test, document or lint the crate.** `cargo test` runs 118 offline
+**You do not need one to build, test, document or lint the crate.** `cargo test` runs 140 offline
 tests with no network and no .NET on the machine. A bridge is required only for calls that actually
 reach mzLib, and a missing one is a runtime error with instructions, never a build failure — so
 contributors are never blocked by a 130 MB payload they may not want.

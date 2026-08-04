@@ -23,6 +23,12 @@
 //! # }
 //! ```
 //!
+//! Prediction is the other network-facing surface: mzLib ships clients for **37 published models**
+//! on the [Koina](https://koina.wilhelmlab.org/) inference server, across five families — retention
+//! time, fragment intensity, collisional cross-section, detectability and crosslink intensity. See
+//! the [`prediction`] module, and note that most of its retention-time models return iRT rather
+//! than minutes, which [`prediction::Predictions::retention_time_unit`] reports as a value.
+//!
 //! Reading result files is the widest surface: mzLib recognises **29 file types** and this crate
 //! reads all of them. [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
@@ -46,8 +52,10 @@
 pub mod bridge;
 pub mod flashlfq;
 pub mod peptidoform;
+pub mod prediction;
 pub mod pride;
 pub mod readers;
+pub mod table;
 
 pub use bridge::{
     bridge_path, bridge_version, BridgeVersion, MzLibError, Result, BRIDGE_ENV_VAR,
