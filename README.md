@@ -11,7 +11,7 @@ availability-versus-correctness error classification. This crate is the thin, id
 over it, which is why it exists at all: a second binding costs a transport module and some typed
 structs, not a second implementation of mzLib.
 
-## Three capabilities, the same three pyMzLib has
+## Four capabilities, the same four pyMzLib has
 
 ```rust
 // PRIDE Archive — what is in a project, and pull it down.
@@ -36,6 +36,44 @@ let result = quantify_with(
     &QuantifyOptions { match_between_runs: true, ..Default::default() },
 )?;
 println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
+
+// Readers — identify any of mzLib's 29 result-file types, and read ALL of them.
+let info = mzlib::readers::identify("psm.tsv")?;
+println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
+
+let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 29
+let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
+```
+
+### Reading: one universal function, four typed views
+
+What differs between the 29 formats is not *whether* you can read them but *what the columns mean*.
+
+| function | reads | columns |
+|---|---|---|
+| `read_records` | **all 29** | **that format's own fields**, under mzLib's names |
+| `read_results` | 3 | uniform `quantifiable` view |
+| `read_features` | 2 | uniform `ms1_features` view |
+| `read_matches` | 4 | uniform `spectral_match` view |
+| `read_spectra` | 7 | scan headers; peaks opt-in |
+
+**13 of the 29 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
+protein tables, the FlashDeconv formats. mzLib parses them into a format-specific shape and there
+is no uniform view to project them onto, so `read_records` is what reaches them; it is a necessity,
+not a convenience.
+
+Because the column set depends on the format, a read returns a `Table` rather than a struct with
+named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can
+never silently become a zero and can never shorten a column:
+
+```rust
+let t = mzlib::readers::read_records("crux.txt")?;
+for (sequence, score) in t.columns.strings("base_sequence")?
+    .iter()
+    .zip(t.columns.floats("x_corr_score")?)
+{
+    if let (Some(sequence), Some(score)) = (sequence, score) { println!("{sequence}\t{score}"); }
+}
 ```
 
 ## Two conventions worth knowing
