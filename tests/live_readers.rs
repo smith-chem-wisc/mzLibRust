@@ -262,3 +262,50 @@ fn asking_for_a_view_a_file_does_not_have_names_the_alternative() {
     assert!(message.contains("quantifiable"), "{message}");
     assert!(message.contains("read-records"), "{message}");
 }
+
+#[test]
+fn a_fabricated_zero_intensity_crosses_as_none() {
+    // A within-type schema variant: Apex_intensity is optional and the FLASHDeconv/OpenMS
+    // _ms1.feature layout omits it, so mzLib substitutes zero for every feature. A whole column of
+    // zeros is indistinguishable from real measurements of nothing, which is exactly what Option
+    // exists to prevent — and the reason a binding must not paper over it with 0.0.
+    let Some(()) = require_bridge() else { return };
+    let path = fixture_or_skip!(
+        "FileReadingTests/ExternalFileTypes/Ms1Feature_FlashDeconvOpenMs3.0.0_ms1.feature"
+    );
+
+    let features = mzlib::readers::read_features(&path).expect("the feature view should read");
+
+    let intensities = features
+        .columns
+        .floats("intensity")
+        .expect("a numeric column");
+    assert!(
+        intensities.iter().all(Option::is_none),
+        "a fabricated zero must not be handed back as a measurement"
+    );
+    assert!(
+        features
+            .caveats
+            .iter()
+            .any(|caveat| caveat.contains("intensity is NULL")),
+        "and the reason must be stated, not left as an unexplained empty column"
+    );
+}
+
+#[test]
+fn a_topfd_feature_file_still_reports_real_intensities() {
+    // The counterpart: nulling every intensity would be an equally serious over-correction.
+    let Some(()) = require_bridge() else { return };
+    let path =
+        fixture_or_skip!("FileReadingTests/ExternalFileTypes/Ms1Feature_TopFDv1.6.2_ms1.feature");
+
+    let features = mzlib::readers::read_features(&path).expect("the feature view should read");
+
+    assert!(features
+        .columns
+        .floats("intensity")
+        .expect("a numeric column")
+        .iter()
+        .all(Option::is_some));
+}
