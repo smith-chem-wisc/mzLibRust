@@ -11,6 +11,27 @@ availability-versus-correctness error classification. This crate is the thin, id
 over it, which is why it exists at all: a second binding costs a transport module and some typed
 structs, not a second implementation of mzLib.
 
+## "I want to…"
+
+If you know what you are after, this is the shortest route in:
+
+| I want to… | call |
+|---|---|
+| download a public dataset | `pride::list_files` / `pride::download_files` |
+| work out what a file *is* | `readers::identify` |
+| read a search result into a table | `readers::read_records` — works on all 29 formats |
+| compare two search engines' results | `readers::read_results` — the columns that mean the same thing |
+| read scans or peaks from an mzML/raw | `readers::read_spectra` |
+| quantify peptides across runs | `flashlfq::quantify_with` |
+| digest a protein and fragment its peptides | `peptidoform::fragments` |
+| predict retention time or an MS2 spectrum | `prediction::retention_time` / `prediction::fragments` |
+| find out which prediction models exist | `prediction::models` |
+
+New to proteomics rather than to Rust? pyMzLib's
+[tutorial](https://smith-chem-wisc.github.io/pyMzLib/tutorial/) is the gentlest introduction to
+*what these things are*; every function above is the same call under a different name, because all
+three bindings project the same wire contract.
+
 ## Five capabilities, the same five pyMzLib has
 
 ```rust
