@@ -264,11 +264,14 @@ fn asking_for_a_view_a_file_does_not_have_names_the_alternative() {
 }
 
 #[test]
-fn a_fabricated_zero_intensity_crosses_as_none() {
+fn a_fabricated_zero_intensity_is_disclosed_as_such() {
     // A within-type schema variant: Apex_intensity is optional and the FLASHDeconv/OpenMS
     // _ms1.feature layout omits it, so mzLib substitutes zero for every feature. A whole column of
-    // zeros is indistinguishable from real measurements of nothing, which is exactly what Option
-    // exists to prevent — and the reason a binding must not paper over it with 0.0.
+    // zeros is indistinguishable from real measurements of nothing.
+    //
+    // The bridge passes mzLib's value through and SAYS the zero is fabricated. Nulling it makes
+    // the wire disagree with mzLib about a number, which ships separately (pyMzLib #28); when that
+    // lands, this test flips to asserting None and the crate gains its parity port.
     let Some(()) = require_bridge() else { return };
     let path = fixture_or_skip!(
         "FileReadingTests/ExternalFileTypes/Ms1Feature_FlashDeconvOpenMs3.0.0_ms1.feature"
@@ -281,21 +284,22 @@ fn a_fabricated_zero_intensity_crosses_as_none() {
         .floats("intensity")
         .expect("a numeric column");
     assert!(
-        intensities.iter().all(Option::is_none),
-        "a fabricated zero must not be handed back as a measurement"
+        intensities.iter().all(|value| *value == Some(0.0)),
+        "mzLib's value is passed through unchanged"
     );
     assert!(
         features
             .caveats
             .iter()
-            .any(|caveat| caveat.contains("intensity is NULL")),
-        "and the reason must be stated, not left as an unexplained empty column"
+            .any(|caveat| caveat.contains("FABRICATED")),
+        "a column of zeros that are not measurements must say so, or it is indistinguishable from          a file where nothing was detected"
     );
 }
 
 #[test]
 fn a_topfd_feature_file_still_reports_real_intensities() {
-    // The counterpart: nulling every intensity would be an equally serious over-correction.
+    // The counterpart, and the fixture that proves the caveat above is conditional: TopFD writes
+    // Apex_intensity, so its intensities are real and nothing is claimed about them.
     let Some(()) = require_bridge() else { return };
     let path =
         fixture_or_skip!("FileReadingTests/ExternalFileTypes/Ms1Feature_TopFDv1.6.2_ms1.feature");
@@ -307,5 +311,9 @@ fn a_topfd_feature_file_still_reports_real_intensities() {
         .floats("intensity")
         .expect("a numeric column")
         .iter()
-        .all(Option::is_some));
+        .all(|value| value.is_some_and(|intensity| intensity > 0.0)));
+    assert!(!features
+        .caveats
+        .iter()
+        .any(|caveat| caveat.contains("FABRICATED")));
 }
