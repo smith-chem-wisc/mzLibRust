@@ -58,12 +58,39 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # This used to be `exit 1` with a comment saying it was waiting for pyMzLib to publish raw
+      # bridge binaries as release assets. It does now, from v0.1.0.dev4 onward, so the wait is over.
+      #
+      # The tarball, not the wheel. mzLibR reached the binary by unzipping a Python wheel because
+      # nothing neutral was published; a Rust crate has no business knowing what a wheel is, and now
+      # does not have to. tar rather than zip is what makes this three lines instead of four: tar
+      # restores the execute bit, verified on the real asset — the published linux payload records
+      # `-rwxr-xr-x` — whereas an unzip would land a non-executable file and need a chmod.
       - name: Fetch the bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Staging the mzLib bridge for linux-x64."
-          echo "Until pyMzLib publishes raw bridge binaries as release assets (mzLib #1103 makes"
-          echo "that cheaper), this step is the one piece of the distribution story still manual."
-          exit 1
+          set -euo pipefail
+
+          # The newest release, including prereleases: every pyMzLib release so far is one, and
+          # `releases/latest` skips them. This deliberately tracks the newest rather than pinning,
+          # because the job's purpose is to notice when the CURRENT bridge breaks the contract.
+          tag=$(gh api repos/smith-chem-wisc/pyMzLib/releases --jq '.[0].tag_name')
+          echo "Staging the mzLib bridge for linux-x64 from pyMzLib $tag"
+
+          gh release download "$tag" --repo smith-chem-wisc/pyMzLib \
+            --pattern 'mzlib-bridge-linux-x64.tar.gz' --pattern 'SHA256SUMS'
+
+          # Verified against the published manifest, not taken on the strength of HTTPS. `-c` fails
+          # the job on a mismatch, which is the point: a corrupted 160 MB payload should stop here
+          # rather than surface later as an inexplicable test failure.
+          grep 'mzlib-bridge-linux-x64.tar.gz' SHA256SUMS | sha256sum -c -
+
+          mkdir -p _dotnet/linux-x64
+          tar -xzf mzlib-bridge-linux-x64.tar.gz -C _dotnet/linux-x64
+
+          # Prove it runs before any test blames the crate for the payload.
+          ./_dotnet/linux-x64/mzlib-bridge version
       - run: cargo test --features live
         env:
           MZLIB_BRIDGE: ${{ github.workspace }}/_dotnet/linux-x64/mzlib-bridge
