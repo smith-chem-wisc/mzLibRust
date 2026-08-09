@@ -30,7 +30,7 @@ Seven defects, all verified against ground truth before filing, two with fixes p
 | [mzLib#1112](https://github.com/smith-chem-wisc/mzLib/issues/1112) | Glycosylation annotations dropped silently (corrected: exclusion right, silence wrong) | open |
 | [mzLib#1113](https://github.com/smith-chem-wisc/mzLib/issues/1113) | Modifications applied after digestion → peptides trypsin cannot make | open |
 | [pyMzLib#7](https://github.com/smith-chem-wisc/pyMzLib/issues/7) | `Peptide.intensity()` returned `None` against its own invariant | **[PR #9](https://github.com/smith-chem-wisc/pyMzLib/pull/9)** |
-| [pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8) | `--no-modifications` also discards proteolysis products | open |
+| [pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8) | `--no-modifications` also discards proteolysis products | **closed / fixed** |
 
 **Two deserve attention beyond the issue tracker:**
 
