@@ -1,0 +1,117 @@
+# Publishes the crate on a v* tag.
+#
+# This file exists because the release layer was the one place the three bindings were NOT at
+# parity, which is a BRIDGE-MAINTAIN-PARITY violation one level up from the usual kind: it is about
+# how a binding *ships* rather than what it can do. pyMzLib has released four times off a hand-cut
+# tag; mzLibRust and mzLibR had no release workflow at all and zero releases between them. So the
+# manual path existed only for Python and the automatic path existed nowhere.
+#
+# The safety switch is copied deliberately from pyMzLib's PYPI_PUBLISH gate rather than invented.
+# A tag always builds, tests and dry-run-packages the crate; it only actually publishes once
+# someone sets the repository variable CRATES_PUBLISH=true and provides CARGO_REGISTRY_TOKEN. The
+# reason is the same one that applies to PyPI: crates.io permanently locks a version number once it
+# is taken, so a first release that turns out to be broken cannot be replaced, only yanked and
+# superseded. Until the switch is thrown, tagging is free to be a rehearsal.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Everything that must be true before anything leaves this repository. Deliberately a superset of
+  # the per-push CI: the offline suite on all three platforms, plus the packaging checks that only
+  # matter at release time and so are never otherwise exercised.
+  verify:
+    name: verify / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  package:
+    name: package (dry run)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The tag and Cargo.toml must agree. Getting this wrong publishes a version nobody can then
+      # correct, because crates.io will not let the number be reused — so it is checked before the
+      # publish job can run rather than discovered afterwards.
+      - name: The tag must match the crate version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          echo "tag says $tag, Cargo.toml says $crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+      # `cargo package` is where a crate discovers it has been referring to files it does not ship.
+      # It builds from a clean extraction of exactly the bytes crates.io would receive, so a path
+      # that only resolves in a git checkout fails here rather than for the first person to depend
+      # on the published crate. build.rs is the specific risk: it looks for _dotnet/<rid>/ beside the
+      # manifest, which does not exist in the packaged crate — that must degrade to a warning, not
+      # an error, and this proves it still does.
+      - name: Package exactly what crates.io would receive
+        run: cargo package --list && cargo package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: target/package/*.crate
+
+  publish:
+    name: publish to crates.io
+    needs: [verify, package]
+    # Both gates required, same shape as pyMzLib's. The tag gate is obvious; the repository-variable
+    # gate is the switch that keeps a tag from shipping before anyone has decided it should.
+    if: startsWith(github.ref, 'refs/tags/v') && vars.CRATES_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+
+  github-release:
+    name: attach the crate to the GitHub Release
+    needs: [verify, package]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: crate
+          path: dist
+
+      # No `body`/`name`: a release created by hand with real notes keeps them, and one that does
+      # not exist yet gets a minimal placeholder rather than failing the job. Same convention as
+      # pyMzLib's github-release job.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.crate
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, 'dev') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
