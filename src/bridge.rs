@@ -514,6 +514,17 @@ pub struct BridgeVersion {
     pub protocol: u32,
     /// The .NET runtime it is carrying.
     pub runtime: String,
+    /// Which mzLib the bridge was built against, as `1.0.0+<commit>`.
+    ///
+    /// `None` when the bridge did not report one — either because it predates this field, or
+    /// because its build recorded no source commit. A crate downloads its bridge from a release
+    /// rather than building it, so this is the only way to ask which mzLib is actually running.
+    ///
+    /// Not a compatibility check: [`protocol`](Self::protocol) is that, and it is what
+    /// [`bridge_version`] verifies. This is for reporting a run, filing a bug, or pinning a
+    /// result to the library that produced it.
+    #[serde(default)]
+    pub mzlib: Option<String>,
 }
 
 /// The bridge's own version information, with the protocol compatibility check.
@@ -976,6 +987,25 @@ mod tests {
         assert_eq!(info.bridge, "1.0.0.0");
         assert_eq!(info.protocol, PROTOCOL_VERSION);
         assert_eq!(info.runtime, "8.0.27");
+        // This payload carries no `mzlib`, which is exactly what a bridge built before the field
+        // existed sends. It must still deserialize: an added wire field may not strand a caller on
+        // an older bridge, which is the whole reason the field is optional rather than required.
+        assert_eq!(info.mzlib, None);
+    }
+
+    #[test]
+    fn the_mzlib_build_is_reported_when_the_bridge_sends_it() {
+        let _fake = fake_bridge();
+        let runner = StubRunner::returning(
+            r#"{"ok":true,"data":{"bridge":"1.0.0.0","protocol":1,"runtime":"8.0.27","mzlib":"1.0.0+f6b0f0d17f32383918ef895006aaecb71cdb9a7e"}}"#,
+            "",
+            0,
+        );
+        let info = bridge_version_with(&runner).unwrap();
+        assert_eq!(
+            info.mzlib.as_deref(),
+            Some("1.0.0+f6b0f0d17f32383918ef895006aaecb71cdb9a7e")
+        );
     }
 
     #[test]
