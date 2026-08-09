@@ -408,17 +408,17 @@ pub struct FragmentOptions {
     pub dissociation: String,
     /// Apply UniProt's annotated modifications.
     ///
-    /// **`false` is not a clean control.** It discards UniProt's whole feature table, which also
-    /// carries the signal-peptide and propeptide boundaries mzLib digests at — so the *peptide
-    /// list* changes too, not only the modifications on it. On albumin, `false` loses
-    /// `MKWVTFISLLFLFSSAYS` (1–18) and `WVTFISLLFLFSSAYS` (3–18), both unmodified, both ending
-    /// exactly at the signal-peptide cleavage site. Comparing the two runs therefore varies two
-    /// things at once. Tracked as
-    /// [smith-chem-wisc/pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8).
+    /// `false` gives the bare sequences — a clean control, since the digest's distinct backbones
+    /// are unchanged and only the modified variants of them go away. The peptidoform count drops a
+    /// long way; on albumin from 303 to 195.
     ///
-    /// Historic wording, kept because it is still true of the modifications themselves: `false`
-    /// gives the bare sequence — useful as a
-    /// control, and the difference is usually large.
+    /// This once carried a caveat saying `false` was *not* a clean control, because it discarded
+    /// UniProt's whole feature table and with it the signal-peptide and propeptide boundaries mzLib
+    /// digests at — costing albumin `MKWVTFISLLFLFSSAYS` (1–18) and `WVTFISLLFLFSSAYS` (3–18) and
+    /// so changing the peptide list, not just the modifications on it
+    /// ([smith-chem-wisc/pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8), since
+    /// fixed). Verified against the published bridge: both peptides are present either way, and
+    /// albumin gives 195 distinct base sequences with modifications on or off.
     pub modifications: bool,
     /// Maximum missed cleavage sites per peptide.
     pub missed_cleavages: u32,
