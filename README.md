@@ -11,7 +11,15 @@ availability-versus-correctness error classification. This crate is the thin, id
 over it, which is why it exists at all: a second binding costs a transport module and some typed
 structs, not a second implementation of mzLib.
 
-## Three capabilities, the same three pyMzLib has
+## Three capabilities
+
+<!-- This heading used to read "the same three pyMzLib has". The count is still right for this
+     crate; the comparison stopped being true when pyMzLib merged its readers module. A parity
+     claim is a claim about someone else's repository, so it goes stale without anything here
+     changing — state what this crate does and let the reader compare. -->
+
+A `readers` module reading all 29 mzLib formats is in flight as
+[#9](https://github.com/smith-chem-wisc/mzLibRust/pull/9); pyMzLib and mzLibR already have theirs.
 
 ```rust
 // PRIDE Archive — what is in a project, and pull it down.
