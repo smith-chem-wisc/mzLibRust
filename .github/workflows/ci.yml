@@ -4,6 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The `live` job below runs only on `schedule` or `workflow_dispatch`, and until now this block
+  # offered neither — so its condition could never be true and the job had never run once. It was
+  # unreachable code wearing the shape of a test: visible in the file, counted as coverage by anyone
+  # reading it, and executing nothing. Its `exit 1` placeholder was never even reached, which is why
+  # nothing ever complained about it.
+  #
+  # Found by trying to dispatch it (HTTP 422, "Workflow does not have 'workflow_dispatch' trigger"),
+  # not by reading it. mzLibR's equivalent workflow has had both triggers all along; this file was
+  # the odd one out, and the divergence was invisible because the missing half was an absence.
+  schedule:
+    # Thursdays, offset from mzLibR's Monday canaries so a bridge that breaks the contract produces
+    # two independent reports on different days rather than one confusing pile.
+    - cron: "0 6 * * 4"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
