@@ -23,6 +23,11 @@
 //! # }
 //! ```
 //!
+//! Reading result files is the widest surface: mzLib recognises **31 file types** and this crate
+//! reads all of them. [`readers::read_records`] reads any format into that format's own fields;
+//! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
+//! [`readers::read_spectra`] project the four cross-format views. See the [`readers`] module.
+//!
 //! ## Two conventions worth knowing up front
 //!
 //! **Names follow mzLib.** A field here means exactly what it means in the mzLib source, the
@@ -42,6 +47,7 @@ pub mod bridge;
 pub mod flashlfq;
 pub mod peptidoform;
 pub mod pride;
+pub mod readers;
 
 pub use bridge::{
     bridge_path, bridge_version, BridgeVersion, MzLibError, Result, BRIDGE_ENV_VAR,
