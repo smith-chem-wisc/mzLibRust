@@ -42,28 +42,28 @@ let result = quantify_with(
 )?;
 println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
 
-// Readers — identify any of mzLib's 29 result-file types, and read ALL of them.
+// Readers — identify any of mzLib's 31 result-file types, and read ALL of them.
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 
-let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 29
+let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 31
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
 ```
 
 ### Reading: one universal function, four typed views
 
-What differs between the 29 formats is not *whether* you can read them but *what the columns mean*.
+What differs between the 31 formats is not *whether* you can read them but *what the columns mean*.
 
 | function | reads | columns |
 |---|---|---|
-| `read_records` | **all 29** | **that format's own fields**, under mzLib's names |
-| `read_results` | 3 | uniform `quantifiable` view |
+| `read_records` | **all 31** | **that format's own fields**, under mzLib's names |
+| `read_results` | 4 | uniform `quantifiable` view |
 | `read_features` | 2 | uniform `ms1_features` view |
 | `read_matches` | 4 | uniform `spectral_match` view |
 | `read_spectra` | 7 | scan headers; peaks opt-in |
 
-**13 of the 29 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
-protein tables, the FlashDeconv formats. mzLib parses them into a format-specific shape and there
+**14 of the 31 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
+protein tables, the FlashDeconv formats, SDRF. mzLib parses them into a format-specific shape and there
 is no uniform view to project them onto, so `read_records` is what reaches them; it is a necessity,
 not a convenience.
 

@@ -23,7 +23,7 @@
 //! # }
 //! ```
 //!
-//! Reading result files is the widest surface: mzLib recognises **29 file types** and this crate
+//! Reading result files is the widest surface: mzLib recognises **31 file types** and this crate
 //! reads all of them. [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views. See the [`readers`] module.

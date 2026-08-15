@@ -1,8 +1,8 @@
 //! Reading proteomics result files: what a file *is*, and every one of them read.
 //!
-//! mzLib recognises **29 file types** written by a dozen search and deconvolution tools —
+//! mzLib recognises **31 file types** written by a dozen search and deconvolution tools —
 //! MetaMorpheus, MSFragger, TopPIC, TopFD, MsPathFinderT, Crux, Casanovo, FlashDeconv, Dinosaur,
-//! FlashLFQ — and maintains a parser for each. **All 29 are readable here.**
+//! DIA-NN, FlashLFQ — and maintains a parser for each. **All 31 are readable here.**
 //!
 //! ```no_run
 //! # fn main() -> Result<(), mzlib::MzLibError> {
@@ -21,8 +21,8 @@
 //!
 //! | function | reads | columns |
 //! |---|---|---|
-//! | [`read_records`] | **all 29** | **that format's own fields**, under mzLib's names |
-//! | [`read_results`] | 3 | uniform `quantifiable` view |
+//! | [`read_records`] | **all 31** | **that format's own fields**, under mzLib's names |
+//! | [`read_results`] | 4 | uniform `quantifiable` view |
 //! | [`read_features`] | 2 | uniform `ms1_features` view |
 //! | [`read_matches`] | 4 | uniform `spectral_match` view |
 //! | [`read_spectra`] | 7 | scan headers; peaks opt-in |
@@ -32,7 +32,7 @@
 //! [`read_results`] gives 10 comparable columns; the same file through [`read_records`] gives 73,
 //! including the q-values and scores the uniform view does not carry.
 //!
-//! An empty [`FileInfo::views`] is a real and common answer — **13 of the 29** have it, meaning
+//! An empty [`FileInfo::views`] is a real and common answer — **14 of the 31** have it, meaning
 //! mzLib parses the file into a shape that shares nothing with any other format. Those are exactly
 //! the files [`read_records`] exists for.
 //!
@@ -284,7 +284,7 @@ pub struct Format {
     /// The name of the mzLib class that parses it, for cross-referencing the mzLib source.
     #[serde(default)]
     pub reader: Option<String>,
-    /// The uniform views this format supports. Often empty — 13 of 29 have none.
+    /// The uniform views this format supports. Often empty — 14 of 31 have none.
     #[serde(default)]
     pub views: Vec<String>,
 }
@@ -734,7 +734,7 @@ pub fn identify(path: impl AsRef<Path>) -> Result<FileInfo> {
 
 /// Read a result file into the uniform `quantifiable` record view.
 ///
-/// Only the three file types offering that view can be read this way. Use [`read_records`] for any
+/// Only the four file types offering that view can be read this way. Use [`read_records`] for any
 /// other format.
 ///
 /// # Errors
@@ -775,7 +775,7 @@ pub fn read_results_with(path: impl AsRef<Path>, options: &ReadOptions) -> Resul
 
 /// Read **any** file mzLib recognises, into that format's own fields.
 ///
-/// The exhaustive verb: if [`identify`] succeeds on a path, this reads it. All 29 file types,
+/// The exhaustive verb: if [`identify`] succeeds on a path, this reads it. All 31 file types,
 /// including the 13 that belong to no cross-format view at all — TopPIC, Crux, MSFragger's peptide
 /// and protein tables, the FlashDeconv formats — which no other function here can touch.
 ///
