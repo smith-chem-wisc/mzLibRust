@@ -1,0 +1,218 @@
+# Notices when pyMzLib publishes a new bridge, and opens the pull request that repins this crate.
+#
+# This is link [C] of the release chain in the bridge project's design/RELEASING.md: published
+# bridge -> the non-Python bindings pin it. mzLibR has had this since 2026-08-09; mzLibRust could
+# not, because it pinned NO bridge version anywhere. `build.rs` resolves only caller-supplied
+# sources, so there was nothing for a watcher to rewrite and no version to be out of date.
+#
+# That is what `install_bridge()` changed. The pinned version and the four digests it verifies
+# against live in a marked block in src/install.rs, so this can now do for Rust exactly what
+# bridge-watch does for R — which is the whole reason the installer carries a pin rather than
+# resolving "newest" at runtime. A crate that always fetched the newest bridge could not be
+# reproducible, and would change what it runs without anybody merging anything.
+
+name: bridge-watch
+
+on:
+  schedule:
+    # Wednesdays, matching mzLibR's, and offset from pyMzLib's Monday upstream-watch so a week where
+    # mzLib moves has settled into a published bridge before this looks for one.
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bridge-watch
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    name: check pyMzLib for a new bridge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Note whether a PAT is configured
+        id: pat
+        env:
+          BRIDGE_WATCH_TOKEN: ${{ secrets.BRIDGE_WATCH_TOKEN }}
+        run: |
+          if [ -n "${BRIDGE_WATCH_TOKEN:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find pyMzLib's newest release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Deliberately NOT releases/latest: that endpoint skips prereleases, and every pyMzLib
+          # release so far is one (the scheme is X.Y.Z.devN). The list endpoint returns newest
+          # first and includes them.
+          tag=$(gh api repos/smith-chem-wisc/pyMzLib/releases --jq '.[0].tag_name')
+          version="${tag#v}"
+          echo "newest pyMzLib release: $tag"
+
+          # The manifest is the thing being pinned FROM, so its absence is the whole story rather
+          # than a failure — a release that predates pyMzLib #31 simply has nothing to read.
+          if ! gh api repos/smith-chem-wisc/pyMzLib/releases --jq '.[0].assets[].name' | grep -qx 'SHA256SUMS'; then
+            echo "::notice::pyMzLib $tag publishes no SHA256SUMS asset, so there is nothing to pin from. Nothing changed."
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current=$(grep -E '^pub const MZLIB_BRIDGE_VERSION' src/install.rs | sed -E 's/.*"(.*)".*/\1/')
+          echo "currently pinned: $current"
+
+          if [ "$current" = "$version" ]; then
+            echo "Already pinned to $version. Nothing to do."
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          gh release download "$tag" --repo smith-chem-wisc/pyMzLib --pattern SHA256SUMS --output SHA256SUMS
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$current" >> "$GITHUB_OUTPUT"
+          echo "action=bump" >> "$GITHUB_OUTPUT"
+
+      - name: Repin from the manifest
+        if: steps.upstream.outputs.action == 'bump'
+        shell: pwsh
+        run: |
+          ./scripts/regen-bridge-pins.ps1 -Manifest SHA256SUMS -Version '${{ steps.upstream.outputs.version }}'
+          Remove-Item SHA256SUMS
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.upstream.outputs.action == 'bump'
+        with:
+          components: rustfmt
+
+      # The generator writes Rust, so the generated Rust has to be Rust. Both checks fail HERE,
+      # naming the generator, rather than surfacing on the pull request as a formatting complaint
+      # about code no human wrote.
+      #
+      # `fmt --check` is not cosmetic here: it is the cheapest proof that the emitted block still
+      # matches what rustfmt would produce, which is what stops the repin from arriving with a diff
+      # nobody can review. The install tests then check the table's own invariants — four platforms,
+      # 64 lowercase hex characters each, the asset name derivable from the key.
+      - name: The regenerated pins must compile, format and pass their own tests
+        if: steps.upstream.outputs.action == 'bump'
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo test --lib install::
+
+      # Regenerating the pins updates the CODE. It does not update PROSE that happens to name the
+      # old version, and prose is where this kind of staleness actually survives: nothing builds it,
+      # nothing tests it, and a reader has no way to tell a current claim from a fossil. mzLibR's
+      # STATUS.md named `v0.1.0.dev1` in exactly that way and would have gone quietly wrong on the
+      # first bump.
+      #
+      # So rather than assert that no such prose exists — which is true only until someone writes
+      # some — the watcher checks every time and reports what it finds in the pull request. A
+      # warning and not a failure: a stale sentence is for a human to reword, and blocking a correct
+      # repin on a tidy document would be the wrong trade.
+      - name: Look for prose that still names the superseded version
+        if: steps.upstream.outputs.action == 'bump'
+        env:
+          PREVIOUS: ${{ steps.upstream.outputs.previous }}
+        run: |
+          set -euo pipefail
+          : > /tmp/stale.md
+          hits=$(grep -rn --fixed-strings "$PREVIOUS" . \
+                   --include='*.md' --include='*.rs' --include='*.toml' --include='*.ps1' \
+                   --exclude-dir=.git --exclude-dir=target \
+                 | grep -v '^\./src/install\.rs:' \
+                 | grep -v '^\./scripts/regen-bridge-pins\.ps1:' || true)
+          if [ -n "$hits" ]; then
+            {
+              echo
+              echo "### :warning: These still name \`$PREVIOUS\`"
+              echo
+              echo 'Regenerating the pins updates the code, not prose. Each of these is a sentence a'
+              echo 'human needs to reword — preferably to point at where the value lives rather than'
+              echo 'to restate it, since nothing regenerates or tests a version number in prose.'
+              echo
+              echo '```'
+              echo "$hits"
+              echo '```'
+            } > /tmp/stale.md
+            echo "::warning::Prose still names $PREVIOUS in $(printf '%s\n' "$hits" | wc -l) place(s); listed in the pull request."
+          else
+            echo "No prose names $PREVIOUS."
+          fi
+
+      - name: Compose the pull request body
+        if: steps.upstream.outputs.action == 'bump'
+        id: body
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+          PREVIOUS: ${{ steps.upstream.outputs.previous }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "pyMzLib published **$TAG**. This repins \`src/install.rs\` from \`$PREVIOUS\` to"
+            echo "\`$VERSION\`, with all four SHA-256 digests regenerated by"
+            echo "\`scripts/regen-bridge-pins.ps1\` from that release's \`SHA256SUMS\` asset."
+            echo
+            echo "### What to check before merging"
+            echo
+            echo "The digests come from the release manifest, so they are right by construction if"
+            echo "the manifest is. What CI cannot tell you is whether the new bridge changes any"
+            echo "**value** mzLib reports — the live canaries exercise the wire contract, not the"
+            echo "numbers crossing it. If the pyMzLib release notes mention a reader or a unit"
+            echo "changing, look for a caveat in this crate that has become wrong."
+            echo
+            echo "Under \`BRIDGE-MAINTAIN-PARITY\`, a bridge bump that retires a caveat retires it"
+            echo "in pyMzLib, mzLibRust **and** mzLibR as one unit of work."
+            cat /tmp/stale.md
+            echo
+            echo "---"
+            echo 'Opened by `.github/workflows/bridge-watch.yml`.'
+          } > /tmp/body.md
+          cat /tmp/body.md
+          echo "path=/tmp/body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Open (or update) the repin pull request
+        if: steps.upstream.outputs.action == 'bump'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          # What a PAT buys is not extra checks. A pull request opened with the default GITHUB_TOKEN
+          # DOES queue its workflows; they land as `action_required`, held behind GitHub's approval
+          # gate because the author is github-actions[bot], which the repository treats as a
+          # first-time contributor. Observed on mzLibR #10 and pyMzLib #34 (2026-08-09), both of
+          # which ran green once approved.
+          #
+          # So a PAT makes the pull request come from a human account, which removes the gate. It
+          # buys one fewer click. Set BRIDGE_WATCH_TOKEN (classic PAT, `repo` scope — smith-chem-wisc
+          # is an org, where fine-grained tokens need enablement and approval first) to skip it.
+          #
+          # `workflow` scope is NOT needed, and that is a direct payoff of the pin living in
+          # src/install.rs rather than in a workflow file: GitHub refuses a default-token push that
+          # touches anything under .github/workflows/, so a value something automatic must write
+          # does not belong in one.
+          token: ${{ secrets.BRIDGE_WATCH_TOKEN || github.token }}
+          branch: bridge/pymzlib-${{ steps.upstream.outputs.version }}
+          title: "chore(bridge): repin to pyMzLib ${{ steps.upstream.outputs.tag }}"
+          commit-message: |
+            chore(bridge): repin to pyMzLib ${{ steps.upstream.outputs.tag }}
+
+            Regenerated from the SHA256SUMS asset by scripts/regen-bridge-pins.ps1.
+            Opened by bridge-watch.yml.
+          body-path: ${{ steps.body.outputs.path }}
+          labels: bridge
+          delete-branch: true
+
+      - name: Say what still needs a human
+        if: steps.upstream.outputs.action == 'bump' && steps.pat.outputs.configured == 'false'
+        run: |
+          echo "::notice::Opened the repin pull request. Its checks are held for approval because the author is github-actions[bot] — click 'Approve workflows to run' on the PR. Set BRIDGE_WATCH_TOKEN to skip that step."
