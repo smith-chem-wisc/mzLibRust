@@ -98,6 +98,11 @@ Once it is installed the crate finds it with nothing set. Full resolution order:
    `scripts/stage-bridge.ps1`.
 3. **The per-user cache**, where `install_bridge()` puts one.
 
+The version it fetches is **pinned**, not "whichever is newest" — a crate that silently followed the
+newest bridge could not be reproducible, and would change what it runs without anybody merging
+anything. `.github/workflows/bridge-watch.yml` checks weekly and opens a pull request when pyMzLib
+publishes a newer one, regenerating the pinned digests from that release's `SHA256SUMS`.
+
 `build.rs` will also download at build time from **`MZLIB_BRIDGE_URL`** (verified against
 `MZLIB_BRIDGE_SHA256`) if you set it. That takes a URL for a **bare executable** — it unpacks
 nothing, so it is not how to consume the published `mzlib-bridge-<rid>.tar.gz`, whose payload is a
