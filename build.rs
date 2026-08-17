@@ -14,8 +14,11 @@
 //! 2. **`_dotnet/<rid>/mzlib-bridge`** beside the crate — a source checkout where someone has run
 //!    pyMzLib's `publish-bridge.ps1`. This is the current lab workflow.
 //! 3. **Download** from `MZLIB_BRIDGE_URL`, verified against `MZLIB_BRIDGE_SHA256` when given.
+//!    A URL for a **bare executable**, not for the published `mzlib-bridge-<rid>.tar.gz` — nothing
+//!    here unpacks an archive. Fetching the published payload is `mzlib::install::install_bridge`,
+//!    which is a user action rather than a build side-effect (`BRIDGE-FETCH-IS-A-USER-ACTION`).
 //!
-//! **This build script never fails the build.** A missing bridge is a *runtime* problem with a good
+//! **This build script never downloads by default, and never fails the build.** A missing bridge is a *runtime* problem with a good
 //! error message, not a compile-time one — `cargo check`, `cargo doc`, `cargo clippy` and the whole
 //! offline test suite must work on a machine that has never seen a .NET binary, and they do. Failing
 //! here would make the crate undocumentable and untestable for contributors, to buy nothing: the
@@ -60,12 +63,30 @@ fn main() {
     else {
         warn(&format!(
             "no mzLib bridge staged for {rid}. The crate will compile, and the offline tests will \
-             pass, but any call that reaches mzLib will fail until you either set MZLIB_BRIDGE to a \
-             bridge executable, stage one at _dotnet/{rid}/{exe}, or set MZLIB_BRIDGE_URL to \
-             download from. See README.md."
+             pass, but any call that reaches mzLib will fail until you have one. Easiest: call \
+             mzlib::install::install_bridge(), which fetches the published bridge for {rid}, \
+             verifies it and caches it — it asks first. Otherwise set MZLIB_BRIDGE to a bridge you \
+             already have, or stage one at _dotnet/{rid}/{exe}. See README.md."
         ));
         return;
     };
+
+    // What is staged here is a bare executable, and this is the one place that has to say so out
+    // loud. pyMzLib publishes the bridge as `mzlib-bridge-<rid>.tar.gz`, whose payload is a TREE —
+    // the executable alongside Resources/, the Bruker and timsTOF natives, libmmd — so pointing
+    // MZLIB_BRIDGE_URL at the published asset would write a gzip stream to a file called
+    // `mzlib-bridge`, mark it executable, and hand the runtime something that cannot possibly run.
+    // No build failure, because this script never fails the build; just a confusing exec error
+    // later, blamed on the crate. Refuse it here and name the thing that does handle a tarball.
+    if url.ends_with(".tar.gz") || url.ends_with(".tgz") || url.ends_with(".zip") {
+        warn(&format!(
+            "MZLIB_BRIDGE_URL points at an archive ({url}). This staging path takes a URL for a \
+             bare bridge executable and does not unpack anything. For the published \
+             mzlib-bridge-<rid>.tar.gz, call mzlib::install::install_bridge() instead — it \
+             verifies the checksum, unpacks the payload tree and caches it."
+        ));
+        return;
+    }
 
     let destination = PathBuf::from(env("OUT_DIR")).join(exe);
     match download(&url, &destination) {
