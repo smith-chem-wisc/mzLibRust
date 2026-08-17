@@ -170,7 +170,7 @@ pub fn platform_tag_for(os: &str, arch: &str) -> Result<String> {
 }
 
 /// The name of the bridge executable on this platform.
-fn executable_name() -> &'static str {
+pub(crate) fn executable_name() -> &'static str {
     if cfg!(windows) {
         "mzlib-bridge.exe"
     } else {
@@ -180,12 +180,17 @@ fn executable_name() -> &'static str {
 
 /// The path of the bridge executable that will be used.
 ///
-/// Resolution order: the [`BRIDGE_ENV_VAR`] environment variable, then the copy staged inside this
-/// crate for the current platform.
+/// Resolution order, cheapest first: the [`BRIDGE_ENV_VAR`] environment variable, then whatever
+/// `build.rs` staged, then the copy staged inside this crate for the current platform, then one
+/// [`crate::install::install_bridge`] has put in the per-user cache.
+///
+/// The cache comes last on purpose. A source checkout with a bridge under `_dotnet/<rid>/` is
+/// someone working on this crate against a bridge they chose, and a cached download must not
+/// quietly displace it.
 ///
 /// # Errors
 ///
-/// [`MzLibError::BridgeNotFound`] if neither exists.
+/// [`MzLibError::BridgeNotFound`] if none of them exists.
 pub fn bridge_path() -> Result<PathBuf> {
     if let Some(override_path) = std::env::var_os(BRIDGE_ENV_VAR) {
         let candidate = PathBuf::from(&override_path);
@@ -208,13 +213,24 @@ pub fn bridge_path() -> Result<PathBuf> {
         }
     }
 
-    let candidate = staged_root().join(platform_tag()?).join(executable_name());
-    if !candidate.is_file() {
-        return Err(MzLibError::BridgeNotFound(missing_bridge_message(
-            &candidate,
-        )));
+    let rid = platform_tag()?;
+    let candidate = staged_root().join(&rid).join(executable_name());
+    if candidate.is_file() {
+        return Ok(candidate);
     }
-    Ok(candidate)
+
+    // A bridge the user installed themselves. Resolved here rather than inside the installer so
+    // that installing and finding cannot disagree about where a bridge lives.
+    if let Ok(cached) = crate::install::cache_dir() {
+        let installed = cached.join(&rid).join(executable_name());
+        if installed.is_file() {
+            return Ok(installed);
+        }
+    }
+
+    Err(MzLibError::BridgeNotFound(missing_bridge_message(
+        &candidate,
+    )))
 }
 
 /// What to tell someone who has no bridge staged.
@@ -229,10 +245,11 @@ fn missing_bridge_message(candidate: &Path) -> String {
          Three ways to fix it, cheapest first:\n\
            1. Set {BRIDGE_ENV_VAR} to a bridge executable you already have — for example the one \
          pyMzLib stages under pkg/python/src/pymzlib/_dotnet/<rid>/.\n\
-           2. Run scripts/stage-bridge.ps1, or build one with pyMzLib's \
-         pkg/build/publish-bridge.ps1 and stage it at '{}'.\n\
-           3. Set MZLIB_BRIDGE_URL (and MZLIB_BRIDGE_SHA256) before building, and the build script \
-         will download it.",
+           2. Call mzlib::install::install_bridge(), which downloads the one pyMzLib published for \
+         this platform, verifies it against its recorded checksum and caches it. It asks first, and \
+         nothing calls it for you.\n\
+           3. Run scripts/stage-bridge.ps1, or build one with pyMzLib's \
+         pkg/build/publish-bridge.ps1 and stage it at '{}'.",
         candidate.display(),
         candidate.display()
     )
@@ -758,8 +775,14 @@ mod tests {
         assert!(message.contains("_dotnet"), "{message}");
         assert!(message.contains(BRIDGE_ENV_VAR), "{message}");
         // All three remedies, because naming only one sends the reader looking for the others.
-        assert!(message.contains("MZLIB_BRIDGE_URL"), "{message}");
+        assert!(message.contains("install_bridge()"), "{message}");
         assert!(message.contains("stage-bridge.ps1"), "{message}");
+        // MZLIB_BRIDGE_URL used to be listed here as "the build script will download it". It is a
+        // hatch for a URL to a BARE EXECUTABLE, and the only artefact pyMzLib publishes is a
+        // tarball containing a tree — so recommending it to someone who has no bridge sent them to
+        // stage a gzip stream and get an exec error. install_bridge() is what handles the published
+        // payload; build.rs now refuses an archive URL outright.
+        assert!(!message.contains("MZLIB_BRIDGE_URL"), "{message}");
     }
 
     #[test]

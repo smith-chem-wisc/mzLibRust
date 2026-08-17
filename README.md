@@ -108,16 +108,35 @@ peptide roll-up drops most transfers.
 
 ## Getting the bridge
 
-**You do not need one to build, test, document or lint the crate.** `cargo test` runs 118 offline
-tests with no network and no .NET on the machine. A bridge is required only for calls that actually
-reach mzLib, and a missing one is a runtime error with instructions, never a build failure — so
-contributors are never blocked by a 130 MB payload they may not want.
+**You do not need one to build, test, document or lint the crate.** `cargo test` runs the whole
+offline suite with no network and no .NET on the machine. A bridge is required only for calls that
+actually reach mzLib, and a missing one is a runtime error with instructions, never a build failure
+— so contributors are never blocked by a 130 MB payload they may not want.
 
-`build.rs` resolves it in this order:
+The simplest way to get one:
+
+```rust
+let bridge = mzlib::install::install_bridge()?;
+```
+
+It downloads the bridge pyMzLib published for your platform, verifies it against a checksum recorded
+in this crate, unpacks it and caches it per-user. **It asks first, and nothing calls it for you** —
+fetching the bridge is a user action, never a side effect of building. A built-in default download
+would make a first `cargo check` pull 130 MB and break vendored and air-gapped builds, so `build.rs`
+has no default URL and never will. mzLibR's `mzlibr_install_bridge()` is the same function for the
+same reasons.
+
+Once it is installed the crate finds it with nothing set. Full resolution order:
 
 1. **`MZLIB_BRIDGE`** — a path to a bridge you already have. Always wins, checked at runtime too.
-2. **`_dotnet/<runtime-identifier>/mzlib-bridge[.exe]`** beside the crate.
-3. **Downloaded** from `MZLIB_BRIDGE_URL`, verified against `MZLIB_BRIDGE_SHA256` when you set it.
+2. **`_dotnet/<runtime-identifier>/mzlib-bridge[.exe]`** beside the crate, staged by `build.rs` or by
+   `scripts/stage-bridge.ps1`.
+3. **The per-user cache**, where `install_bridge()` puts one.
+
+`build.rs` will also download at build time from **`MZLIB_BRIDGE_URL`** (verified against
+`MZLIB_BRIDGE_SHA256`) if you set it. That takes a URL for a **bare executable** — it unpacks
+nothing, so it is not how to consume the published `mzlib-bridge-<rid>.tar.gz`, whose payload is a
+whole tree. Point it at an archive and the build script says so and stages nothing.
 
 The quickest route, if you have a pyMzLib checkout — it already stages a bridge for its wheel:
 
@@ -140,8 +159,10 @@ cargo test --features live
 crate at a bridge built from a modified mzLib, exercising your LGPL §4 right to relink without
 rebuilding anything here. See `NOTICE`.
 
-Download-at-build becomes the default path once pyMzLib's CI publishes the raw bridge binaries as
-release assets; the machinery for it is already in `build.rs`.
+This section used to end by promising that "download-at-build becomes the default path once
+pyMzLib's CI publishes the raw bridge binaries as release assets". Those assets exist as of
+`v0.1.0.dev4`, and the promise was not kept — deliberately. Downloading by default is the one thing
+this crate will not do, so the fetch became `install_bridge()` instead.
 
 ## Testing
 
