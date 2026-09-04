@@ -26,8 +26,20 @@
 //! # }
 //! ```
 //!
-//! Reading result files is the widest surface: mzLib recognises **31 file types** and this crate
-//! reads all of them. [`readers::read_records`] reads any format into that format's own fields;
+//! Reading is the widest surface, and it covers instrument data as well as search output.
+//! [`readers::read_spectra`] reads **mzML**, Thermo `.raw`, Bruker `.d`, timsTOF `.d`, MGF and
+//! msalign — scan headers always, peaks opt-in:
+//!
+//! ```no_run
+//! # fn main() -> Result<(), mzlib::MzLibError> {
+//! let scans = mzlib::readers::read_spectra("run.mzML")?;
+//! println!("{} scans", scans.scan_count);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! mzLib recognises **31 file types** in all and this crate reads all of them.
+//! [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views. See the [`readers`] module.
 //!

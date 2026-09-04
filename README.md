@@ -42,7 +42,11 @@ let result = quantify_with(
 )?;
 println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
 
-// Readers — identify any of mzLib's 31 result-file types, and read ALL of them.
+// Readers — spectra as well as search output; identify any of mzLib's 31 types and read ALL of them.
+// mzML, Thermo .raw, Bruker .d, timsTOF .d, MGF and msalign all read through read_spectra.
+let scans = mzlib::readers::read_spectra("run.mzML")?;
+println!("{} scans", scans.scan_count);
+
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 
