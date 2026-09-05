@@ -1,8 +1,13 @@
-//! Reading proteomics result files: what a file *is*, and every one of them read.
+//! Reading mass-spectrometry data files and proteomics search results: what a file *is*, and
+//! every one of them read.
 //!
-//! mzLib recognises **31 file types** written by a dozen search and deconvolution tools —
-//! MetaMorpheus, MSFragger, TopPIC, TopFD, MsPathFinderT, Crux, Casanovo, FlashDeconv, Dinosaur,
-//! DIA-NN, FlashLFQ — and maintains a parser for each. **All 31 are readable here.**
+//! **Spectra files are read here, not just search output.** [`read_spectra`] reads **mzML**,
+//! Thermo `.raw`, Bruker `.d`, timsTOF `.d`, MGF and msalign — scan headers always, peaks opt-in.
+//!
+//! mzLib recognises **31 file types** in all: those instrument and deconvolution formats, plus the
+//! output of a dozen search tools — MetaMorpheus, MSFragger, TopPIC, TopFD, MsPathFinderT, Crux,
+//! Casanovo, FlashDeconv, Dinosaur, DIA-NN, FlashLFQ — and maintains a parser for each.
+//! **All 31 are readable here.**
 //!
 //! ```no_run
 //! # fn main() -> Result<(), mzlib::MzLibError> {
