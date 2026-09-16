@@ -42,6 +42,8 @@
 //! [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views. See the [`readers`] module.
+//! SDRF experimental-design files have their own module, [`sdrf`], because `read_records`
+//! cannot carry them without loss.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -64,6 +66,7 @@ pub mod install;
 pub mod peptidoform;
 pub mod pride;
 pub mod readers;
+pub mod sdrf;
 
 pub use bridge::{
     bridge_path, bridge_version, BridgeVersion, MzLibError, Result, BRIDGE_ENV_VAR,

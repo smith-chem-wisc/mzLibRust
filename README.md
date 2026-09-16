@@ -52,6 +52,11 @@ println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiabl
 
 let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 31
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
+
+// SDRF experimental design — what was searched, pooled across experiments with provenance.
+let design = mzlib::sdrf::pool_labelled(&[("PXD000070.sdrf.tsv", "malaria"),
+                                          ("PXD026824.sdrf.tsv", "colon")])?;
+println!("{:?}", design.document.value("characteristics[organism part]"));
 ```
 
 ### Reading: one universal function, four typed views
@@ -70,6 +75,11 @@ What differs between the 31 formats is not *whether* you can read them but *what
 protein tables, the FlashDeconv formats, SDRF. mzLib parses them into a format-specific shape and there
 is no uniform view to project them onto, so `read_records` is what reaches them; it is a necessity,
 not a convenience.
+
+**SDRF is the exception: read it with the `sdrf` module, not `read_records`.** `read_records` joins
+each SDRF row into one semicolon-separated string, and SDRF's own `NT=…;AC=…` grammar puts semicolons
+inside cells, so the string cannot be split back apart. `mzlib::sdrf::read` and `mzlib::sdrf::pool`
+return every cell intact, in a row-major shape that keeps SDRF's repeated column names.
 
 Because the column set depends on the format, a read returns a `Table` rather than a struct with
 named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can

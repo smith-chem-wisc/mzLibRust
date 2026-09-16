@@ -781,10 +781,15 @@ pub fn read_results_with(path: impl AsRef<Path>, options: &ReadOptions) -> Resul
 /// Read **any** file mzLib recognises, into that format's own fields.
 ///
 /// The exhaustive verb: if [`identify`] succeeds on a path, this reads it. All 31 file types,
-/// including the 13 that belong to no cross-format view at all — TopPIC, Crux, MSFragger's peptide
-/// and protein tables, the FlashDeconv formats — which no other function here can touch.
+/// including the 14 that belong to no cross-format view at all — TopPIC, Crux, MSFragger's peptide
+/// and protein tables, the FlashDeconv formats, SDRF — which no other function in this module can
+/// touch.
 ///
 /// The columns are **not uniform**; see [`NativeRecords`].
+///
+/// **For SDRF, use [`crate::sdrf::read`] instead.** This verb joins each SDRF row's cells into one
+/// semicolon-separated string, and SDRF's `NT=…;AC=…` grammar puts semicolons inside cells, so the
+/// joined string cannot be split back apart.
 ///
 /// # Errors
 ///
