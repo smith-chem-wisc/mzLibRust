@@ -15,9 +15,9 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `path` (wire `--path`) | `path` | absent | — | — | One search database (UniProt XML for real answers; a FASTA carries no gene links). Exactly one of path and paths-stdin. |
-| `contaminant` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants: every protein is contaminant\_not\_mapped. |
-| `paths_stdin` (wire `--paths-stdin`) | `flag` | `false` | — | — | Databases on stdin, one per line, optionally followed by a tab and 'contaminant' or 'target' (BULK.md §1). |
+| `databases` (wire `--path`) | `path` | absent | — | — | One search database (UniProt XML for real answers; a FASTA carries no gene links). Exactly one of path and paths-stdin. |
+| `contaminants` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants: every protein is contaminant\_not\_mapped. |
+| wire `--paths-stdin` | `flag` | `false` | — | — | Databases on stdin, one per line, optionally followed by a tab and 'contaminant' or 'target' (BULK.md §1). |
 | `gtf` (wire `--gtf`) | `path` | absent | — | — | An Ensembl GTF, plain or .gz; only gene rows are read. Use the primary-assembly GTF (Species.Assembly.Release.gtf.gz) and keep Ensembl's file name, which carries the release. Exactly one of gtf and gene-set; there is no default. |
 | `gene_set` (wire `--gene-set`) | `path` | absent | — | — | Instead of gtf: a compact gene table from mzLib's EnsemblGeneSetWriter. It carries the GTF's provenance, so rows are keyed as against the GTF (tested byte-identical). |
 | `xref` (wire `--xref`) | `path` | absent | — | — | Optional Ensembl Species.Assembly.Release.uniprot.tsv(.gz): per-row agreement, and a row per gene only Ensembl links (source ensembl\_xref). |

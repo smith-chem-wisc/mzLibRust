@@ -15,10 +15,10 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `path` (wire `--path`) | `path` | absent | — | — | One database: UniProt XML (.xml) or FASTA (.fasta, .fa, .faa, .fas), each optionally .gz. Exactly one of path and paths-stdin. |
-| `contaminant` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants (mzLib isContaminant). Usage error with paths-stdin. |
-| `paths_stdin` (wire `--paths-stdin`) | `flag` | `false` | — | — | Databases on stdin, one per line, each optionally followed by a tab and 'contaminant' or 'target'. Blank lines ignored; a repeated path is a usage error (BULK.md §1). |
-| `accessions_stdin` (wire `--accessions-stdin`) | `flag` | `false` | — | — | Keep only proteins whose accession exactly equals one read from stdin (one per line). With paths-stdin, stdin holds the paths, then a line holding only '--', then the accessions. Applies to every table. |
+| `databases` (wire `--path`) | `path` | absent | — | — | One database: UniProt XML (.xml) or FASTA (.fasta, .fa, .faa, .fas), each optionally .gz. Exactly one of path and paths-stdin. |
+| `contaminants` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants (mzLib isContaminant). Usage error with paths-stdin. |
+| wire `--paths-stdin` | `flag` | `false` | — | — | Databases on stdin, one per line, each optionally followed by a tab and 'contaminant' or 'target'. Blank lines ignored; a repeated path is a usage error (BULK.md §1). |
+| `accessions` (wire `--accessions-stdin`) | `flag` | `false` | — | — | Keep only proteins whose accession exactly equals one read from stdin (one per line). With paths-stdin, stdin holds the paths, then a line holding only '--', then the accessions. Applies to every table. |
 | `tables` (wire `--tables`) | `string[]` | `proteins` | — | `subset of proteins, go_terms, ensembl_genes` | Comma list of the tables to return. A table not asked for is null. |
 | `sequences` (wire `--sequences`) | `flag` | `false` | — | — | Add a sequence column to the proteins table. |
 | `threads` (wire `--threads`) | `int` | `1` | — | `>= 1, or -1 for every core` | Databases loaded at once. Output is byte-identical at any value (tested at 1 and 4). mzLib's own maxThreads is pinned to 1 per load, so the degree is owned here alone. |

@@ -13,11 +13,11 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `path` (wire `--path`) | `path` | absent | — | — | One database. Exactly one of path and paths-stdin. With path, all of stdin is peptides. |
-| `contaminant` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants (they are still searched). |
-| `paths_stdin` (wire `--paths-stdin`) | `flag` | `false` | — | — | stdin holds database paths (each optionally tab 'contaminant'), then a line holding only '--', then the peptides. |
+| `databases` (wire `--path`) | `path` | absent | — | — | One database. Exactly one of path and paths-stdin. With path, all of stdin is peptides. |
+| `contaminants` (wire `--contaminant`) | `flag` | `false` | — | — | Load the --path database as contaminants (they are still searched). |
+| wire `--paths-stdin` | `flag` | `false` | — | — | stdin holds database paths (each optionally tab 'contaminant'), then a line holding only '--', then the peptides. |
 | `threads` (wire `--threads`) | `int` | `1` | — | `>= 1, or -1 for every core` | Databases loaded at once. mzLib's classifier has no thread knob of its own; it is one pass. Output identical at any value. |
-| `on_error` (wire `--on-error`) | `string` | `fail` | — | `fail` | Only 'fail' is accepted: every database is one search space, and skipping one would report the peptides it holds as unique. |
+| wire `--on-error` | `string` | `fail` | — | `fail` | Only 'fail' is accepted: every database is one search space, and skipping one would report the peptides it holds as unique. |
 | `peptides` (wire `--peptides`) | `string[]` | required | — | `non-empty, letters A-Z only` | Read from stdin (not an option). Unmodified base sequences, upper case, one per line; blank lines ignored. One result per peptide, in order, duplicates included. |
 
 # Returns

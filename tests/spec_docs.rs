@@ -171,7 +171,76 @@ const SDRF: &[Deviation] = &[
 ];
 
 /// Deviations: proteins and genes.
-const PROTEINS: &[Deviation] = &[];
+const PROTEINS: &[Deviation] = &[
+    // The three verbs take their databases the same way: a slice argument, plus contaminants in
+    // the options, with --path / --paths-stdin / --contaminant chosen from the list's shape.
+    dev(
+        "proteins read",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "proteins read",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "proteins read",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "genes resolve",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "genes resolve",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "genes resolve",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "proteins read",
+        "param.accessions-stdin",
+        Some("accessions"),
+        "the accession list itself, an Option; Some sets the flag and fills stdin after the paths",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.on-error",
+        None,
+        "the wire accepts only fail, the default, so there is nothing to choose",
+    ),
+];
 
 /// Deviations: pride.
 const PRIDE: &[Deviation] = &[
@@ -1700,7 +1769,7 @@ fn every_param_and_field_is_documented_with_its_unit() {
                 });
                 let Some(element) = element else { continue };
                 let fields = rust.fields_deep(&module, &element);
-                if fields.is_empty() {
+                if fields.is_empty() || holds_table(&fields) {
                     continue; // a columnar Table: its columns are data, not struct fields
                 }
                 for f in &table_fields {
@@ -1751,6 +1820,13 @@ fn every_param_and_field_is_documented_with_its_unit() {
         problems.len(),
         problems.join("\n  ")
     );
+}
+
+/// Whether a struct's fields include a columnar [`Table`]-typed one (flattened or not).
+fn holds_table(fields: &[FieldInfo]) -> bool {
+    fields
+        .iter()
+        .any(|f| base_struct(&f.ty).as_deref() == Some("Table"))
 }
 
 fn spec_tables(spec: &Spec) -> Vec<(String, Vec<Value>)> {
