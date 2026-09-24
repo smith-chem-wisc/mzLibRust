@@ -525,7 +525,8 @@ fn truncate(text: &str, limit: usize) -> &str {
 /// What the bridge reports about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BridgeVersion {
-    /// The bridge assembly's version, e.g. `"1.0.0.0"`.
+    /// The bridge assembly's version, e.g. `"1.0.0.0"`. Not a compatibility number: use
+    /// [`protocol`](Self::protocol).
     pub bridge: String,
     /// The wire-format version it speaks. Must equal [`PROTOCOL_VERSION`].
     pub protocol: u32,
@@ -549,10 +550,22 @@ pub struct BridgeVersion {
 /// This is the whole transport story end to end — locate the executable, run it, parse an
 /// envelope, agree on a wire format — in one call with no network and no arguments, which is why
 /// it is the first thing to make work and the first thing to check when something is wrong.
+#[doc = include_str!("../docs/reference/version.md")]
 ///
-/// # Errors
+/// # Errors this crate adds
 ///
 /// [`MzLibError::Protocol`] if the bridge speaks a different wire format than this crate.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// let info = mzlib::bridge_version()?;
+/// assert_eq!(info.protocol, mzlib::PROTOCOL_VERSION);
+/// assert_eq!(info.mzlib.as_deref(), Some("1.0.0+23c2490e10d3ccce71c941bca31610725826ba83"));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/version.see-also.md")]
 pub fn bridge_version() -> Result<BridgeVersion> {
     bridge_version_with(&ProcessRunner)
 }
