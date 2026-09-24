@@ -481,17 +481,15 @@ pub struct QuantifyOptions {
     pub bayesian_protein_quant: bool,
     /// Filter identifications on PEP q-value rather than q-value.
     pub use_pep_q_value: bool,
-    /// Worker threads; `-1` lets FlashLFQ choose.
+    /// Worker threads (FlashLFQ `MaxThreads`); `-1` lets FlashLFQ choose. mzLib resolves `-1`, or
+    /// any value at least the core count, to cores − 1, and the result's
+    /// [`FlashLfqParameters::max_threads`] echoes the resolved number.
     ///
-    /// **This is not only a performance knob — it changes results.** With `-1`, FlashLFQ's peptide
-    /// roll-up nondeterministically drops some MBR intensities, so peptide and protein numbers vary
-    /// between runs on byte-identical inputs. On the K562 pair, 6 peptides flip between `0.0` and a
-    /// real intensity, which flips a borderline protein group between `None` and a number: it came
-    /// back unquantifiable in 5 of 6 runs and quantified in the 6th. The `peaks` are stable
-    /// throughout — only the roll-up wobbles.
-    ///
-    /// **Set `max_threads: 1` for anything you intend to publish or reproduce.** Tracked as
-    /// [smith-chem-wisc/mzLib#1111](https://github.com/smith-chem-wisc/mzLib/issues/1111).
+    /// The thread count used to change answers: at `-1` the peptide roll-up dropped some MBR
+    /// intensities nondeterministically (mzLib#1111). mzLib#1155, inside the pinned mzLib, fixed
+    /// that by building PEP training rows in a fixed order. The K562 case has not been re-measured
+    /// at `-1` on this pin, so `max_threads: 1` remains the conservative choice for numbers you
+    /// intend to publish.
     pub max_threads: i32,
     /// If given, FlashLFQ also writes `QuantifiedPeaks.tsv`, `QuantifiedPeptides.tsv` and
     /// `QuantifiedProteins.tsv` there.

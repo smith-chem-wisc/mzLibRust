@@ -82,8 +82,9 @@ fn the_documented_ground_truth_digest_counts_reproduce() {
 #[test]
 fn etd_produces_c_and_z_ions() {
     // The dissociation type must reach mzLib, or the caller silently gets the wrong chemistry.
-    // On the y ions ETD also emits, see smith-chem-wisc/mzLib#1109 and the offline test that pins
-    // it; this canary asserts only what ETD genuinely should produce.
+    // ETD used to emit y ions as well (smith-chem-wisc/mzLib#1109, fixed by #1114); the offline
+    // etd_produces_c_and_zdot_but_no_y_ions pins their absence. This canary asserts only what ETD
+    // genuinely should produce.
     let Some(()) = require_bridge() else { return };
 
     let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare(0, 20))) else {
