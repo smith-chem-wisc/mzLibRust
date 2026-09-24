@@ -22,9 +22,9 @@ Top-level fields:
 
 | Field | Type | Unit | Null? | Meaning |
 |---|---|---|---|---|
-| `keyword` | `string` | — | never | The keyword, echoed. |
-| `result_count` | `int` | projects | never | Entries in results. 0 is a real answer (no hits), not an error. |
-| `results` | `object[]` | — | never | One entry per matching project, deduplicated by accession, in PRIDE's ranking order; fields under result.columns. |
+| wire `keyword` | `string` | — | never | The keyword, echoed. |
+| wire `result_count` | `int` | projects | never | Entries in results. 0 is a real answer (no hits), not an error. |
+| wire `results` | `object[]` | — | never | One entry per matching project, deduplicated by accession, in PRIDE's ranking order; fields under result.columns. |
 
 Per-row fields (one value per record, in `columns` or each list entry):
 

@@ -246,3 +246,28 @@ fn a_filter_that_matches_nothing_is_an_error_not_a_green_no_op() {
 
     let _ = std::fs::remove_dir_all(&destination);
 }
+
+#[test]
+fn search_still_finds_the_first_project_and_says_why() {
+    // pride search was already on the wire in the pinned bridge; this canary is what notices PRIDE
+    // changing its search projection under the typed hit.
+    let Some(()) = require_bridge() else { return };
+
+    let Some(hits) = external_service("PRIDE Archive", mzlib::pride::search(PROJECT)) else {
+        return;
+    };
+
+    let first = hits
+        .iter()
+        .find(|hit| hit.accession == PROJECT)
+        .expect("searching for PXD000001 should find PXD000001");
+    assert!(!first.title.is_empty(), "a hit carries its title");
+    assert!(
+        first.submission_date.is_some(),
+        "the first public project has a submission date"
+    );
+    let mut accessions: Vec<&str> = hits.iter().map(|hit| hit.accession.as_str()).collect();
+    accessions.sort_unstable();
+    accessions.dedup();
+    assert_eq!(accessions.len(), hits.len(), "no accession is repeated");
+}

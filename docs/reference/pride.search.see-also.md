@@ -20,7 +20,7 @@ The examples on this page run in CI against these recordings from the live bridg
 
 | Wire protocol | pyMzLib | mzLibRust | mzLibR |
 |---|---|---|---|
-| 1 | 0.1.0 | not yet shipped | not yet shipped |
+| 1 | 0.1.0 | next release (the spec has not recorded it yet) | not yet shipped |
 
 # Not yet verified
 

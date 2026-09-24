@@ -348,6 +348,24 @@ const PRIDE: &[Deviation] = &[
         None,
         "download returns this list itself, as PathBuf values",
     ),
+    dev(
+        "pride search",
+        "field.keyword",
+        None,
+        "search returns the hits themselves; the keyword is the caller's own argument",
+    ),
+    dev(
+        "pride search",
+        "field.result_count",
+        None,
+        "search returns Vec<PrideProjectSearchResult>; this is its len()",
+    ),
+    dev(
+        "pride search",
+        "field.results",
+        None,
+        "search returns this list itself, as PrideProjectSearchResult values",
+    ),
 ];
 
 /// Deviations: peptidoform.
