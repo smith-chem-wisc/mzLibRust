@@ -15,7 +15,10 @@ Two standing rules govern what happens to anything on this page:
 
 ## 1. ETD and ECD generate y ions but not b ions — mzLib
 
-**Status:** filed as [smith-chem-wisc/mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109).
+**Status:** fixed. Filed as [smith-chem-wisc/mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109);
+fixed by [mzLib#1114](https://github.com/smith-chem-wisc/mzLib/pull/1114) (merged 2026-08-03,
+`f6b0f0d1`), which removed `y` from the ETD and ECD product sets. Everything below describes mzLib
+before that fix.
 **Found by:** a parity test asserting "ETD produces c and z• ions, not b and y", which failed against
 the recorded albumin digest.
 
@@ -37,12 +40,10 @@ behind.
 albumin's 31-mer tryptic peptide: 30 c, 30 z•, **30 y**. In a search these are matchable theoretical
 ions, so they can inflate matched-ion counts and scores.
 
-**Handling here:** `etd_produces_c_and_z_ions_and_also_y_which_it_should_not` and
-`the_scale_of_the_spurious_etd_y_ions_is_recorded` assert what mzLib *currently does*, so they fail
-when the upstream fix lands rather than making the fix look like a regression.
-
-**Back-port:** pyMzLib's `peptidoform` docs describe ETD as "c and z• ions" without mentioning the y
-ions its users are actually receiving. Worth a sentence there too, until #1109 is fixed.
+**Handling here:** two tests pinned the defect so the fix would show up rather than look like a
+regression. When #1114 landed they were replaced by `etd_produces_c_and_zdot_but_no_y_ions`, which
+asserts the post-fix contract — c and z•, never y — so a fixture or bridge older than `f6b0f0d1`
+fails instead of quietly bringing the y ions back.
 
 ---
 

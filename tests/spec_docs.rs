@@ -57,9 +57,12 @@ const fn dev(
     }
 }
 
-/// Every deliberate difference between the specs and this crate. Nothing else may be skipped.
-const DEVIATIONS: &[Deviation] = &[
-    // ---- conventions that hold for every verb -------------------------------------------------
+/// Every deliberate difference between the specs and this crate, one list per module so that a
+/// change to one module's projection touches only its own list. Nothing else may be skipped.
+const DEVIATIONS: &[&[Deviation]] = &[COMMON, READERS, SDRF, PROTEINS, PRIDE, PEPTIDOFORM, QUANT];
+
+/// Deviations: conventions that hold for every verb.
+const COMMON: &[Deviation] = &[
     dev(
         "*",
         "field.column_names",
@@ -68,12 +71,27 @@ const DEVIATIONS: &[Deviation] = &[
     ),
     dev(
         "*",
+        "bulk.field.column_names",
+        Some("columns"),
+        "a many-file result carries its column order inside the Table: Table::names()",
+    ),
+    dev(
+        "*",
+        "bulk.param.paths-stdin",
+        None,
+        "the `_many` function is the bulk form: it takes the list, and sends it on stdin",
+    ),
+    dev(
+        "*",
         "field.error",
         None,
         "a single-path call that cannot read its file returns Err(MzLibError) instead; the wire \
          field is always null there, and only a many-file result's per-file entries carry one",
     ),
-    // ---- readers ------------------------------------------------------------------------------
+];
+
+/// Deviations: readers.
+const READERS: &[Deviation] = &[
     dev(
         "readers formats",
         "field.format_count",
@@ -86,7 +104,10 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "formats() returns this list itself, as Format values",
     ),
-    // ---- sdrf ---------------------------------------------------------------------------------
+];
+
+/// Deviations: sdrf.
+const SDRF: &[Deviation] = &[
     dev(
         "sdrf read",
         "field.column_names",
@@ -99,7 +120,118 @@ const DEVIATIONS: &[Deviation] = &[
         Some("columns"),
         "SDRF column names repeat, so the header is a Vec<String> named columns, not a Table",
     ),
-    // ---- pride --------------------------------------------------------------------------------
+    dev(
+        "sdrf validate",
+        "param.paths-stdin",
+        None,
+        "validate_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf assess",
+        "param.paths-stdin",
+        None,
+        "assess_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf samples",
+        "param.paths-stdin",
+        None,
+        "samples_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf pool",
+        "param.stdin",
+        Some("documents"),
+        "the stdin lines are rendered from the PoolInput argument, one path[TAB label] per line",
+    ),
+    dev(
+        "sdrf lint",
+        "param.stdin",
+        Some("documents"),
+        "the stdin lines are rendered from lint_labelled's documents, one path[TAB label] per line",
+    ),
+    dev(
+        "sdrf parse-age",
+        "param.stdin",
+        Some("cells"),
+        "one stdin line per element of parse_ages' cells",
+    ),
+];
+
+/// Deviations: proteins and genes.
+const PROTEINS: &[Deviation] = &[
+    // The three verbs take their databases the same way: a slice argument, plus contaminants in
+    // the options, with --path / --paths-stdin / --contaminant chosen from the list's shape.
+    dev(
+        "proteins read",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "proteins read",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "proteins read",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "genes resolve",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "genes resolve",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "genes resolve",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.path",
+        Some("databases"),
+        "one database or a list, as a slice argument; a list travels as --paths-stdin",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.contaminant",
+        Some("contaminants"),
+        "contaminant databases are their own list in the options, tagged on stdin or sent as --contaminant",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.paths-stdin",
+        None,
+        "chosen from the number of databases: more than one travels on stdin",
+    ),
+    dev(
+        "proteins read",
+        "param.accessions-stdin",
+        Some("accessions"),
+        "the accession list itself, an Option; Some sets the flag and fills stdin after the paths",
+    ),
+    dev(
+        "proteins classify-peptides",
+        "param.on-error",
+        None,
+        "the wire accepts only fail, the default, so there is nothing to choose",
+    ),
+];
+
+/// Deviations: pride.
+const PRIDE: &[Deviation] = &[
     // The listing functions return the entries: a Vec is what a caller iterates, and the envelope
     // around it is either the caller's own argument or derivable from the list.
     dev(
@@ -204,7 +336,28 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "download returns this list itself, as PathBuf values",
     ),
-    // ---- peptidoform --------------------------------------------------------------------------
+    dev(
+        "pride search",
+        "field.keyword",
+        None,
+        "search returns the hits themselves; the keyword is the caller's own argument",
+    ),
+    dev(
+        "pride search",
+        "field.result_count",
+        None,
+        "search returns Vec<PrideProjectSearchResult>; this is its len()",
+    ),
+    dev(
+        "pride search",
+        "field.results",
+        None,
+        "search returns this list itself, as PrideProjectSearchResult values",
+    ),
+];
+
+/// Deviations: peptidoform.
+const PEPTIDOFORM: &[Deviation] = &[
     dev(
         "peptidoform fragments",
         "param.no-modifications",
@@ -271,7 +424,10 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "Peptide::modifications is a Vec; this is its len()",
     ),
-    // ---- quant --------------------------------------------------------------------------------
+];
+
+/// Deviations: quant (flashlfq).
+const QUANT: &[Deviation] = &[
     // QuantifyOptions uses FlashLFQ's own parameter names (the crate's "names follow mzLib"
     // convention), which are also the names the result's `parameters` echoes.
     dev(
@@ -353,133 +509,29 @@ const DEVIATIONS: &[Deviation] = &[
         "FlashLfqResults::proteins is a Vec; this is its len()",
     ),
     dev(
-        "sdrf pool",
+        "quant median-polish",
         "param.stdin",
-        Some("documents"),
-        "the stdin lines are rendered from the PoolInput argument, one path[TAB label] per line",
+        Some("design"),
+        "the design is MedianPolishOptions::design, one stdin line per DesignEntry",
+    ),
+    dev(
+        "quant median-polish",
+        "param.shared-peptides",
+        Some("use_shared_peptides"),
+        "pyMzLib's name for the same switch; parameters echoes FlashLFQ's full name",
+    ),
+    dev(
+        "quant median-polish",
+        "param.out",
+        Some("output_directory"),
+        "it names a directory, as QuantifyOptions::output_directory does",
     ),
 ];
 
 /// Spec facts this crate does not project **yet**: `(verb, key)`. Each is a gap, not a choice,
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
-const PENDING: &[(&str, &str)] = &[
-    // The mzLib 1.0.592 readers batch (pyMzLib#65): absent_fields, the per-file block, the
-    // spectra source, mzIdentML skipped items and scores, the _many forms, and version.verbs.
-    // Projected by the port that follows this change; each entry goes as it lands.
-    ("readers read-features", "bulk.field.column_names"),
-    ("readers read-features", "bulk.field.columns"),
-    ("readers read-features", "bulk.field.failed_count"),
-    ("readers read-features", "bulk.field.file_count"),
-    ("readers read-features", "bulk.field.files"),
-    ("readers read-features", "bulk.field.on_error"),
-    ("readers read-features", "bulk.field.output"),
-    ("readers read-features", "bulk.field.read_count"),
-    ("readers read-features", "bulk.field.record_count"),
-    ("readers read-features", "bulk.field.returned_count"),
-    ("readers read-features", "bulk.field.row_count"),
-    ("readers read-features", "bulk.param.on-error"),
-    ("readers read-features", "bulk.param.out"),
-    ("readers read-features", "bulk.param.paths-stdin"),
-    ("readers read-features", "bulk.param.threads"),
-    ("readers read-features", "field.absent_fields"),
-    ("readers read-features", "field.excluded_fields"),
-    ("readers read-features", "field.failed_fields"),
-    ("readers read-features", "field.reader"),
-    ("readers read-features", "field.rows_not_read"),
-    ("readers read-matches", "bulk.field.column_names"),
-    ("readers read-matches", "bulk.field.columns"),
-    ("readers read-matches", "bulk.field.failed_count"),
-    ("readers read-matches", "bulk.field.file_count"),
-    ("readers read-matches", "bulk.field.files"),
-    ("readers read-matches", "bulk.field.on_error"),
-    ("readers read-matches", "bulk.field.output"),
-    ("readers read-matches", "bulk.field.read_count"),
-    ("readers read-matches", "bulk.field.record_count"),
-    ("readers read-matches", "bulk.field.returned_count"),
-    ("readers read-matches", "bulk.field.row_count"),
-    ("readers read-matches", "bulk.field.scores_included"),
-    ("readers read-matches", "bulk.param.on-error"),
-    ("readers read-matches", "bulk.param.out"),
-    ("readers read-matches", "bulk.param.paths-stdin"),
-    ("readers read-matches", "bulk.param.threads"),
-    ("readers read-matches", "field.absent_fields"),
-    ("readers read-matches", "field.excluded_fields"),
-    ("readers read-matches", "field.failed_fields"),
-    ("readers read-matches", "field.reader"),
-    ("readers read-matches", "field.retention_time_unit"),
-    ("readers read-matches", "field.rows_not_read"),
-    ("readers read-matches", "field.scores_included"),
-    ("readers read-matches", "field.skipped"),
-    ("readers read-matches", "field.skipped_count"),
-    ("readers read-matches", "param.limit"),
-    ("readers read-matches", "param.offset"),
-    ("readers read-matches", "param.out"),
-    ("readers read-matches", "param.scores"),
-    ("readers read-records", "bulk.field.column_names"),
-    ("readers read-records", "bulk.field.columns"),
-    ("readers read-records", "bulk.field.failed_count"),
-    ("readers read-records", "bulk.field.file_count"),
-    ("readers read-records", "bulk.field.files"),
-    ("readers read-records", "bulk.field.on_error"),
-    ("readers read-records", "bulk.field.output"),
-    ("readers read-records", "bulk.field.read_count"),
-    ("readers read-records", "bulk.field.record_count"),
-    ("readers read-records", "bulk.field.returned_count"),
-    ("readers read-records", "bulk.field.row_count"),
-    ("readers read-records", "bulk.param.on-error"),
-    ("readers read-records", "bulk.param.out"),
-    ("readers read-records", "bulk.param.paths-stdin"),
-    ("readers read-records", "bulk.param.threads"),
-    ("readers read-records", "field.absent_fields"),
-    ("readers read-records", "field.caveats"),
-    ("readers read-records", "field.retention_time_unit"),
-    ("readers read-records", "field.rows_not_read"),
-    ("readers read-records", "field.skipped"),
-    ("readers read-records", "field.skipped_count"),
-    ("readers read-results", "bulk.field.column_names"),
-    ("readers read-results", "bulk.field.columns"),
-    ("readers read-results", "bulk.field.failed_count"),
-    ("readers read-results", "bulk.field.file_count"),
-    ("readers read-results", "bulk.field.files"),
-    ("readers read-results", "bulk.field.on_error"),
-    ("readers read-results", "bulk.field.output"),
-    ("readers read-results", "bulk.field.read_count"),
-    ("readers read-results", "bulk.field.record_count"),
-    ("readers read-results", "bulk.field.returned_count"),
-    ("readers read-results", "bulk.field.row_count"),
-    ("readers read-results", "bulk.param.on-error"),
-    ("readers read-results", "bulk.param.out"),
-    ("readers read-results", "bulk.param.paths-stdin"),
-    ("readers read-results", "bulk.param.threads"),
-    ("readers read-results", "field.absent_fields"),
-    ("readers read-results", "field.excluded_fields"),
-    ("readers read-results", "field.failed_fields"),
-    ("readers read-results", "field.reader"),
-    ("readers read-spectra", "bulk.field.column_names"),
-    ("readers read-spectra", "bulk.field.columns"),
-    ("readers read-spectra", "bulk.field.failed_count"),
-    ("readers read-spectra", "bulk.field.file_count"),
-    ("readers read-spectra", "bulk.field.files"),
-    ("readers read-spectra", "bulk.field.ms_order"),
-    ("readers read-spectra", "bulk.field.on_error"),
-    ("readers read-spectra", "bulk.field.output"),
-    ("readers read-spectra", "bulk.field.peaks_included"),
-    ("readers read-spectra", "bulk.field.read_count"),
-    ("readers read-spectra", "bulk.field.record_count"),
-    ("readers read-spectra", "bulk.field.returned_count"),
-    ("readers read-spectra", "bulk.field.row_count"),
-    ("readers read-spectra", "bulk.param.on-error"),
-    ("readers read-spectra", "bulk.param.out"),
-    ("readers read-spectra", "bulk.param.paths-stdin"),
-    ("readers read-spectra", "bulk.param.threads"),
-    ("readers read-spectra", "field.absent_fields"),
-    ("readers read-spectra", "field.excluded_fields"),
-    ("readers read-spectra", "field.failed_fields"),
-    ("readers read-spectra", "field.rows_not_read"),
-    ("readers read-spectra", "field.source"),
-    ("version", "field.verbs"),
-];
+const PENDING: &[(&str, &str)] = &[];
 
 // =================================================================================================
 // The vendored specs
@@ -581,10 +633,10 @@ fn field(item: &Value, key: &str) -> Option<String> {
 }
 
 fn deviation(verb: &str, key: &str) -> Option<&'static Deviation> {
-    DEVIATIONS
-        .iter()
+    let all = || DEVIATIONS.iter().flat_map(|module| module.iter());
+    all()
         .find(|d| d.verb == verb && d.key == key)
-        .or_else(|| DEVIATIONS.iter().find(|d| d.verb == "*" && d.key == key))
+        .or_else(|| all().find(|d| d.verb == "*" && d.key == key))
 }
 
 /// The Rust spelling of a spec param or field: its declared deviation, or the wire name in
@@ -1478,7 +1530,7 @@ fn every_deviation_names_a_real_param_or_field() {
     let specs = load_specs();
     let by_verb: HashMap<&str, &Spec> = specs.iter().map(|s| (s.verb(), s)).collect();
     let mut problems = Vec::new();
-    for d in DEVIATIONS {
+    for d in DEVIATIONS.iter().flat_map(|module| module.iter()) {
         if d.why.trim().is_empty() {
             problems.push(format!("{} {}: no reason given", d.verb, d.key));
         }
@@ -1697,21 +1749,25 @@ fn every_param_and_field_is_documented_with_its_unit() {
                 let key = format!("field.{}", field(f, "wire").unwrap_or_default());
                 check_field(&verb, key, f, &fields, &result, &mut findings, &mut checked);
             }
-            // Record-list results (`results`, `formats`, `proteins`): the columns describe the
-            // entries of the one envelope field whose Rust type is a Vec of a struct.
+            // Record-list results (`results`, `proteins`): the columns describe the entries of
+            // the envelope field whose spec doc says its fields are "under result.columns". A
+            // result that holds a columnar Table carries its columns as data, not as fields.
             if !columns.is_empty() {
-                let tables: Vec<String> = spec_tables(spec).into_iter().map(|(n, _)| n).collect();
-                let entry = rust
-                    .find_struct(&module, &result)
-                    .map(|(_, info)| info.fields.clone())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| !tables.contains(&f.name))
-                    .filter(|f| last_segment(&f.ty).is_some_and(|s| s.ident == "Vec"))
-                    .filter_map(|f| base_struct(&f.ty))
-                    .find(|name| {
-                        rust.find_struct(&module, name)
-                            .is_some_and(|(_, info)| !info.fields.is_empty())
+                let container = envelope.iter().find(|f| {
+                    field(f, "doc").is_some_and(|doc| doc.contains("under result.columns"))
+                });
+                let entry = container
+                    .and_then(|f| {
+                        let wire = field(f, "wire").unwrap_or_default();
+                        self::rust_name(&verb, &format!("field.{wire}"), &wire)
+                    })
+                    .and_then(|name| {
+                        rust.find_struct(&module, &result).and_then(|(_, info)| {
+                            info.fields
+                                .iter()
+                                .find(|f| f.name == name)
+                                .and_then(|f| base_struct(&f.ty))
+                        })
                     });
                 if let Some(entry) = entry {
                     let fields = rust.fields_deep(&module, &entry);
@@ -1731,7 +1787,7 @@ fn every_param_and_field_is_documented_with_its_unit() {
                 });
                 let Some(element) = element else { continue };
                 let fields = rust.fields_deep(&module, &element);
-                if fields.is_empty() {
+                if fields.is_empty() || holds_table(&fields) {
                     continue; // a columnar Table: its columns are data, not struct fields
                 }
                 for f in &table_fields {
@@ -1782,6 +1838,13 @@ fn every_param_and_field_is_documented_with_its_unit() {
         problems.len(),
         problems.join("\n  ")
     );
+}
+
+/// Whether a struct's fields include a columnar [`Table`]-typed one (flattened or not).
+fn holds_table(fields: &[FieldInfo]) -> bool {
+    fields
+        .iter()
+        .any(|f| base_struct(&f.ty).as_deref() == Some("Table"))
 }
 
 fn spec_tables(spec: &Spec) -> Vec<(String, Vec<Value>)> {

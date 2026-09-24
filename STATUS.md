@@ -24,9 +24,9 @@ Seven defects, all verified against ground truth before filing, two with fixes p
 
 | | | |
 |---|---|---|
-| [mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109) | ETD/ECD emit `y` with no `b` — no fragmentation mechanism | **[PR #1114](https://github.com/smith-chem-wisc/mzLib/pull/1114)** |
+| [mzLib#1109](https://github.com/smith-chem-wisc/mzLib/issues/1109) | ETD/ECD emit `y` with no `b` — no fragmentation mechanism | **fixed** by [PR #1114](https://github.com/smith-chem-wisc/mzLib/pull/1114) (merged 2026-08-03) |
 | [mzLib#1110](https://github.com/smith-chem-wisc/mzLib/issues/1110) | z• suppressed at proline, complementary c ions still emitted | open |
-| [mzLib#1111](https://github.com/smith-chem-wisc/mzLib/issues/1111) | FlashLFQ roll-up nondeterministically drops MBR intensities | open |
+| [mzLib#1111](https://github.com/smith-chem-wisc/mzLib/issues/1111) | FlashLFQ roll-up nondeterministically drops MBR intensities | **fixed** by [PR #1155](https://github.com/smith-chem-wisc/mzLib/pull/1155) (merged 2026-08-24; in the 1.0.592 pin) |
 | [mzLib#1112](https://github.com/smith-chem-wisc/mzLib/issues/1112) | Glycosylation annotations dropped silently (corrected: exclusion right, silence wrong) | open |
 | [mzLib#1113](https://github.com/smith-chem-wisc/mzLib/issues/1113) | Modifications applied after digestion → peptides trypsin cannot make | open |
 | [pyMzLib#7](https://github.com/smith-chem-wisc/pyMzLib/issues/7) | `Peptide.intensity()` returned `None` against its own invariant | **[PR #9](https://github.com/smith-chem-wisc/pyMzLib/pull/9)** |
@@ -34,9 +34,10 @@ Seven defects, all verified against ground truth before filing, two with fixes p
 
 **Two deserve attention beyond the issue tracker:**
 
-- **#1111 threatens reproducibility.** With default threading, identical inputs give different
-  protein-level answers roughly 1 run in 6. Any FlashLFQ figure produced multithreaded may not
-  reproduce. `max_threads = 1` is the workaround and is now documented in both bindings.
+- **#1111 threatened reproducibility.** With default threading, identical inputs gave different
+  protein-level answers roughly 1 run in 6. mzLib #1155 fixed it (PEP training rows built in a
+  fixed order), inside the pinned mzLib. The K562 case has not been re-measured at `-1` on that
+  pin, so `max_threads = 1` stays the conservative choice for published numbers.
 - **#1112 affects MetaMorpheus, not just the bindings.** Every UniProt XML load silently drops
   glycosylation-site annotations, and reports nothing about it.
 
@@ -85,9 +86,8 @@ tests, tooling, or two agents independently agreeing (they agreed, and were both
 
 ## Immediate next steps
 
-1. **Review [mzLib#1114](https://github.com/smith-chem-wisc/mzLib/pull/1114).** It changes ETD search
-   results, so it is a scientific call as much as a code one and wants a second opinion from someone
-   who runs ETD routinely. Full suite: 5334 passed.
+1. ~~**Review [mzLib#1114](https://github.com/smith-chem-wisc/mzLib/pull/1114).**~~ Merged
+   2026-08-03; ETD and ECD no longer emit y ions.
 2. **Review [pyMzLib#9](https://github.com/smith-chem-wisc/pyMzLib/pull/9).** One real bug fix plus
    six doc corrections, 154 passed.
 3. **Publish the bridge binaries** as pyMzLib release assets — the last thing between this crate and

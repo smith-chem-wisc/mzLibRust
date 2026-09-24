@@ -7,13 +7,21 @@ pyMzLib has **123** tests (107 offline, 16 live). mzLibRust has **136** (118 off
 Every Python test maps to a Rust test, is eliminated by Rust's type system, or is listed below with
 the reason it is not portable. Nothing was silently dropped.
 
+> **These counts, and the table below, cover the first three modules** (PRIDE, peptidoform,
+> FlashLFQ), when they were ported. The `readers`, `sdrf` and `proteins` modules and the mzLib
+> 1.0.592 batch came later and are mapped by their specs instead: `tests/spec_docs.rs` fails when a
+> spec's parameter or field is not documented here, and every doc example replays the recording
+> pyMzLib's own example replays. At the 1.0.592 port the crate has 231 offline unit tests, the
+> 7-test spec lint, 69 doctests (60 executed; 9 are `no_run` because they download from EBI or no
+> many-file recording exists yet) and 52 live canaries.
+
 ## Counts
 
 | Suite | pyMzLib | mzLibRust | Notes |
 |---|---|---|---|
 | transport | `test_bridge.py` 20 | `src/bridge.rs` 23 | +3: service-unavailable variant, version-verb assertion, stdin passthrough |
 | PRIDE | `test_pride.py` 38 | `src/pride.rs` 38 | 1:1 |
-| peptidoform | `test_peptidoform.py` 25 | `src/peptidoform.rs` 29 | +4: ETD y-ion defect (mzLib#1109) ×2, unbounded max-length, modification mass/charge |
+| peptidoform | `test_peptidoform.py` 25 | `src/peptidoform.rs` 29 | +4: ETD product set after mzLib#1114 (c and z•, no y), unbounded max-length, modification mass/charge |
 | FlashLFQ | `test_flashlfq.py` 24 | `src/flashlfq.rs` 28 | +4: null peptide intensity, None/zero typing, every-flag-reachable, invariant formatting |
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
@@ -54,8 +62,9 @@ accounted for, not quietly missing.
   as "0.0 when missing, never None" but stores the wire value verbatim — and its own
   `flashlfq_small.json` fixture contains `"run_4": null`, so `intensity("run_4")` returns `None`
   there. No Python test covers it. See [findings.md](findings.md).
-- **`etd_produces_c_and_z_ions_and_also_y_which_it_should_not`** pins a live mzLib defect
-  (smith-chem-wisc/mzLib#1109) and fails the moment it is fixed upstream.
+- **`etd_produces_c_and_zdot_but_no_y_ions`** replaced the two tests that pinned
+  smith-chem-wisc/mzLib#1109 while it was open; #1114 fixed it, and the test now fails if the y
+  ions ever come back.
 
 ## Running them
 

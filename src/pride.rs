@@ -20,7 +20,22 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! Fetching them is one more call. It is not run here, because it downloads from EBI:
+//! Don't have an accession yet? [`search`] is the discovery step that produces them — every page
+//! fetched, no accession repeated, and each hit saying which fields matched:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let hits = mzlib::pride::search("plasmodium falciparum schizont")?;
+//! assert_eq!(hits[0].accession, "PXD070842");
+//! assert_eq!(hits[0].matched_fields(), ["references", "title"]);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! A hit is PRIDE's search projection, not the project's metadata: controlled vocabulary is
+//! flattened to display strings, and a zero or an empty list means "not reported". Follow the
+//! accession to [`list_files`] for what you can act on.
+//!
+//! Fetching files is one more call. It is not run here, because it downloads from EBI:
 //!
 //! ```no_run
 //! # let small: Vec<mzlib::pride::PrideFile> = Vec::new();
@@ -28,10 +43,11 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde::Deserialize;
 
 use crate::bridge::{self, MzLibError, Result};
@@ -838,6 +854,309 @@ pub fn approximate_total_size_bytes(files: &[PrideFtpFile]) -> u64 {
     files.iter().map(|file| file.approximate_size_bytes).sum()
 }
 
+// ------------------------------------------------------------------ search
+
+/// The longest keyword [`search_with`] sends. PRIDE answers a longer one with HTTP 500, which
+/// cannot be told apart from an outage, so mzLib refuses it first and so does this crate. Mirrors
+/// mzLib's `PrideArchiveClient.MaxKeywordLength`.
+pub const MAX_KEYWORD_LENGTH: usize = 1000;
+
+/// Downloads of a project in one year, as PRIDE reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct YearlyDownloads {
+    /// The year, as PRIDE writes it, e.g. `"2025"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub year: String,
+    /// Downloads in that year.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub count: u64,
+}
+
+/// One hit from [`search`].
+///
+/// **This is not a project's full metadata, and the two are not interchangeable.** PRIDE serves
+/// search from an Elasticsearch projection in which every controlled-vocabulary field is flattened
+/// to a display string: the same project reports its instruments as `["Q Exactive"]` here and as
+/// terms with accessions elsewhere, contacts collapse to display names, and publications to one
+/// pre-formatted citation string. That is PRIDE's wire, not a simplification chosen here — the
+/// accessions are simply not sent. Follow [`Self::accession`] when you need the vocabulary.
+///
+/// **A zero or an empty list means "not reported", never a measured zero.** PRIDE omits nothing as
+/// null, so absence arrives as `0`, `""` or `[]`, and several fields are genuinely sparse: sampled
+/// over 1,600 hits, `project_tags` was filled on 2.6%, `sdrf` on 2.4%, `other_omics_links` on 18%,
+/// and the bot/hub/organic trio on under half. A `download_count` of 0 does not mean nobody
+/// downloaded it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PrideProjectSearchResult {
+    /// The project accession: usually `PXD…`, but search also returns legacy `PRD` and affinity
+    /// `PAD` projects. Treat it as an opaque key, and pass it to [`list_files`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub accession: String,
+    /// The project title.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub title: String,
+    /// The submitter's free-text description.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub project_description: String,
+    /// How the samples were prepared, as free text.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sample_processing_protocol: String,
+    /// How the data were searched and processed, as free text.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub data_processing_protocol: String,
+    /// The dataset DOI, or `""` when PRIDE has minted none.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub doi: String,
+    /// `"COMPLETE"`, `"PARTIAL"`, `"AFFINITY"`, or `"PRIDE"` for legacy submissions. Not a closed
+    /// set: PRIDE has added values before.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub submission_type: String,
+    /// The project's SDRF term **values**, flattened by the search index into one space-joined
+    /// string. Not a file, name or URL — nothing can be fetched with it, and the row and column
+    /// structure is gone; `""` on most hits. For a real SDRF see [`crate::sdrf`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sdrf: String,
+    /// A bare calendar date: no time and no offset, because PRIDE sent none, so this is never
+    /// widened to a timestamp (unlike [`PrideFile::submission_date`]). `None`: PRIDE reported no
+    /// date.
+    #[serde(default, deserialize_with = "lenient_date")]
+    pub submission_date: Option<NaiveDate>,
+    /// As [`Self::submission_date`]. `None`: PRIDE reported no date.
+    #[serde(default, deserialize_with = "lenient_date")]
+    pub publication_date: Option<NaiveDate>,
+    /// As [`Self::submission_date`]. `None`: PRIDE reported no date.
+    #[serde(default, deserialize_with = "lenient_date")]
+    pub updated_date: Option<NaiveDate>,
+    /// PRIDE's coarse classification tags. Sparse.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub project_tags: Vec<String>,
+    /// The submitter's keywords. **May contain empty and whitespace-only strings** — about 9% of
+    /// hits carry one. Passed through rather than filtered, so every binding reports the same
+    /// keywords; filter before joining.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub keywords: Vec<String>,
+    /// Submitters' display names, flattened from structured contacts.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub submitters: Vec<String>,
+    /// Lab heads' display names.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub lab_pis: Vec<String>,
+    /// Affiliations, as display strings.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub affiliations: Vec<String>,
+    /// Instrument display names; this endpoint sends no CV accessions.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub instruments: Vec<String>,
+    /// Software display names.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub softwares: Vec<String>,
+    /// Quantification methods, e.g. `"TMT"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub quantification_methods: Vec<String>,
+    /// Sample characteristic **values**, e.g. `"liver"`. Which characteristic each value
+    /// describes is not recoverable from a hit.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sample_attributes: Vec<String>,
+    /// Organism display names, e.g. `"Homo sapiens (human)"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub organisms: Vec<String>,
+    /// Organism-part display names.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub organism_parts: Vec<String>,
+    /// Disease display names.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub diseases: Vec<String>,
+    /// Publications, each one pre-formatted citation string: no separate PubMed id or DOI.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub references: Vec<String>,
+    /// Experiment types, e.g. `"Data-independent acquisition"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub experiment_types: Vec<String>,
+    /// File **names** only — a search convenience, not the manifest: no sizes, categories or
+    /// locations. Use [`list_files`] or [`list_ftp_files`] to act on the files.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub project_file_names: Vec<String>,
+    /// Links to related datasets in other omics repositories.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub other_omics_links: Vec<String>,
+    /// Why this project matched: PRIDE field name → matched snippets, the matched terms wrapped in
+    /// `<em>` markup. Keys vary per hit and per query, and cross unchanged. The one thing search
+    /// returns that project metadata cannot.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub highlights: BTreeMap<String, Vec<String>>,
+    /// Downloads per year. Empty when not reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub yearly_downloads: Vec<YearlyDownloads>,
+    /// Total downloads. 0 means not reported, never a measured zero.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub download_count: u64,
+    /// Mean downloads per file. 0 means not reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub avg_downloads_per_file: f64,
+    /// The project's download-popularity percentile within PRIDE. 0 means not reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub percentile: u32,
+    /// Downloads attributed to crawlers. 0 means not reported (filled on under half of hits).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub bot_count: u64,
+    /// Downloads attributed to institutional or aggregating hubs. 0 means not reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub hub_count: u64,
+    /// Downloads attributed to ordinary human traffic. 0 means not reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub organic_count: u64,
+}
+
+impl PrideProjectSearchResult {
+    /// Which PRIDE fields the query hit, from [`Self::highlights`], sorted. Empty if PRIDE
+    /// reported none.
+    #[must_use]
+    pub fn matched_fields(&self) -> Vec<&str> {
+        self.highlights.keys().map(String::as_str).collect()
+    }
+}
+
+/// How a search is fetched. Defaults match pyMzLib's: 100 hits per API call, 300 s.
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    /// How many projects to request per underlying API call. Changes how many requests the fetch
+    /// takes, never what comes back. Must be at least 1.
+    pub page_size: u32,
+    /// Time to allow for the whole fetch, every page included.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            page_size: 100,
+            timeout: Some(Duration::from_secs(300)),
+        }
+    }
+}
+
+/// A bare calendar date from the bridge, treating anything unreadable as absent.
+///
+/// Deliberately **not** [`lenient_timestamp`]: the search endpoint sends `"2026-08-15"` with no
+/// time and no offset, and widening it to midnight would invent a time PRIDE never reported.
+fn lenient_date<'de, D>(deserializer: D) -> std::result::Result<Option<NaiveDate>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<String> = Option::deserialize(deserializer)?;
+    Ok(raw.as_deref().and_then(parse_date))
+}
+
+fn parse_date(value: &str) -> Option<NaiveDate> {
+    let head = value.trim().get(..10)?;
+    NaiveDate::parse_from_str(head, "%Y-%m-%d").ok()
+}
+
+/// The argv for `pride search`, validated before anything is spawned.
+fn build_search_args(keyword: &str, page_size: u32) -> Result<Vec<String>> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Err(MzLibError::Usage(
+            "A search keyword is required, e.g. 'phosphoproteome'.".to_owned(),
+        ));
+    }
+    let keyword = reject_flag_like("keyword", keyword)?;
+    let length = keyword.chars().count();
+    if length > MAX_KEYWORD_LENGTH {
+        return Err(MzLibError::Usage(format!(
+            "keyword may be at most {MAX_KEYWORD_LENGTH} characters; got {length}. PRIDE answers a \
+             longer keyword with HTTP 500, which cannot be told apart from the service being down."
+        )));
+    }
+    if page_size == 0 {
+        return Err(MzLibError::Usage(format!(
+            "page_size must be positive; got {page_size}."
+        )));
+    }
+    if page_size > i32::MAX as u32 {
+        return Err(MzLibError::Usage(format!(
+            "page_size is larger than the API allows; got {page_size}."
+        )));
+    }
+    Ok(vec![
+        "pride".to_owned(),
+        "search".to_owned(),
+        "--keyword".to_owned(),
+        keyword,
+        "--page-size".to_owned(),
+        page_size.to_string(),
+    ])
+}
+
+fn parse_search(data: serde_json::Value) -> Result<Vec<PrideProjectSearchResult>> {
+    #[derive(Deserialize)]
+    struct Payload {
+        #[serde(default, deserialize_with = "bridge::null_to_default")]
+        results: Vec<PrideProjectSearchResult>,
+    }
+    let payload: Payload = serde_json::from_value(data).map_err(|error| {
+        MzLibError::Protocol(format!("PRIDE search payload could not be read: {error}"))
+    })?;
+    Ok(payload.results)
+}
+
+/// Find PRIDE projects by keyword, with PRIDE's own defaults.
+///
+/// **The discovery entry point**: every other function here takes an accession you already have,
+/// and this is the one that produces them. See [`search_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`search_with`].
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// let hits = mzlib::pride::search("plasmodium falciparum schizont")?;
+/// for hit in &hits {
+///     println!("{}\t{}", hit.accession, hit.title);
+/// }
+/// # assert_eq!(hits.len(), 6);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+pub fn search(keyword: &str) -> Result<Vec<PrideProjectSearchResult>> {
+    search_with(keyword, &SearchOptions::default())
+}
+
+/// Find PRIDE Archive projects by keyword, with every page fetched and no accession repeated.
+///
+/// Paging is handled for you: however many pages the result set spans, you get one list, in
+/// PRIDE's ranking order. **An empty list is a real answer** — PRIDE reports no hits as an empty
+/// result rather than an error, and unlike [`list_files`] there is no accession here that could
+/// have been a typo, so it is not [`MzLibError::ProjectNotFound`]. A blank keyword, one longer
+/// than [`MAX_KEYWORD_LENGTH`] characters or beginning with `-`, and a `page_size` of zero or
+/// larger than the API allows are refused before anything is spawned.
+#[doc = include_str!("../docs/reference/pride.search.md")]
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::pride::{search_with, SearchOptions};
+///
+/// let hits = search_with("plasmodium falciparum schizont", &SearchOptions::default())?;
+/// assert_eq!(hits[0].accession, "PXD070842");
+/// assert_eq!(hits[0].matched_fields(), ["references", "title"]);
+/// // A calendar date, not a timestamp: PRIDE sent no time.
+/// assert_eq!(hits[0].submission_date.map(|d| d.to_string()).as_deref(), Some("2025-11-17"));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/pride.search.see-also.md")]
+pub fn search_with(
+    keyword: &str,
+    options: &SearchOptions,
+) -> Result<Vec<PrideProjectSearchResult>> {
+    let args = build_search_args(keyword, options.page_size)?;
+    let data = bridge::invoke(&args, None, options.timeout)?;
+    parse_search(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,5 +1601,95 @@ mod tests {
             vec![PathBuf::from("out/a.raw"), PathBuf::from("out/b.raw")]
         );
         assert!(parse_paths(&serde_json::json!({})).is_empty());
+    }
+
+    // ---------------------------------------------------------- search
+
+    const SEARCH_FIXTURE: &str = include_str!("../tests/fixtures/pride_search_plasmodium.json");
+
+    fn recorded_hits() -> Vec<PrideProjectSearchResult> {
+        parse_search(serde_json::from_str(SEARCH_FIXTURE).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn search_hits_parse_with_their_flattened_fields() {
+        let hits = recorded_hits();
+        assert_eq!(hits.len(), 6);
+        let first = &hits[0];
+        assert_eq!(first.accession, "PXD070842");
+        assert_eq!(first.instruments, ["Orbitrap Fusion Lumos"]);
+        assert_eq!(first.matched_fields(), ["references", "title"]);
+        assert!(first.highlights["title"][0].contains("<em>"));
+    }
+
+    #[test]
+    fn search_dates_are_calendar_dates_not_midnights() {
+        let first = &recorded_hits()[0];
+        assert_eq!(first.submission_date, NaiveDate::from_ymd_opt(2025, 11, 17));
+        assert_eq!(parse_date(""), None);
+        assert_eq!(parse_date("not a date"), None);
+        assert_eq!(
+            parse_date("2026-08-15T00:00:00"),
+            NaiveDate::from_ymd_opt(2026, 8, 15)
+        );
+    }
+
+    #[test]
+    fn search_passes_empty_keywords_through_rather_than_filtering() {
+        // PRIDE ships blank keywords on about 9% of hits; every binding reports them as sent.
+        assert_eq!(recorded_hits()[0].keywords, [""]);
+    }
+
+    #[test]
+    fn a_zero_download_count_is_not_reported_rather_than_measured() {
+        // The fixture's first hit has no counts; they arrive as 0, never null.
+        let first = &recorded_hits()[0];
+        assert_eq!(first.download_count, 0);
+        assert_eq!(first.avg_downloads_per_file, 0.0);
+    }
+
+    #[test]
+    fn an_empty_search_is_an_empty_list_not_an_error() {
+        let hits =
+            parse_search(serde_json::json!({"keyword": "x", "result_count": 0, "results": []}))
+                .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_args_are_assembled_in_the_documented_order() {
+        assert_eq!(
+            build_search_args("  phosphoproteome ", 50).unwrap(),
+            [
+                "pride",
+                "search",
+                "--keyword",
+                "phosphoproteome",
+                "--page-size",
+                "50"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bad_search_is_refused_before_anything_is_spawned() {
+        for (keyword, page_size) in [
+            ("", 100),
+            ("   ", 100),
+            ("-x", 100),
+            ("--no-overwrite", 100),
+            ("ok", 0),
+            ("ok", u32::MAX),
+        ] {
+            let error = build_search_args(keyword, page_size).unwrap_err();
+            assert!(
+                matches!(error, MzLibError::Usage(_)),
+                "{keyword:?} {page_size}"
+            );
+        }
+        let long = "a".repeat(MAX_KEYWORD_LENGTH + 1);
+        let error = build_search_args(&long, 100).unwrap_err();
+        assert!(error.to_string().contains("HTTP 500"), "{error}");
+        assert!(build_search_args(&"a".repeat(MAX_KEYWORD_LENGTH), 100).is_ok());
     }
 }

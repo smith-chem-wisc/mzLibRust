@@ -543,6 +543,26 @@ pub struct BridgeVersion {
     /// result to the library that produced it.
     #[serde(default)]
     pub mzlib: Option<String>,
+    /// Every wire verb this bridge dispatches, e.g. `"readers read-protein-groups"`, in dispatch
+    /// order, generated at build time from the bridge's own dispatch table, so it cannot list a
+    /// verb it lacks.
+    ///
+    /// **Empty when the bridge predates the list** (bridges before pyMzLib 0.2.0 omit the key).
+    /// Read that as "lists nothing", which correctly refuses every verb added since. It lists what
+    /// the bridge *routes*, not which options each verb takes: a bulk option on an older bridge that
+    /// lists the verb still fails with that bridge's usage error. The functions of this crate that
+    /// call a newer verb check this first, so a bridge that is too old is reported as too old rather
+    /// than answering "Unknown command".
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub verbs: Vec<String>,
+}
+
+impl BridgeVersion {
+    /// Whether this bridge dispatches a wire verb, e.g. `"sdrf validate"`.
+    #[must_use]
+    pub fn has_verb(&self, verb: &str) -> bool {
+        self.verbs.iter().any(|listed| listed == verb)
+    }
 }
 
 /// The bridge's own version information, with the protocol compatibility check.
@@ -595,7 +615,152 @@ pub(crate) fn bridge_version_with(runner: &dyn Runner) -> Result<BridgeVersion> 
     })
 }
 
+// ------------------------------------------------------------------ verbs newer than the bridge
+
+/// The pyMzLib release whose bridge first dispatches the mzLib 1.0.592 verbs. It is the
+/// `since.pymzlib` of their specs.
+///
+/// Checked before `readers read-protein-groups`, `read-quantified-peptides` and `read-occupancy`,
+/// the same three pyMzLib checks. The sdrf and proteins verbs of the same release are not checked
+/// yet, in either binding: the recorded `version` payload both bindings replay predates them.
+pub(crate) const MZLIB_1_0_592_BRIDGE: &str = "0.2.0";
+
+/// The verbs each bridge reported, keyed by the executable's path, so the check below costs one
+/// `version` call per bridge per process rather than one per call.
+static VERBS_SEEN: std::sync::Mutex<Option<HashMap<PathBuf, BridgeVersion>>> =
+    std::sync::Mutex::new(None);
+
+/// Fail with [`MzLibError::Usage`] unless the bridge in use dispatches `verb`, **before** the
+/// verb itself is spawned.
+///
+/// This crate does not ship a bridge: it finds one ([`bridge_path`]), and the one it finds may be
+/// older than the crate — the pinned release [`crate::install::install_bridge`] fetched, or a
+/// `MZLIB_BRIDGE` someone set months ago. Without this, that pairing spawns a process only to be
+/// told "Unknown command"; with it, the error names the bridge release the verb needs. BULK.md §5.
+///
+/// `since` is the pyMzLib release whose bridge first has the verb, from its spec's
+/// `since.pymzlib`.
+pub(crate) fn require_verb(verb: &str, since: &str) -> Result<()> {
+    require_verb_with(&ProcessRunner, verb, since)
+}
+
+/// [`require_verb`], against an explicit runner.
+pub(crate) fn require_verb_with(runner: &dyn Runner, verb: &str, since: &str) -> Result<()> {
+    let exe = bridge_path()?;
+    let cached = VERBS_SEEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .and_then(|seen| seen.get(&exe).cloned());
+    let info = match cached {
+        Some(info) => info,
+        None => {
+            let info = bridge_version_with(runner)?;
+            VERBS_SEEN
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_or_insert_with(HashMap::new)
+                .insert(exe.clone(), info.clone());
+            info
+        }
+    };
+    if info.has_verb(verb) {
+        return Ok(());
+    }
+    Err(MzLibError::Usage(too_old_message(verb, since, &exe, &info)))
+}
+
+fn too_old_message(verb: &str, since: &str, exe: &Path, info: &BridgeVersion) -> String {
+    let built_from = info
+        .mzlib
+        .as_deref()
+        .map_or_else(String::new, |mzlib| format!(", built from mzLib {mzlib},"));
+    let listed = if info.verbs.is_empty() {
+        "predates the verb list, so it dispatches nothing added since".to_owned()
+    } else {
+        "does not dispatch it".to_owned()
+    };
+    format!(
+        "'{verb}' needs the mzLib bridge from pyMzLib {since} or later. The bridge at '{}'{built_from} \
+         {listed}. Point {BRIDGE_ENV_VAR} at a newer bridge, or install one with \
+         mzlib::install::install_bridge() once this crate pins pyMzLib {since}.",
+        exe.display()
+    )
+}
+
 // ------------------------------------------------------------------ shared helpers
+
+/// What a many-input call does when one input cannot be read (BULK.md §1).
+///
+/// The same two answers every bulk verb gives, in every binding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnError {
+    /// The first unreadable input stops the call with its own error, the message starting
+    /// `Input <i> (<path>)`. The default: a batch that quietly lost a file is the wrong answer.
+    #[default]
+    Fail,
+    /// The failure is recorded on that input's entry of the result's `files`, and the rest are
+    /// read. The result's `failed_count` says how many.
+    Skip,
+}
+
+impl OnError {
+    /// The wire spelling, `"fail"` or `"skip"`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fail => "fail",
+            Self::Skip => "skip",
+        }
+    }
+}
+
+/// Validate a `threads` count as every bulk verb takes it: 1 or more, or -1 for one per core.
+pub(crate) fn threads_arg(threads: i32) -> Result<String> {
+    if threads >= 1 || threads == -1 {
+        Ok(threads.to_string())
+    } else {
+        Err(MzLibError::Usage(format!(
+            "threads must be 1 or more, or -1 for one per core; got {threads}."
+        )))
+    }
+}
+
+/// A list of paths as stdin lines, one per line, validated before anything is spawned.
+///
+/// Refuses an empty list, a blank path, a path that is not UTF-8, and a path containing a line
+/// break or a tab — the characters the wire uses to separate lines and fields. A repeated path is
+/// left to the bridge, which refuses it with the paths' absolute forms.
+pub(crate) fn path_lines<P: AsRef<Path>>(paths: &[P], what: &str) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Err(MzLibError::Usage(format!(
+            "The list of {what} is empty; give at least one."
+        )));
+    }
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let text = path.as_ref().to_str().ok_or_else(|| {
+                MzLibError::Usage(format!(
+                    "{what} {index} is not valid UTF-8, which the bridge requires."
+                ))
+            })?;
+            let text = text.trim();
+            if text.is_empty() {
+                return Err(MzLibError::Usage(format!("{what} {index} is blank.")));
+            }
+            if text.contains(['\n', '\r', '\t']) {
+                return Err(MzLibError::Usage(format!(
+                    "{what} {index} contains a tab or line break, which the wire uses to separate \
+                     entries: {text:?}."
+                )));
+            }
+            Ok(text.to_owned())
+        })
+        .collect()
+}
 
 /// Render an optional float the way the bridge's invariant-culture parser expects it.
 ///
@@ -1069,6 +1234,84 @@ mod tests {
         let seen = runner.seen.lock().unwrap().clone().unwrap();
         assert_eq!(seen.0, vec!["version".to_owned()]);
         assert_eq!(seen.1, None);
+    }
+
+    #[test]
+    fn a_bridge_that_predates_the_verb_list_lists_nothing() {
+        // bridge_version.json is what the pyMzLib 0.2.0 bridge reports; an older bridge omits the
+        // key, and that must read as "lists nothing" so every newer verb is refused, not allowed.
+        let recorded: BridgeVersion =
+            serde_json::from_str(include_str!("../tests/fixtures/bridge_version.json")).unwrap();
+        assert!(recorded.has_verb("readers read-protein-groups"));
+        assert!(recorded.has_verb("sdrf pool"));
+
+        let old: BridgeVersion =
+            serde_json::from_str(r#"{"bridge":"1.0.0.0","protocol":1,"runtime":"8.0.27"}"#)
+                .unwrap();
+        assert!(old.verbs.is_empty());
+        assert!(!old.has_verb("version"));
+    }
+
+    #[test]
+    fn a_verb_the_bridge_lacks_is_refused_before_it_is_spawned() {
+        let _fake = fake_bridge();
+        VERBS_SEEN.lock().unwrap().take();
+        let runner = StubRunner::returning(
+            r#"{"ok":true,"data":{"bridge":"1.0.0.0","protocol":1,"runtime":"8.0.27","mzlib":"1.0.0+abc"}}"#,
+            "",
+            0,
+        );
+        let error = require_verb_with(&runner, "sdrf validate", "0.2.0").unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, MzLibError::Usage(_)));
+        assert!(message.contains("'sdrf validate' needs"), "{message}");
+        assert!(message.contains("pyMzLib 0.2.0"), "{message}");
+        assert!(message.contains("predates the verb list"), "{message}");
+        // What was asked was `version`, never the verb itself.
+        assert_eq!(runner.seen.lock().unwrap().clone().unwrap().0, ["version"]);
+        VERBS_SEEN.lock().unwrap().take();
+    }
+
+    #[test]
+    fn a_verb_the_bridge_lists_passes_and_the_answer_is_cached() {
+        let _fake = fake_bridge();
+        VERBS_SEEN.lock().unwrap().take();
+        let runner = StubRunner::returning(
+            r#"{"ok":true,"data":{"bridge":"1.0.0.0","protocol":1,"runtime":"8.0.27","verbs":["version","sdrf validate"]}}"#,
+            "",
+            0,
+        );
+        require_verb_with(&runner, "sdrf validate", "0.2.0").unwrap();
+        // A second check asks nothing: a failing runner would fail it if it did.
+        let failing = StubRunner::failing(MzLibError::Protocol("not called".to_owned()));
+        require_verb_with(&failing, "sdrf validate", "0.2.0").unwrap();
+        assert!(failing.seen.lock().unwrap().is_none());
+        VERBS_SEEN.lock().unwrap().take();
+    }
+
+    #[test]
+    fn threads_are_one_or_more_or_minus_one() {
+        assert_eq!(threads_arg(1).unwrap(), "1");
+        assert_eq!(threads_arg(-1).unwrap(), "-1");
+        assert_eq!(threads_arg(8).unwrap(), "8");
+        for bad in [0, -2] {
+            assert!(matches!(threads_arg(bad), Err(MzLibError::Usage(_))));
+        }
+        assert_eq!(OnError::default(), OnError::Fail);
+        assert_eq!(OnError::Skip.as_str(), "skip");
+    }
+
+    #[test]
+    fn a_path_list_refuses_what_would_break_a_stdin_line() {
+        assert_eq!(
+            path_lines(&["a.mzML", " b.mzML "], "path").unwrap(),
+            ["a.mzML", "b.mzML"]
+        );
+        assert!(path_lines::<&str>(&[], "path").is_err());
+        for bad in ["", "  ", "a\nb", "a\tb"] {
+            let error = path_lines(&[bad], "path").unwrap_err();
+            assert!(matches!(error, MzLibError::Usage(_)), "{bad:?}");
+        }
     }
 
     #[test]

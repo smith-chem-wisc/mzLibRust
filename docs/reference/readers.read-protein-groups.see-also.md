@@ -20,7 +20,7 @@ None: no publication is attached to this verb.
 
 | Wire protocol | pyMzLib | mzLibRust | mzLibR |
 |---|---|---|---|
-| 1 | not yet shipped | not yet shipped | not yet shipped |
+| 1 | not yet shipped | next release (the spec has not recorded it yet) | not yet shipped |
 
 # Not yet verified
 

@@ -12,6 +12,6 @@
 | `record_count` | `int` | rows | never | Rows in columns over every document read (BULK.md section 2). |
 | `verdict_counts` | `object` | documents | never | {informative, partial, skeleton} over the documents read. |
 | `files` | `object[]` | — | never | One per input, in input order: {path, verdict, factor\_value\_varies, sample\_is\_described, biological\_replicate\_varies, row\_count, error}; all but path and error null when unread. |
-| `column_names` | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
+| `columns` (wire `column_names`) | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
 | `columns` | `table` | — | never | Rows in input order, then the order within each document, whatever --threads is. |
 | `caveats` | `string[]` | — | never | As for one document. |

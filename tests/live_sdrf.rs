@@ -67,3 +67,149 @@ fn pooling_one_document_with_itself_keeps_both_copies_apart() {
         "an unlabelled pool must say its provenance depends on where the files sit"
     );
 }
+
+// ---- mzLib 1.0.592: validate, lint, assess, samples, parse_ages ------------------------------
+//
+// These run against the SDRF documents the recordings were made from (tests/fixtures/, shared
+// with pyMzLib), so a recording that has quietly diverged from the bridge fails here. They need
+// the bridge from pyMzLib 0.2.0, and skip on an older one.
+
+fn cohort_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
+fn recorded<T: serde::de::DeserializeOwned>(text: &str) -> T {
+    serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn validate_still_matches_its_recordings() {
+    let Some(()) = support::require_verb("sdrf validate") else {
+        return;
+    };
+    for (name, text) in [
+        (
+            "sdrf_cohort.sdrf.tsv",
+            include_str!("fixtures/sdrf_validate_cohort.json"),
+        ),
+        (
+            "sdrf_skeleton.sdrf.tsv",
+            include_str!("fixtures/sdrf_validate_skeleton.json"),
+        ),
+    ] {
+        let live = sdrf::validate(cohort_fixture(name)).expect("validate should answer");
+        let want: sdrf::SdrfValidation = recorded(text);
+        assert_eq!(live.is_valid, want.is_valid, "{name}");
+        assert_eq!(live.error_count, want.error_count, "{name}");
+        assert_eq!(live.warning_count, want.warning_count, "{name}");
+        assert_eq!(live.row_count, want.row_count, "{name}");
+        assert_eq!(live.messages().unwrap(), want.messages().unwrap(), "{name}");
+    }
+}
+
+#[test]
+fn a_missing_document_is_skipped_not_fatal() {
+    let Some(()) = support::require_verb("sdrf validate") else {
+        return;
+    };
+    let batch = sdrf::validate_many(
+        &[
+            cohort_fixture("sdrf_skeleton.sdrf.tsv"),
+            cohort_fixture("sdrf_cohort.sdrf.tsv"),
+            cohort_fixture("missing.sdrf.tsv"),
+        ],
+        &sdrf::BulkOptions {
+            on_error: sdrf::OnError::Skip,
+            threads: 2,
+            ..Default::default()
+        },
+    )
+    .expect("a skipped document is not an error");
+    assert_eq!(
+        (batch.file_count, batch.read_count, batch.valid_count),
+        (3, 2, 1)
+    );
+    assert_eq!(batch.files[2].error.as_ref().unwrap().kind, "usage");
+}
+
+#[test]
+fn lint_still_matches_its_recording() {
+    let Some(()) = support::require_verb("sdrf lint") else {
+        return;
+    };
+    let live = sdrf::lint_labelled(&[
+        (cohort_fixture("sdrf_cohort.sdrf.tsv"), "cohort"),
+        (cohort_fixture("sdrf_cohort_partner.sdrf.tsv"), "partner"),
+    ])
+    .expect("lint should answer");
+    let want: sdrf::SdrfDrift = recorded(include_str!("fixtures/sdrf_lint_cohort.json"));
+    assert_eq!(live.findings().unwrap(), want.findings().unwrap());
+}
+
+#[test]
+fn assess_many_still_matches_its_recording() {
+    let Some(()) = support::require_verb("sdrf assess") else {
+        return;
+    };
+    let want: sdrf::SdrfAssessmentBatch = recorded(include_str!("fixtures/sdrf_assess_bulk.json"));
+    // PXD000070 is mzLib's own fixture; skip it when mzLib's test files are not at hand.
+    let Some(pxd) = std::env::var_os("MZLIB_TEST_FILES")
+        .map(|root| PathBuf::from(root).join(RELATIVE))
+        .filter(|p| p.exists())
+    else {
+        eprintln!(
+            "skipping: set MZLIB_TEST_FILES to an mzLib Test directory containing {RELATIVE}"
+        );
+        return;
+    };
+    let live = sdrf::assess_many(
+        &[
+            cohort_fixture("sdrf_cohort.sdrf.tsv"),
+            cohort_fixture("sdrf_skeleton.sdrf.tsv"),
+            pxd,
+        ],
+        &sdrf::BulkOptions::default(),
+    )
+    .expect("assess_many should answer");
+    assert_eq!(live.verdict_counts, want.verdict_counts);
+    let verdicts = |b: &sdrf::SdrfAssessmentBatch| -> Vec<Option<String>> {
+        b.files.iter().map(|f| f.verdict.clone()).collect()
+    };
+    assert_eq!(verdicts(&live), verdicts(&want));
+    assert_eq!(live.record_count, want.record_count);
+}
+
+#[test]
+fn samples_and_ages_still_match_their_recordings() {
+    let Some(()) = support::require_verb("sdrf samples") else {
+        return;
+    };
+    let live = sdrf::samples(cohort_fixture("sdrf_cohort.sdrf.tsv")).expect("samples");
+    let want: sdrf::SdrfSamples = recorded(include_str!("fixtures/sdrf_samples_cohort.json"));
+    assert_eq!(live.sample_count, want.sample_count);
+    assert_eq!(live.conflicts().unwrap(), want.conflicts().unwrap());
+    assert_eq!(live.ages().unwrap(), want.ages().unwrap());
+
+    let Some(()) = support::require_verb("sdrf parse-age") else {
+        return;
+    };
+    let cells = [
+        "58Y",
+        "30Y6M",
+        "40Y-85Y",
+        "40Y-40Y",
+        ">=90Y",
+        "<1Y",
+        "6-8 weeks",
+        "63",
+        "not available",
+        "",
+        "about forty",
+    ];
+    let live = sdrf::parse_ages(&cells).expect("parse_ages");
+    let want: sdrf::ParsedAges = recorded(include_str!("fixtures/sdrf_parse_age.json"));
+    assert_eq!(live.ages().unwrap(), want.ages().unwrap());
+}
