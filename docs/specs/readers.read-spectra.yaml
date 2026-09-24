@@ -1,0 +1,180 @@
+# Pilot spec. Written 2026-09-23 from pyMzLib pkg/bridge/Reading.Records.cs (ReadSpectra) and
+# Reading.Views.cs (BuildScanColumns, SpectraCaveatsFor) at pyMzLib 1f0ae34, mzLib pin 45386c82.
+# Re-checked at mzLib pin 23c2490e (1.0.592, pyMzLib#61): no change to this verb's wire shape; the
+# recorded readers_spectra_*.json fixtures match the live bridge.
+# Extended 2026-09-24 on feat/readers-bulk-1.0.592 (C1 readers batch): the source block (#1349 plus the
+# instrument model), the per-file block (BULK.md section 3) and --paths-stdin. Fixtures re-recorded.
+verb: readers read-spectra
+module: readers
+summary: >-
+  Read the scans of a spectra file: every scan's header always, and its peak arrays only on request.
+since: {protocol: 1, pymzlib: "0.1.0", mzlibrust: "0.1.0", mzlibr: "0.1.0"}
+wraps:
+  - {symbol: MsDataFileReader.GetDataFile, path: mzLib/Readers/MsDataFileReader.cs, pin: 23c2490e}
+  - {symbol: MsDataFile.GetAllScansList, path: mzLib/MassSpectrometry/MsDataFile.cs, pin: 23c2490e}
+  - {symbol: SourceFile, path: mzLib/MassSpectrometry/SourceFile.cs, pin: 23c2490e}
+cite: []
+
+params:
+  - name: path
+    type: path
+    required: true
+    unit: null
+    range: null
+    default: null
+    doc: >-
+      A spectra file: mzML, MGF, ms1/ms2 msalign, Thermo .raw, Bruker .d or timsTOF .d.
+  - name: ms-order
+    type: int
+    required: false
+    unit: null
+    range: ">= 1"
+    default: null
+    doc: >-
+      Keep only scans at this MS level. Applied BEFORE offset and limit, so ms-order 2 with limit 10
+      is the first ten MS2 scans. Given with no value is a usage error; absent means every level.
+  - name: offset
+    type: int
+    required: false
+    unit: scans
+    range: ">= 0"
+    default: 0
+    doc: Skip this many scans (after the ms-order filter).
+  - name: limit
+    type: int
+    required: false
+    unit: scans
+    range: ">= 0"
+    default: null
+    doc: Return at most this many scans. Absent means no limit.
+  - name: peaks
+    type: flag
+    required: false
+    unit: null
+    range: null
+    default: false
+    doc: >-
+      Include the mz and intensity arrays. Off by default because peaks are roughly the size of the
+      file; combine with limit, a scan filter, or out.
+  - name: out
+    type: path
+    required: false
+    unit: null
+    range: null
+    default: null
+    doc: >-
+      Write the table to this path as TSV instead of returning columns. Must differ from path.
+      Peak arrays are written as ';'-joined lists.
+
+result:
+  envelope_fields:
+    - {wire: path, type: string, unit: null, nullable: false, null_means: null, doc: "Absolute path of the input."}
+    - {wire: file_type, type: string, unit: null, nullable: false, null_means: null, doc: "mzLib SupportedFileType name."}
+    - {wire: reader, type: string, unit: null, nullable: false, null_means: null, doc: "The mzLib MsDataFile class that read it."}
+    - {wire: scan_count, type: int, unit: scans, nullable: false, null_means: null, doc: "The file's true total, before any filter, so a filter matching nothing never looks like an empty file."}
+    - {wire: ms_order, type: int, unit: null, nullable: true, null_means: "no ms-order filter was applied", doc: "The ms-order filter, echoed."}
+    - {wire: record_count, type: int, unit: scans, nullable: false, null_means: null, doc: "Scans that passed the ms-order filter."}
+    - {wire: returned_count, type: int, unit: scans, nullable: false, null_means: null, doc: "Scans in columns; 0 when written to out."}
+    - {wire: offset, type: int, unit: scans, nullable: false, null_means: null, doc: "The offset applied."}
+    - {wire: truncated, type: bool, unit: null, nullable: false, null_means: null, doc: "True whenever scans were left out by offset or limit."}
+    - {wire: peaks_included, type: bool, unit: null, nullable: false, null_means: null, doc: "Whether mz and intensity columns are present."}
+    - {wire: retention_time_unit, type: string, unit: null, nullable: false, null_means: null, doc: "Always \"minutes\" for this verb: every mzLib MsDataFile reader converts at the boundary."}
+    - {wire: caveats, type: "string[]", unit: null, nullable: false, null_means: null, doc: "Format-specific traps for THIS file; see caveats below."}
+    - {wire: column_names, type: "string[]", unit: null, nullable: false, null_means: null, doc: "Column order."}
+    - {wire: columns, type: table, unit: null, nullable: true, null_means: "the table was written to out instead", doc: "Column name to per-scan values."}
+    - {wire: output, type: object, unit: null, nullable: true, null_means: "out was not given", doc: "{path, format: \"tsv\", row_count} when out was given."}
+    - {wire: source, type: "object", unit: null, nullable: true, null_means: "the reader built no source-file description at all (inner fields are null individually when the file does not record them)", doc: "{instrument_model, instrument_model_accession, instrument_serial_number, acquisition_start_time, acquisition_start_time_is_utc} from mzLib SourceFile (#1349). instrument_model is the model NAME and instrument_model_accession its PSI-MS accession (mzML has both; Thermo .raw only the name, so the accession is null - match on the accession, never the name). acquisition_start_time is ISO-8601 text, ending in Z only when the source fixed the instant (mzML startTimeStamp with an offset); otherwise the acquisition PC's wall-clock time. acquisition_start_time_is_utc is never null: false means local instrument-PC time or absent, and is always false for Thermo .raw. Each inner field is null when the file does not record it (MGF and msalign record none)."}
+    - {wire: rows_not_read, type: "int", unit: "rows", nullable: true, null_means: "never counted for this verb", doc: "Always null."}
+    - {wire: absent_fields, type: "string[]", unit: null, nullable: false, null_means: null, doc: "Always empty for this verb: an unrecorded scan field is null per scan."}
+    - {wire: failed_fields, type: "string[]", unit: null, nullable: false, null_means: null, doc: "'field: ExceptionType' for each column whose read threw on some scans; those cells are null."}
+    - {wire: excluded_fields, type: "object[]", unit: null, nullable: false, null_means: null, doc: "Always empty for this verb."}
+    - {wire: error, type: "object", unit: null, nullable: true, null_means: "always, for a single path: a file that cannot be read fails the call instead", doc: "{kind, type, message}; non-null only in a files[] entry under on-error skip."}
+  columns:
+    - {wire: one_based_scan_number, type: int, unit: null, nullable: false, null_means: null, doc: "Scan number. For MGF it may be assigned in file order; see caveats."}
+    - {wire: ms_order, type: int, unit: null, nullable: false, null_means: null, doc: "MS level (1, 2, ...)."}
+    - {wire: retention_time, type: float, unit: min, nullable: false, null_means: null, doc: "Retention time."}
+    - {wire: polarity, type: string, unit: null, nullable: false, null_means: null, doc: "mzLib Polarity enum name."}
+    - {wire: mz_analyzer, type: string, unit: null, nullable: false, null_means: null, doc: "mzLib MZAnalyzerType enum name."}
+    - {wire: is_centroid, type: bool, unit: null, nullable: false, null_means: null, doc: "Whether the spectrum is centroided."}
+    - {wire: total_ion_current, type: float, unit: "intensity (instrument units)", nullable: false, null_means: null, doc: "Total ion current."}
+    - {wire: injection_time, type: float, unit: ms, nullable: true, null_means: "the file did not record it", doc: "Ion injection time."}
+    - {wire: peak_count, type: int, unit: peaks, nullable: false, null_means: null, doc: "Peaks in the scan; 0 when it has no spectrum."}
+    - {wire: scan_window_lower_mz, type: float, unit: m/z, nullable: true, null_means: "no scan window recorded", doc: "Lower scan-window bound. DERIVED for MGF (first observed peak)."}
+    - {wire: scan_window_upper_mz, type: float, unit: m/z, nullable: true, null_means: "no scan window recorded", doc: "Upper scan-window bound. DERIVED for MGF (last observed peak)."}
+    - {wire: scan_filter, type: string, unit: null, nullable: true, null_means: "the file did not record one", doc: "Vendor scan filter string."}
+    - {wire: native_id, type: string, unit: null, nullable: true, null_means: "the file did not record one", doc: "Vendor native ID."}
+    - {wire: scan_description, type: string, unit: null, nullable: true, null_means: "the file did not record one", doc: "Free-text scan description."}
+    - {wire: one_based_precursor_scan_number, type: int, unit: null, nullable: true, null_means: "MS1 scan, or the file does not record the survey scan (standard MGF)", doc: "Survey scan this scan was selected from."}
+    - {wire: isolation_mz, type: float, unit: m/z, nullable: true, null_means: "MS1 scan, or not recorded", doc: "Isolation window centre. May be calibration-adjusted."}
+    - {wire: isolation_width, type: float, unit: m/z, nullable: true, null_means: "MS1 scan, or not recorded", doc: "Isolation window width."}
+    - {wire: selected_ion_mz, type: float, unit: m/z, nullable: true, null_means: "MS1 scan, or not recorded", doc: "Selected precursor m/z. May be calibration-adjusted."}
+    - {wire: selected_ion_intensity, type: float, unit: "intensity (instrument units)", nullable: true, null_means: "MS1 scan, or not recorded", doc: "Selected precursor intensity."}
+    - {wire: selected_ion_charge_state_guess, type: int, unit: charge, nullable: true, null_means: "MS1 scan, or no charge assigned", doc: "Instrument or file charge-state guess."}
+    - {wire: selected_ion_monoisotopic_guess_mz, type: float, unit: m/z, nullable: true, null_means: "MS1 scan, or no monoisotopic guess", doc: "Monoisotopic precursor m/z guess."}
+    - {wire: dissociation_type, type: string, unit: null, nullable: true, null_means: "MS1 scan, or not recorded", doc: "mzLib DissociationType enum name."}
+    - {wire: hcd_energy, type: string, unit: null, nullable: true, null_means: "not HCD, or not recorded", doc: "Collision energy AS WRITTEN by the file (mzLib keeps it a string, e.g. \"35\" or \"25,30,35\"); not parsed."}
+    - {wire: compensation_voltage, type: float, unit: V, nullable: true, null_means: "no FAIMS on this instrument", doc: "FAIMS compensation voltage."}
+    - {wire: mz, type: "float[]", unit: m/z, nullable: true, null_means: "scan has no spectrum", present_when: "peaks", doc: "Peak m/z values."}
+    - {wire: intensity, type: "float[]", unit: "intensity (instrument units)", nullable: true, null_means: "scan has no spectrum", present_when: "peaks", doc: "Peak intensities, parallel to mz."}
+  # The --paths-stdin shape (design/BULK.md). Examples marked shape: bulk are checked against it.
+  bulk:
+    params:
+      - {name: paths-stdin, type: "flag", required: false, unit: null, range: null, default: null, doc: "Read MANY files: newline-delimited paths on stdin (blank lines ignored; a repeated path is a usage error). Exclusive with path; offset and limit are refused with it."}
+      - {name: threads, type: "int", required: false, unit: "files", range: ">= 1, or -1 for one per core", default: 1, doc: "Files read at once. The output is byte-identical at any value (files are emitted in input order); 1 is the default because each file in flight is held whole in memory."}
+      - {name: on-error, type: "string", required: false, unit: null, range: "fail | skip", default: "fail", doc: "fail: the first unreadable input stops the batch with its usage or correctness error, the message starting 'Input <i> (<path>)'. skip: the failure goes in that input's files[i].error and the rest are read. skip with a single path is a usage error."}
+      - {name: out, type: "path", required: false, unit: null, range: null, default: null, doc: "Write the long table here, one file at a time in input order, so memory holds at most threads files. A batch that stops on an error deletes its partial table. Must differ from every input."}
+    envelope_fields:
+      - {wire: file_count, type: "int", unit: "files", nullable: false, null_means: null, doc: "Paths given."}
+      - {wire: read_count, type: "int", unit: "files", nullable: false, null_means: null, doc: "Files read."}
+      - {wire: failed_count, type: "int", unit: "files", nullable: false, null_means: null, doc: "Files not read; non-zero only under on-error skip."}
+      - {wire: record_count, type: "int", unit: "scans", nullable: false, null_means: null, doc: "Scans summed over the files read (BULK.md section 2)."}
+      - {wire: returned_count, type: "int", unit: "scans", nullable: false, null_means: null, doc: "Scans returned in columns, summed over the files; 0 when written to out."}
+      - {wire: row_count, type: "int", unit: "rows", nullable: false, null_means: null, doc: "Rows in columns (more than returned_count for a long view); 0 when written to out."}
+      - {wire: on_error, type: "string", unit: null, nullable: false, null_means: null, doc: "fail or skip, as requested. --threads is deliberately not echoed: the envelope is byte-identical at every thread count."}
+      - {wire: ms_order, type: "int", unit: null, nullable: true, null_means: "no ms-order filter was applied", doc: "The ms-order filter every file was read with."}
+      - {wire: peaks_included, type: "bool", unit: null, nullable: false, null_means: null, doc: "Whether mz and intensity columns are present."}
+      - {wire: column_names, type: "string[]", unit: null, nullable: false, null_means: null, doc: "source_index, source_path, then the single-file columns."}
+      - {wire: columns, type: "table", unit: null, nullable: true, null_means: "the table was written to out instead", doc: "One long table: rows grouped by input in input order, each file's rows in its own order, whatever --threads is."}
+      - {wire: output, type: "object", unit: null, nullable: true, null_means: "out was not given", doc: "{path, format: \"tsv\", row_count}; written one file at a time."}
+      - {wire: files, type: "object[]", unit: null, nullable: false, null_means: null, doc: "One per input, in input order: the per-file block (path, file_type, reader, scan_count, source, record_count, rows_not_read, retention_time_unit, caveats, column_names, absent_fields, failed_fields, excluded_fields, error). An unread input has error set and every fact it could not establish null or empty."}
+
+errors:
+  - {kind: usage, when: "path missing or blank; file not found; the file is not one of the seven spectra types (the message names the views it does have)"}
+  - {kind: usage, when: "ms-order, offset, limit or out given with no value; ms-order < 1; offset or limit < 0; non-integer value"}
+  - {kind: usage, when: "out resolves to the same file as path"}
+  - {kind: correctness, when: "a vendor format that cannot load on this platform surfaces as its real failure (Bruker/timsTOF native DLLs are Windows x64 only)"}
+  - {kind: usage, when: "paths-stdin with path, offset or limit; paths-stdin with a value; no paths on stdin; a repeated path; threads 0 or below -1; on-error not fail or skip; on-error skip with a single path; out naming an input"}
+  - {kind: usage, when: "with on-error fail, an input that is missing or not this view: the usage error of that input, prefixed 'Input <i> (<path>)'"}
+  - {kind: correctness, when: "with on-error fail, mzLib failing to parse an input: that input's own error type, message prefixed 'Input <i> (<path>)'"}
+  - {kind: service_unavailable, when: never}
+
+caveats:
+  - "Headers only unless peaks is set; peak_count tells you how many peaks, not what they are."
+  - "Bruker .d and timsTOF .d need vendor native DLLs and read only on Windows x64. Thermo .raw is managed and reads everywhere."
+  - "MGF: scan numbers may be file order; precursor scan is null unless the mzLib PRECURSORSCAN header is present; ms_order comes from MSLEVEL or is inferred from PEPMASS; the scan window is derived from observed peaks."
+  - "msalign holds DECONVOLVED neutral monoisotopic masses, not raw m/z: the mz column is not comparable with an mzML or raw file's mz and must not be re-deconvolved."
+  - "msalign: scan_window_lower_mz/_upper_mz are in m/z while the mz column is neutral MASS, so they are not on the same axis. mzLib synthesises the window by converting each mass back to m/z at its reported charge (MsAlign.cs:526); msalign records no window of its own."
+  - "timsTOF .d is ion-mobility-resolved and this view flattens it: the mobility dimension is collapsed into scans and no 1/K0 value is reported."
+  - "source.acquisition_start_time from a Thermo .raw is the acquisition PC's local clock (is_utc false); ProteoWizard's mzML of the same run writes it as UTC assuming the CONVERTING machine's time zone, so the two can differ by the site's UTC offset (SourceFile.AcquisitionStartTime)."
+  - "Many files: --paths-stdin reads the list in ONE process, --threads at a time, into one long table with source_index and source_path first. The output does not depend on --threads (a tested property); the default of 1 is a memory choice, since every reader materialises the whole file."
+
+bindings:
+  py: {name: pymzlib.readers.read_spectra, bulk: pymzlib.readers.read_spectra_many}
+  rust: {name: "mzlib::readers::read_spectra_with", bulk: "mzlib::readers::read_spectra_many", options: SpectraOptions}
+  r: {name: readers_read_spectra, bulk: readers_read_spectra_many}
+
+examples:
+  - fixture: readers_spectra_mzml.json
+    py: "result = pymzlib.readers.read_spectra(path, limit=3)"
+    rust: "let result = mzlib::readers::read_spectra_with(path, &SpectraOptions { read: ReadOptions { limit: Some(3), ..Default::default() }, ..Default::default() })?;"
+    r: "result <- readers_read_spectra(path, limit = 3)"
+  - fixture: readers_many_spectra.json
+    shape: bulk
+    py: "batch = pymzlib.readers.read_spectra_many(['sliced_ethcd.mzML', 'no-such-run.mzML', 'withZeros.mgf'], threads=2, on_error='skip')"
+    rust: "let batch = mzlib::readers::read_spectra_many(&[\"sliced_ethcd.mzML\", \"no-such-run.mzML\", \"withZeros.mgf\"], &SpectraBulkOptions { threads: 2, on_error: OnError::Skip, ..Default::default() })?;"
+    r: "batch <- readers_read_spectra_many(c('sliced_ethcd.mzML', 'no-such-run.mzML', 'withZeros.mgf'), threads = 2, on_error = 'skip')"
+
+open_questions:
+  - "injection_time unit 'ms' is from the mzML CV term (MS:1000927); not yet confirmed that every mzLib vendor reader (Thermo, Bruker, timsTOF, MGF) emits ms."
+  - "source is read from MsDataFile.SourceFile after LoadAllStaticData; Bruker .d and timsTOF .d have not been checked for which of its fields they fill."
+  - "The _many spellings (py, rust, r) follow the 2026-09-23 cross-binding decision; Rust and R names here are intended, not yet ported, and since.pymzlib stays null until release."
