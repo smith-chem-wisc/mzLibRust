@@ -12,7 +12,7 @@
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
 | `path` (wire `--path`) | `path` | absent | — | — | One .sdrf.tsv file. Exactly one of path and paths-stdin is required. |
-| `paths_stdin` (wire `--paths-stdin`) | `flag` | absent | — | — | Read many paths from stdin, one per line (BULK.md section 1). Blank lines are ignored; a repeated path is a usage error. Switches the result to the bulk shape below. |
+| wire `--paths-stdin` | `flag` | absent | — | — | Read many paths from stdin, one per line (BULK.md section 1). Blank lines are ignored; a repeated path is a usage error. Switches the result to the bulk shape below. |
 | `threads` (wire `--threads`) | `int` | `1` | documents | `>= 1, or -1` | Documents validated at once; -1 is every core. The output is byte-identical at any value (tested at 1, 4 and -1). |
 | `on_error` (wire `--on-error`) | `string` | `fail` | — | `fail \| skip` | fail: the first failure IN INPUT ORDER aborts the call. skip: recorded in files\[i\].error and the batch carries on. skip with path is a usage error. |
 

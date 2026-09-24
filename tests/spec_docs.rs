@@ -120,6 +120,54 @@ const SDRF: &[Deviation] = &[
         Some("columns"),
         "SDRF column names repeat, so the header is a Vec<String> named columns, not a Table",
     ),
+    dev(
+        "sdrf validate",
+        "param.paths-stdin",
+        None,
+        "validate_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf validate",
+        "bulk.field.column_names",
+        Some("columns"),
+        "a columnar result carries its column order inside the Table: Table::names()",
+    ),
+    dev(
+        "sdrf assess",
+        "param.paths-stdin",
+        None,
+        "assess_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf assess",
+        "bulk.field.column_names",
+        Some("columns"),
+        "a columnar result carries its column order inside the Table: Table::names()",
+    ),
+    dev(
+        "sdrf samples",
+        "param.paths-stdin",
+        None,
+        "samples_many(paths, options) is the many-document form; passing a list sets the flag",
+    ),
+    dev(
+        "sdrf samples",
+        "bulk.field.column_names",
+        Some("columns"),
+        "a columnar result carries its column order inside the Table: Table::names()",
+    ),
+    dev(
+        "sdrf lint",
+        "param.stdin",
+        Some("documents"),
+        "the stdin lines are rendered from lint_labelled's documents, one path[TAB label] per line",
+    ),
+    dev(
+        "sdrf parse-age",
+        "param.stdin",
+        Some("cells"),
+        "one stdin line per element of parse_ages' cells",
+    ),
 ];
 
 /// Deviations: proteins and genes.

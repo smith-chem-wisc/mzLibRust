@@ -12,7 +12,7 @@
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
 | `path` (wire `--path`) | `path` | absent | — | — | One .sdrf.tsv file. Exactly one of path and paths-stdin. |
-| `paths_stdin` (wire `--paths-stdin`) | `flag` | absent | — | — | Many paths on stdin, as for sdrf validate. |
+| wire `--paths-stdin` | `flag` | absent | — | — | Many paths on stdin, as for sdrf validate. |
 | `threads` (wire `--threads`) | `int` | `1` | documents | `>= 1, or -1` | Documents read at once; output identical at any value. |
 | `on_error` (wire `--on-error`) | `string` | `fail` | — | `fail \| skip` | As for sdrf validate. |
 

@@ -11,7 +11,7 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `stdin` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | Exactly as sdrf pool: one document per line, path then optionally a TAB and a label; label all or none. Labels are how the documents column names each file. |
+| `documents` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | Exactly as sdrf pool: one document per line, path then optionally a TAB and a label; label all or none. Labels are how the documents column names each file. |
 
 # Returns
 

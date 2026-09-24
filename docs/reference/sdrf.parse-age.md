@@ -10,7 +10,7 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `stdin` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | One cell per line. BLANK LINES ARE KEPT (unlike every other stdin verb) so output row i is line i; one trailing newline does not add a cell. A UTF-8 BOM is dropped. |
+| `cells` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | One cell per line. BLANK LINES ARE KEPT (unlike every other stdin verb) so output row i is line i; one trailing newline does not add a cell. A UTF-8 BOM is dropped. |
 
 # Returns
 
