@@ -526,6 +526,24 @@ const QUANT: &[Deviation] = &[
         Some("documents"),
         "the stdin lines are rendered from the PoolInput argument, one path[TAB label] per line",
     ),
+    dev(
+        "quant median-polish",
+        "param.stdin",
+        Some("design"),
+        "the design is MedianPolishOptions::design, one stdin line per DesignEntry",
+    ),
+    dev(
+        "quant median-polish",
+        "param.shared-peptides",
+        Some("use_shared_peptides"),
+        "pyMzLib's name for the same switch; parameters echoes FlashLFQ's full name",
+    ),
+    dev(
+        "quant median-polish",
+        "param.out",
+        Some("output_directory"),
+        "it names a directory, as QuantifyOptions::output_directory does",
+    ),
 ];
 
 /// Spec facts this crate does not project **yet**: `(verb, key)`. Each is a gap, not a choice,

@@ -20,6 +20,28 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
+//! Already have FlashLFQ's `QuantifiedPeptides.tsv`? [`median_polish_with`] reruns only the
+//! protein roll-up, under a new experimental design, without re-reading any spectra — the way to
+//! say which runs are replicates of which sample after the fact:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::flashlfq::{median_polish_with, DesignEntry, MedianPolishOptions};
+//!
+//! let result = median_polish_with(
+//!     "QuantifiedPeptides.tsv",
+//!     &MedianPolishOptions {
+//!         design: vec![
+//!             DesignEntry::new("run_3").condition("control"),
+//!             DesignEntry::new("run_4").condition("treated"),
+//!         ],
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!(result.proteins[0].intensity("treated_1"), Some(6011.3));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! The whole pipeline is mzLib's: the result file is read by mzLib's `Readers`, turned into
 //! FlashLFQ identifications by mzLib's own converter, and quantified by `FlashLfqEngine`.
 //! MetaMorpheus is not involved — mzLib does it alone.
@@ -159,15 +181,15 @@ pub struct ProteinGroup {
     /// The organism, when the result file carried one.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub organism: String,
-    /// Sample label → protein intensity in that sample.
+    /// Label → protein intensity there, in intensity (instrument units).
     ///
-    /// **The key is a *sample*, not a file.** FlashLFQ rolls peptides up to proteins per sample,
-    /// grouping runs by condition and biological replicate first. [`quantify`] and [`quantify_with`]
-    /// give every run its own sample, so the label here is the run base name and the distinction
-    /// costs you nothing. It would bite if runs were ever grouped into replicates: the key would
-    /// then be the sample (`"condition_replicate"`), and several runs would share one entry. Compare
-    /// [`Peptide::intensities`], which is keyed per run in every case — peptides are measured in
-    /// files, proteins are resolved across samples.
+    /// **What the key is depends on which function produced it.** From [`quantify`] and
+    /// [`quantify_with`] it is the run base name, keyed per run even when a design groups runs, as
+    /// the `quant flashlfq` spec records. From [`median_polish_with`] it is a **sample** label — the
+    /// run name when no design groups runs, otherwise `"<condition>_<biorep + 1>"`, e.g.
+    /// `"control_1"` — and several runs of one sample (fractions, technical replicates) share one
+    /// entry, which reports their sum; [`MedianPolishResults::samples`] lists the labels. Compare
+    /// [`Peptide::intensities`], which is keyed per run in every case.
     ///
     /// **May be `None`**: FlashLFQ's median-polish protein quant emits NaN (returned here as
     /// `None`) when the peptide matrix for the protein is degenerate — too few peptides per run to
@@ -188,13 +210,13 @@ pub struct ProteinGroup {
 }
 
 impl ProteinGroup {
-    /// This protein's intensity in the named sample.
+    /// This protein's intensity under the named label.
     ///
     /// `None` means FlashLFQ could not resolve a number (a degenerate peptide matrix);
-    /// `Some(0.0)` means simply not measured in this sample.
+    /// `Some(0.0)` means simply not measured there.
     ///
-    /// The name is a *sample* label — which, for results from [`quantify`] and [`quantify_with`],
-    /// is the run base name, since each run is its own sample. See [`ProteinGroup::intensities`].
+    /// The label is a run base name for results from [`quantify`] and [`quantify_with`], and a
+    /// sample label for results from [`median_polish_with`]. See [`ProteinGroup::intensities`].
     #[must_use]
     pub fn intensity(&self, file_name: &str) -> Option<f64> {
         self.intensities
@@ -279,7 +301,8 @@ pub struct FlashLfqParameters {
     /// Whether FlashLFQ's Bayesian protein-fold-change engine was run.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub bayesian_protein_quant: bool,
-    /// Worker threads used; `-1` lets FlashLFQ choose.
+    /// Worker threads used: the **resolved** count, so it depends on the machine (a `-1` request
+    /// comes back as cores − 1).
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub max_threads: i32,
 }
@@ -682,6 +705,289 @@ pub fn quantify_with(
     parse(data)
 }
 
+// ------------------------------------------------------------------ median polish
+
+/// One run of the experimental design [`median_polish_with`] quantifies under.
+///
+/// The run is a **name**, not a file: it must match an `Intensity_<name>` column of the peptide
+/// table, and nothing is opened. The design fields are FlashLFQ's `SpectraFileInfo` names, as for
+/// [`SpectraFile`]. Build one with [`DesignEntry::new`] and the setters:
+///
+/// ```
+/// use mzlib::flashlfq::DesignEntry;
+///
+/// let run = DesignEntry::new("run_3").condition("control").biological_replicate(0);
+/// assert_eq!(run.file_name, "run_3");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesignEntry {
+    /// The run's name, matching an `Intensity_<file_name>` column of the peptide table.
+    pub file_name: String,
+    /// The sample-group label. `None` becomes a blank condition.
+    pub condition: Option<String>,
+    /// The 0-based biological replicate. `None` lets the bridge use the run's 0-based position in
+    /// the design.
+    pub biological_replicate: Option<u32>,
+    /// The 0-based technical replicate. `None` defaults to 0.
+    pub technical_replicate: Option<u32>,
+    /// The 0-based fraction. `None` defaults to 0.
+    pub fraction: Option<u32>,
+}
+
+impl DesignEntry {
+    /// A run with no design fields stated yet.
+    #[must_use]
+    pub fn new(file_name: impl Into<String>) -> Self {
+        Self {
+            file_name: file_name.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Set the condition (sample-group label).
+    #[must_use]
+    pub fn condition(mut self, condition: impl Into<String>) -> Self {
+        self.condition = Some(condition.into());
+        self
+    }
+
+    /// Set the 0-based biological replicate.
+    #[must_use]
+    pub fn biological_replicate(mut self, replicate: u32) -> Self {
+        self.biological_replicate = Some(replicate);
+        self
+    }
+
+    /// Set the 0-based technical replicate.
+    #[must_use]
+    pub fn technical_replicate(mut self, replicate: u32) -> Self {
+        self.technical_replicate = Some(replicate);
+        self
+    }
+
+    /// Set the 0-based fraction.
+    #[must_use]
+    pub fn fraction(mut self, fraction: u32) -> Self {
+        self.fraction = Some(fraction);
+        self
+    }
+}
+
+/// How a median-polish roll-up is run.
+#[derive(Debug, Clone, Default)]
+pub struct MedianPolishOptions {
+    /// The experimental design, one entry per `Intensity_` run of the table, sent on stdin.
+    ///
+    /// Median polish groups measurements by condition and biological replicate, so **this is how
+    /// you tell it which runs are replicates of which sample** — the reason to re-run it at all.
+    /// Given, it must name every run in the table and only those. Empty: every `Intensity_` column
+    /// is its own biological replicate with a blank condition, which is what FlashLFQ assumes when
+    /// it writes the table with no design.
+    pub design: Vec<DesignEntry>,
+    /// Let peptides shared between protein groups contribute to protein quant (FlashLFQ's
+    /// `UseSharedPeptidesForProteinQuant`). Off by default; off, a group with only shared peptides
+    /// quantifies to `0.0`.
+    pub use_shared_peptides: bool,
+    /// If given, FlashLFQ also writes `QuantifiedProteins.tsv` into this directory, created if
+    /// absent. At the pinned mzLib (#1129) its column labels are the same sample labels as
+    /// [`MedianPolishResults::samples`].
+    pub output_directory: Option<String>,
+    /// Time to allow. `None` waits indefinitely.
+    pub timeout: Option<Duration>,
+}
+
+/// One sample median polish quantified: a condition and biological replicate.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Sample {
+    /// The key of every [`ProteinGroup::intensities`] map: the run name when no design groups runs
+    /// (every condition blank and one fraction), otherwise `<condition>_<biorep + 1>`, e.g.
+    /// `"control_1"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub label: String,
+    /// The sample's condition; `""` with no design.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub condition: String,
+    /// The 0-based biological replicate (the label adds 1).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub biological_replicate: u32,
+}
+
+/// The median-polish parameters actually used.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MedianPolishParameters {
+    /// Whether peptides shared between protein groups contributed.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub use_shared_peptides_for_protein_quant: bool,
+}
+
+/// What [`median_polish_with`] returns: protein intensities per sample, and what they were
+/// computed from.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MedianPolishResults {
+    /// The absolute path of the peptide table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub peptides_file: String,
+    /// The parameters actually used.
+    pub parameters: MedianPolishParameters,
+    /// One per (condition, biological replicate), ordered by condition then replicate, as the
+    /// engine orders them. Their labels are the keys of every protein's intensities.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub samples: Vec<Sample>,
+    /// Distinct peptides (sequences) read from the table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub peptide_count: u32,
+    /// Protein groups quantified: the length of [`Self::proteins`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub protein_count: u32,
+    /// One per protein group, ordered by name. Intensities are keyed by **sample** label: `None`
+    /// where median polish could not resolve a number, `Some(0.0)` where the group was not
+    /// measured in that sample.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub proteins: Vec<ProteinGroup>,
+    /// Where `QuantifiedProteins.tsv` was written, or `None` when nothing was.
+    #[serde(default)]
+    pub output_directory: Option<String>,
+}
+
+/// Render the design as the median-polish verb's stdin: one run per line,
+/// `name[⇥condition[⇥biorep[⇥techrep[⇥fraction]]]]`, trailing unset fields dropped.
+///
+/// The same rendering as pyMzLib's `_design_stdin` and as [`spectra_stdin`], except that the
+/// leading field is a run *name*, never checked for an extension or existence. `None` for an empty
+/// design: nothing is sent, and the bridge then makes each run its own replicate.
+fn design_stdin(design: &[DesignEntry]) -> Result<Option<String>> {
+    if design.is_empty() {
+        return Ok(None);
+    }
+    let mut lines = Vec::with_capacity(design.len());
+    for (index, entry) in design.iter().enumerate() {
+        let name = entry.file_name.trim();
+        if name.is_empty() {
+            return Err(MzLibError::Usage(format!(
+                "design[{index}] has no file_name."
+            )));
+        }
+        let condition = entry.condition.clone().unwrap_or_default();
+        if name.contains(['\t', '\n', '\r']) || condition.contains(['\t', '\n', '\r']) {
+            return Err(MzLibError::Usage(format!(
+                "design[{index}] may not contain a tab or newline."
+            )));
+        }
+        let mut fields = vec![
+            name.to_owned(),
+            condition,
+            entry
+                .biological_replicate
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            entry
+                .technical_replicate
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            entry.fraction.map(|v| v.to_string()).unwrap_or_default(),
+        ];
+        // A blank field in the middle is kept, so a later field never shifts left.
+        while fields.len() > 1 && fields.last().is_some_and(String::is_empty) {
+            fields.pop();
+        }
+        lines.push(fields.join("\t"));
+    }
+    Ok(Some(format!("{}\n", lines.join("\n"))))
+}
+
+/// The argv for `quant median-polish`.
+fn median_polish_args(peptides: &str, options: &MedianPolishOptions) -> Result<Vec<String>> {
+    let peptides = peptides.trim();
+    if peptides.is_empty() {
+        return Err(MzLibError::Usage(
+            "A quantified peptides file path is required, e.g. 'QuantifiedPeptides.tsv'."
+                .to_owned(),
+        ));
+    }
+    let mut args = vec![
+        "quant".to_owned(),
+        "median-polish".to_owned(),
+        "--peptides".to_owned(),
+        peptides.to_owned(),
+    ];
+    if options.use_shared_peptides {
+        args.push("--shared-peptides".to_owned());
+    }
+    if let Some(directory) = &options.output_directory {
+        if directory.trim().is_empty() {
+            return Err(MzLibError::Usage(
+                "output_directory must be a non-empty path or None.".to_owned(),
+            ));
+        }
+        args.push("--out".to_owned());
+        args.push(directory.trim().to_owned());
+    }
+    Ok(args)
+}
+
+/// Roll a FlashLFQ `QuantifiedPeptides.tsv` up to protein intensities, with no design: every run
+/// its own sample.
+///
+/// See [`median_polish_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`median_polish_with`].
+pub fn median_polish(peptides: impl AsRef<Path>) -> Result<MedianPolishResults> {
+    median_polish_with(peptides, &MedianPolishOptions::default())
+}
+
+/// Roll a FlashLFQ `QuantifiedPeptides.tsv` up to protein intensities per sample with FlashLFQ's
+/// median polish, under a new experimental design, without re-reading any spectra.
+///
+/// This is the second half of [`quantify_with`] on its own: given the peptide table FlashLFQ
+/// already wrote — its `Intensity_<run>` and `Detection Type_<run>` columns — it rebuilds
+/// FlashLFQ's peptide and protein objects and runs the same median-polish protein quant
+/// (`CalculateProteinResultsMedianPolish`). Reach for it to re-quantify proteins under a different
+/// design, or with shared peptides toggled, without paying for peak-finding again.
+///
+/// The proteins are ordinary [`ProteinGroup`]s, **keyed by sample label** (see
+/// [`MedianPolishResults::samples`]): `None` where median polish could not resolve a number,
+/// `Some(0.0)` where the group was not measured. A blank path, a design entry with no name, and a
+/// name or condition containing a tab or newline are refused before anything is spawned.
+#[doc = include_str!("../docs/reference/quant.median-polish.md")]
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::flashlfq::{median_polish_with, DesignEntry, MedianPolishOptions};
+///
+/// let result = median_polish_with(
+///     "QuantifiedPeptides.tsv",
+///     &MedianPolishOptions {
+///         design: vec![
+///             DesignEntry::new("run_3").condition("control").biological_replicate(0),
+///             DesignEntry::new("run_4").condition("treated").biological_replicate(0),
+///         ],
+///         ..Default::default()
+///     },
+/// )?;
+/// let labels: Vec<&str> = result.samples.iter().map(|s| s.label.as_str()).collect();
+/// assert_eq!(labels, ["control_1", "treated_1"]);
+/// assert_eq!(result.proteins[0].intensity("control_1"), Some(3005.6));
+/// assert_eq!(result.proteins[2].intensity("control_1"), None); // unresolvable, not zero
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/quant.median-polish.see-also.md")]
+pub fn median_polish_with(
+    peptides: impl AsRef<Path>,
+    options: &MedianPolishOptions,
+) -> Result<MedianPolishResults> {
+    let peptides = peptides.as_ref().to_string_lossy().into_owned();
+    let stdin = design_stdin(&options.design)?;
+    let args = median_polish_args(&peptides, options)?;
+    let data = bridge::invoke(&args, stdin.as_deref(), options.timeout)?;
+    serde_json::from_value(data).map_err(|error| {
+        MzLibError::Protocol(format!("median-polish payload could not be read: {error}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,5 +1378,98 @@ mod tests {
             ..Default::default()
         }];
         assert_eq!(spectra_stdin(&files).unwrap(), "a.mzML\t\t0\n");
+    }
+
+    // ---------------------------------------------------------- median polish
+
+    const MEDIAN_POLISH_FIXTURE: &str = include_str!("../tests/fixtures/median_polish_small.json");
+
+    fn recorded_polish() -> MedianPolishResults {
+        serde_json::from_str(MEDIAN_POLISH_FIXTURE).unwrap()
+    }
+
+    #[test]
+    fn median_polish_keys_proteins_by_sample_label() {
+        let result = recorded_polish();
+        assert_eq!(result.protein_count, 3);
+        assert_eq!(result.peptide_count, 4);
+        assert!(!result.parameters.use_shared_peptides_for_protein_quant);
+        assert_eq!(result.samples[0].label, "control_1");
+        assert_eq!(result.samples[1].condition, "treated");
+        assert_eq!(result.proteins[1].intensity("treated_1"), Some(2368.5));
+        // A null is unresolvable; it stays None rather than becoming a zero.
+        assert_eq!(result.proteins[2].intensities["control_1"], None);
+        assert_eq!(result.output_directory, None);
+    }
+
+    #[test]
+    fn the_design_renders_one_tab_separated_line_per_run() {
+        let stdin = design_stdin(&[
+            DesignEntry::new("run_3")
+                .condition("control")
+                .biological_replicate(0),
+            DesignEntry::new("run_4")
+                .condition("treated")
+                .biological_replicate(0),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(stdin, "run_3\tcontrol\t0\nrun_4\ttreated\t0\n");
+    }
+
+    #[test]
+    fn trailing_unset_design_fields_are_dropped_but_a_middle_blank_is_kept() {
+        let stdin = design_stdin(&[
+            DesignEntry::new("a"),
+            DesignEntry::new("b").condition("x"),
+            DesignEntry::new("c").fraction(2),
+        ])
+        .unwrap()
+        .unwrap();
+        // "c" keeps its blank condition, biorep and techrep so the fraction stays fifth.
+        assert_eq!(stdin, "a\nb\tx\nc\t\t\t\t2\n");
+    }
+
+    #[test]
+    fn no_design_sends_no_stdin() {
+        assert_eq!(design_stdin(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn a_bad_design_is_refused_before_anything_is_spawned() {
+        for bad in [
+            DesignEntry::new("  "),
+            DesignEntry::new("a\tb"),
+            DesignEntry::new("a").condition("x\ny"),
+        ] {
+            assert!(matches!(design_stdin(&[bad]), Err(MzLibError::Usage(_))));
+        }
+    }
+
+    #[test]
+    fn median_polish_args_carry_every_option() {
+        let options = MedianPolishOptions {
+            use_shared_peptides: true,
+            output_directory: Some("out".to_owned()),
+            ..MedianPolishOptions::default()
+        };
+        assert_eq!(
+            median_polish_args("QuantifiedPeptides.tsv", &options).unwrap(),
+            [
+                "quant",
+                "median-polish",
+                "--peptides",
+                "QuantifiedPeptides.tsv",
+                "--shared-peptides",
+                "--out",
+                "out"
+            ]
+        );
+        assert!(median_polish_args(" ", &MedianPolishOptions::default()).is_err());
+        let blank_out = MedianPolishOptions {
+            output_directory: Some(" ".to_owned()),
+            ..MedianPolishOptions::default()
+        };
+        assert!(median_polish_args("p.tsv", &blank_out).is_err());
     }
 }
