@@ -57,9 +57,12 @@ const fn dev(
     }
 }
 
-/// Every deliberate difference between the specs and this crate. Nothing else may be skipped.
-const DEVIATIONS: &[Deviation] = &[
-    // ---- conventions that hold for every verb -------------------------------------------------
+/// Every deliberate difference between the specs and this crate, one list per module so that a
+/// change to one module's projection touches only its own list. Nothing else may be skipped.
+const DEVIATIONS: &[&[Deviation]] = &[COMMON, READERS, SDRF, PROTEINS, PRIDE, PEPTIDOFORM, QUANT];
+
+/// Deviations: conventions that hold for every verb.
+const COMMON: &[Deviation] = &[
     dev(
         "*",
         "field.column_names",
@@ -73,7 +76,10 @@ const DEVIATIONS: &[Deviation] = &[
         "a single-path call that cannot read its file returns Err(MzLibError) instead; the wire \
          field is always null there, and only a many-file result's per-file entries carry one",
     ),
-    // ---- readers ------------------------------------------------------------------------------
+];
+
+/// Deviations: readers.
+const READERS: &[Deviation] = &[
     dev(
         "readers formats",
         "field.format_count",
@@ -86,7 +92,10 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "formats() returns this list itself, as Format values",
     ),
-    // ---- sdrf ---------------------------------------------------------------------------------
+];
+
+/// Deviations: sdrf.
+const SDRF: &[Deviation] = &[
     dev(
         "sdrf read",
         "field.column_names",
@@ -99,7 +108,13 @@ const DEVIATIONS: &[Deviation] = &[
         Some("columns"),
         "SDRF column names repeat, so the header is a Vec<String> named columns, not a Table",
     ),
-    // ---- pride --------------------------------------------------------------------------------
+];
+
+/// Deviations: proteins and genes.
+const PROTEINS: &[Deviation] = &[];
+
+/// Deviations: pride.
+const PRIDE: &[Deviation] = &[
     // The listing functions return the entries: a Vec is what a caller iterates, and the envelope
     // around it is either the caller's own argument or derivable from the list.
     dev(
@@ -204,7 +219,10 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "download returns this list itself, as PathBuf values",
     ),
-    // ---- peptidoform --------------------------------------------------------------------------
+];
+
+/// Deviations: peptidoform.
+const PEPTIDOFORM: &[Deviation] = &[
     dev(
         "peptidoform fragments",
         "param.no-modifications",
@@ -271,7 +289,10 @@ const DEVIATIONS: &[Deviation] = &[
         None,
         "Peptide::modifications is a Vec; this is its len()",
     ),
-    // ---- quant --------------------------------------------------------------------------------
+];
+
+/// Deviations: quant (flashlfq).
+const QUANT: &[Deviation] = &[
     // QuantifyOptions uses FlashLFQ's own parameter names (the crate's "names follow mzLib"
     // convention), which are also the names the result's `parameters` echoes.
     dev(
@@ -478,7 +499,6 @@ const PENDING: &[(&str, &str)] = &[
     ("readers read-spectra", "field.failed_fields"),
     ("readers read-spectra", "field.rows_not_read"),
     ("readers read-spectra", "field.source"),
-    ("version", "field.verbs"),
 ];
 
 // =================================================================================================
@@ -581,10 +601,10 @@ fn field(item: &Value, key: &str) -> Option<String> {
 }
 
 fn deviation(verb: &str, key: &str) -> Option<&'static Deviation> {
-    DEVIATIONS
-        .iter()
+    let all = || DEVIATIONS.iter().flat_map(|module| module.iter());
+    all()
         .find(|d| d.verb == verb && d.key == key)
-        .or_else(|| DEVIATIONS.iter().find(|d| d.verb == "*" && d.key == key))
+        .or_else(|| all().find(|d| d.verb == "*" && d.key == key))
 }
 
 /// The Rust spelling of a spec param or field: its declared deviation, or the wire name in
@@ -1478,7 +1498,7 @@ fn every_deviation_names_a_real_param_or_field() {
     let specs = load_specs();
     let by_verb: HashMap<&str, &Spec> = specs.iter().map(|s| (s.verb(), s)).collect();
     let mut problems = Vec::new();
-    for d in DEVIATIONS {
+    for d in DEVIATIONS.iter().flat_map(|module| module.iter()) {
         if d.why.trim().is_empty() {
             problems.push(format!("{} {}: no reason given", d.verb, d.key));
         }

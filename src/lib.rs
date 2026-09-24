@@ -86,7 +86,7 @@ pub mod readers;
 pub mod sdrf;
 
 pub use bridge::{
-    bridge_path, bridge_version, BridgeVersion, MzLibError, Result, BRIDGE_ENV_VAR,
+    bridge_path, bridge_version, BridgeVersion, MzLibError, OnError, Result, BRIDGE_ENV_VAR,
     PROTOCOL_VERSION, SERVICE_UNAVAILABLE_TYPE,
 };
 pub use install::{install_bridge, InstallOptions};

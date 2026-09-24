@@ -47,6 +47,26 @@ pub fn require_bridge() -> Option<()> {
     }
 }
 
+/// Ensure the staged bridge dispatches `verb`, or skip.
+///
+/// The verbs of mzLib 1.0.592 need the bridge from pyMzLib 0.2.0. A live suite run against an
+/// older bridge — the scheduled job fetches the newest release, and the crate's pin may lag it —
+/// has nothing to check them against, which is a staging fact, not a regression.
+pub fn require_verb(verb: &str) -> Option<()> {
+    require_bridge()?;
+    match mzlib::bridge_version() {
+        Ok(info) if info.has_verb(verb) => Some(()),
+        Ok(_) => {
+            skip(&format!(
+                "the staged bridge does not dispatch '{verb}'; it needs the bridge from pyMzLib \
+                 0.2.0 (mzLib 1.0.592) or later."
+            ));
+            None
+        }
+        Err(error) => panic!("the bridge could not report its version: {error}"),
+    }
+}
+
 /// Unwrap a live call, skipping rather than failing when the service is unavailable.
 ///
 /// Any other error is a genuine regression and panics, which is the whole point: a 404 from a
