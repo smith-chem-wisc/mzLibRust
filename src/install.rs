@@ -60,25 +60,25 @@ use crate::bridge::{executable_name, platform_tag, MzLibError, Result};
 //
 // BEGIN generated bridge pins
 /// The pyMzLib release whose published bridge this crate installs by default.
-pub const MZLIB_BRIDGE_VERSION: &str = "0.1.1";
+pub const MZLIB_BRIDGE_VERSION: &str = "0.2.0";
 
 /// The platforms pyMzLib publishes a bridge for, and the SHA-256 of each tarball.
 pub const BRIDGE_ASSETS: &[(&str, &str)] = &[
     (
         "win-x64",
-        "e0f47d54dbbb79357ae559d5c1368abb50021f5de4ef83962b5a2d09cdd9d04d",
+        "64e0ba442b8813cbe847a89768387d2d427e9ae3c3959716f431eb8305142319",
     ),
     (
         "osx-arm64",
-        "f56551959a45e1bdbe39f366e7d31ba6219d8a5da8894a5c1cd6c59a77a75185",
+        "b07019420a9dc76838e669be7c02392d67c2f56741d3d5a6d5ac5bb79fcb86d1",
     ),
     (
         "osx-x64",
-        "bcc7440b3444a218ac7c73202e552d9518216b9ce921344064034de6e1fd7377",
+        "5703757f102bc18ba7fe7e16d14ae1e8a4c6d0899acf16060c58c927370aa12d",
     ),
     (
         "linux-x64",
-        "fc3944a82c9b605d292ba6b2b55e15eb5d6a4989a719108dbea557ef88c36347",
+        "6980564c6669f4c1ccb13e5c259d3cb56b647f648e640bc693a3a8814df4608d",
     ),
 ];
 // END generated bridge pins
