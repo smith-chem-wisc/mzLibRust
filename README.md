@@ -11,12 +11,12 @@ availability-versus-correctness error classification. This crate is the thin, id
 over it, which is why it exists at all: a second binding costs a transport module and some typed
 structs, not a second implementation of mzLib.
 
-## Four capabilities
+## What it does
 
-<!-- This heading used to read "the same three pyMzLib has". A parity claim is a claim about
-     someone else's repository, so it goes stale without anything here changing — state what this
-     crate does and let the reader compare. The count moved to four when the readers module landed;
-     the comparison stays out. -->
+<!-- This heading used to read "the same three pyMzLib has", then "Four capabilities" over five
+     modules. A parity claim is a claim about someone else's repository, and a count is a claim that
+     goes stale the day a module lands, so neither is made here: state what this crate does and let
+     the reader compare. -->
 
 ```rust
 // PRIDE Archive — what is in a project, and pull it down.
@@ -42,7 +42,7 @@ let result = quantify_with(
 )?;
 println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
 
-// Readers — spectra as well as search output; identify any of mzLib's 31 types and read ALL of them.
+// Readers — spectra as well as search output; identify any of mzLib's 36 types and read ALL of them.
 // mzML, Thermo .raw, Bruker .d, timsTOF .d, MGF and msalign all read through read_spectra.
 let scans = mzlib::readers::read_spectra("run.mzML")?;
 println!("{} scans", scans.scan_count);
@@ -50,7 +50,7 @@ println!("{} scans", scans.scan_count);
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 
-let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 31
+let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 36
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
 
 // SDRF experimental design — what was searched, pooled across experiments with provenance.
@@ -61,20 +61,21 @@ println!("{:?}", design.document.value("characteristics[organism part]"));
 
 ### Reading: one universal function, four typed views
 
-What differs between the 31 formats is not *whether* you can read them but *what the columns mean*.
+What differs between mzLib 1.0.592's 36 formats is not *whether* you can read them but *what the
+columns mean*. The counts are the pin's; `mzlib::readers::formats()` gives the live ones.
 
 | function | reads | columns |
 |---|---|---|
-| `read_records` | **all 31** | **that format's own fields**, under mzLib's names |
+| `read_records` | **all 36** | **that format's own fields**, under mzLib's names |
 | `read_results` | 4 | uniform `quantifiable` view |
 | `read_features` | 2 | uniform `ms1_features` view |
-| `read_matches` | 4 | uniform `spectral_match` view |
+| `read_matches` | 6 | uniform `spectral_match` view |
 | `read_spectra` | 7 | scan headers; peaks opt-in |
 
-**14 of the 31 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
-protein tables, the FlashDeconv formats, SDRF. mzLib parses them into a format-specific shape and there
-is no uniform view to project them onto, so `read_records` is what reaches them; it is a necessity,
-not a convenience.
+**17 of the 36 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
+protein tables, the FlashDeconv formats, SDRF, and the MetaMorpheus and FlashLFQ quantification
+tables. mzLib parses them into a format-specific shape and there is no uniform view to project them
+onto, so `read_records` is what reaches them; it is a necessity, not a convenience.
 
 **SDRF is the exception: read it with the `sdrf` module, not `read_records`.** `read_records` joins
 each SDRF row into one semicolon-separated string, and SDRF's own `NT=…;AC=…` grammar puts semicolons
@@ -183,11 +184,27 @@ pyMzLib's CI publishes the raw bridge binaries as release assets". Those assets 
 `v0.1.0.dev4`, and the promise was not kept — deliberately. Downloading by default is the one thing
 this crate will not do, so the fetch became `install_bridge()` instead.
 
+## Documentation
+
+The API reference is rustdoc (`cargo doc --open`). Two things about it are deliberate:
+
+- **Every example runs.** The examples are doctests, executed in CI against a stand-in bridge that
+  answers each call from a fixture recorded from the real one — the same recordings pyMzLib's and
+  mzLibR's examples replay — and only when the recording fits the call. The few that cannot run
+  download from EBI, and say so.
+- **The facts come from one spec per wire verb.** Parameters with their units, result fields with
+  their units and what a null means, error kinds, caveats, the mzLib code wrapped, and the same
+  verb's spelling in Python and R are rendered from language-neutral specs all three bindings share,
+  and a test fails when a documented field drifts from its spec. See
+  [docs/reference-facts.md](docs/reference-facts.md).
+
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
 ## Testing
 
 ```bash
-cargo test          # 118 offline tests: no network, no bridge needed
-MZLIB_BRIDGE=… cargo test --features live    # 18 live canaries; they SKIP on an outage
+cargo test          # the offline suite, the spec lint and every doc example: no network, no bridge
+MZLIB_BRIDGE=… cargo test --features live    # the live canaries; they SKIP on an outage
 ```
 
 The offline suite is the default because it must pass anywhere, in milliseconds. Live canaries are
