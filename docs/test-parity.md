@@ -7,6 +7,14 @@ pyMzLib has **123** tests (107 offline, 16 live). mzLibRust has **136** (118 off
 Every Python test maps to a Rust test, is eliminated by Rust's type system, or is listed below with
 the reason it is not portable. Nothing was silently dropped.
 
+> **These counts, and the table below, cover the first three modules** (PRIDE, peptidoform,
+> FlashLFQ), when they were ported. The `readers`, `sdrf` and `proteins` modules and the mzLib
+> 1.0.592 batch came later and are mapped by their specs instead: `tests/spec_docs.rs` fails when a
+> spec's parameter or field is not documented here, and every doc example replays the recording
+> pyMzLib's own example replays. At the 1.0.592 port the crate has 231 offline unit tests, the
+> 7-test spec lint, 69 doctests (60 executed; 9 are `no_run` because they download from EBI or no
+> many-file recording exists yet) and 52 live canaries.
+
 ## Counts
 
 | Suite | pyMzLib | mzLibRust | Notes |

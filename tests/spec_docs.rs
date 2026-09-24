@@ -127,22 +127,10 @@ const SDRF: &[Deviation] = &[
         "validate_many(paths, options) is the many-document form; passing a list sets the flag",
     ),
     dev(
-        "sdrf validate",
-        "bulk.field.column_names",
-        Some("columns"),
-        "a columnar result carries its column order inside the Table: Table::names()",
-    ),
-    dev(
         "sdrf assess",
         "param.paths-stdin",
         None,
         "assess_many(paths, options) is the many-document form; passing a list sets the flag",
-    ),
-    dev(
-        "sdrf assess",
-        "bulk.field.column_names",
-        Some("columns"),
-        "a columnar result carries its column order inside the Table: Table::names()",
     ),
     dev(
         "sdrf samples",
@@ -151,10 +139,10 @@ const SDRF: &[Deviation] = &[
         "samples_many(paths, options) is the many-document form; passing a list sets the flag",
     ),
     dev(
-        "sdrf samples",
-        "bulk.field.column_names",
-        Some("columns"),
-        "a columnar result carries its column order inside the Table: Table::names()",
+        "sdrf pool",
+        "param.stdin",
+        Some("documents"),
+        "the stdin lines are rendered from the PoolInput argument, one path[TAB label] per line",
     ),
     dev(
         "sdrf lint",
@@ -519,12 +507,6 @@ const QUANT: &[Deviation] = &[
         "field.protein_count",
         None,
         "FlashLfqResults::proteins is a Vec; this is its len()",
-    ),
-    dev(
-        "sdrf pool",
-        "param.stdin",
-        Some("documents"),
-        "the stdin lines are rendered from the PoolInput argument, one path[TAB label] per line",
     ),
     dev(
         "quant median-polish",

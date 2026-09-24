@@ -19,7 +19,9 @@ structs, not a second implementation of mzLib.
      the reader compare. -->
 
 ```rust
-// PRIDE Archive — what is in a project, and pull it down.
+// PRIDE Archive — find projects by keyword, see what is in one, and pull it down.
+let hits = mzlib::pride::search("plasmodium falciparum schizont")?;
+println!("{} {:?}", hits[0].accession, hits[0].matched_fields());   // PXD070842 ["references", "title"]
 let files = mzlib::pride::list_files("PXD000001")?;
 let small: Vec<_> = files.iter()
     .filter(|f| f.size_mb() < 5.0 && f.downloadable())
@@ -31,7 +33,7 @@ mzlib::pride::download_files(&small, "downloads", &Default::default())?;
 let digest = mzlib::peptidoform::fragments("P02768")?;
 println!("{}", digest.modification_census.explain());
 //   14 of 38 annotated modifications were applied, across 14 residue positions.
-//   Excluded by type: 24 × glycosylation site — these have no defined chemical composition…
+//   Excluded by type: 24 × glycosylation site — mzLib loads only 'modified residue' and …
 
 // FlashLFQ — label-free quantification across runs.
 use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
@@ -41,6 +43,14 @@ let result = quantify_with(
     &QuantifyOptions { match_between_runs: true, ..Default::default() },
 )?;
 println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
+
+// Median polish — re-roll proteins under a new design, without re-reading any spectra.
+use mzlib::flashlfq::{median_polish_with, DesignEntry, MedianPolishOptions};
+let proteins = median_polish_with("QuantifiedPeptides.tsv", &MedianPolishOptions {
+    design: vec![DesignEntry::new("run_3").condition("control"),
+                 DesignEntry::new("run_4").condition("treated")],
+    ..Default::default()
+})?;
 
 // Readers — spectra as well as search output; identify any of mzLib's 36 types and read ALL of them.
 // mzML, Thermo .raw, Bruker .d, timsTOF .d, MGF and msalign all read through read_spectra.
@@ -53,10 +63,27 @@ println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiabl
 let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 36
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
 
+// Hundreds of runs, one bridge process, one long table; each run's instrument in its report.
+let runs = mzlib::readers::read_spectra_many(&paths, &Default::default())?;
+println!("{:?}", runs.files[0].source.as_ref().map(|s| &s.instrument_serial_number));
+
+// MetaMorpheus protein groups and FlashLFQ peptides as long tables: one row per sample.
+let groups = mzlib::readers::read_protein_groups("AllQuantifiedProteinGroups.tsv")?;
+
 // SDRF experimental design — what was searched, pooled across experiments with provenance.
 let design = mzlib::sdrf::pool_labelled(&[("PXD000070.sdrf.tsv", "malaria"),
                                           ("PXD026824.sdrf.tsv", "colon")])?;
 println!("{:?}", design.document.value("characteristics[organism part]"));
+
+// Is it well-formed, do the files agree, does it describe its samples at all? mzLib's answers.
+let findings = mzlib::sdrf::validate("PXD000070.sdrf.tsv")?;
+let verdicts = mzlib::sdrf::assess_many(&corpus, &Default::default())?;   // Informative / Partial / Skeleton
+let ages = mzlib::sdrf::parse_ages(&["58Y", "40Y-85Y", ">=90Y", "63"])?;   // years, or why not
+
+// Protein databases — what an accession is, which gene it is, whether a peptide is unique.
+let db = mzlib::proteins::read(&["human.xml"])?;
+println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
+let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bovine.fasta"])?;
 ```
 
 ### Reading: one universal function, four typed views
@@ -77,10 +104,32 @@ protein tables, the FlashDeconv formats, SDRF, and the MetaMorpheus and FlashLFQ
 tables. mzLib parses them into a format-specific shape and there is no uniform view to project them
 onto, so `read_records` is what reaches them; it is a necessity, not a convenience.
 
+**Many files are one call, not a loop.** Every reader has a `_many` twin that takes a list and
+returns one long table whose first two columns name the file each row came from, plus one report
+per file (its instrument, its absent fields, why it failed under `OnError::Skip`). The list is read
+by one bridge process, `threads` files at a time; the answer is identical at any thread count.
+
+**Three quantification tables have functions of their own** (mzLib 1.0.592): MetaMorpheus protein
+groups (`read_protein_groups`), FlashLFQ peptides (`read_quantified_peptides`) and PTM site
+occupancy (`read_occupancy`), each as a long table, one row per record per sample. `read_records`
+reads those files too, but their per-sample values are dictionaries it names and cannot project.
+
 **SDRF is the exception: read it with the `sdrf` module, not `read_records`.** `read_records` joins
 each SDRF row into one semicolon-separated string, and SDRF's own `NT=…;AC=…` grammar puts semicolons
 inside cells, so the string cannot be split back apart. `mzlib::sdrf::read` and `mzlib::sdrf::pool`
-return every cell intact, in a row-major shape that keeps SDRF's repeated column names.
+return every cell intact, in a row-major shape that keeps SDRF's repeated column names. The same
+module asks mzLib's three questions about a document — `validate` (is it well-formed?),
+`lint_labelled` (do several files write the same thing the same way?) and `assess` (does it
+describe its samples at all?) — which are blind in different places, which is why there are three.
+`samples` lifts each sample's characteristics, and `parse_ages` reads `characteristics[age]` into
+years, refusing any cell that would need a guess.
+
+**Protein databases have their own module**, `proteins`: `read` gives one row per protein —
+organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;
+`resolve_genes_with` resolves proteins to stable Ensembl gene ids against a gene set you pin;
+`classify_peptides` sorts peptides into Unique, SharedWithinGene, SharedAcrossGenes or
+NotInDatabase, treating I and L as the same residue. A FASTA's silence about GO and Ensembl is
+reported in `absent_fields`, never as an empty answer.
 
 Because the column set depends on the format, a read returns a `Table` rather than a struct with
 named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can
