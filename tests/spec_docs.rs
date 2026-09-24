@@ -71,6 +71,18 @@ const COMMON: &[Deviation] = &[
     ),
     dev(
         "*",
+        "bulk.field.column_names",
+        Some("columns"),
+        "a many-file result carries its column order inside the Table: Table::names()",
+    ),
+    dev(
+        "*",
+        "bulk.param.paths-stdin",
+        None,
+        "the `_many` function is the bulk form: it takes the list, and sends it on stdin",
+    ),
+    dev(
+        "*",
         "field.error",
         None,
         "a single-path call that cannot read its file returns Err(MzLibError) instead; the wire \
@@ -384,122 +396,7 @@ const QUANT: &[Deviation] = &[
 /// Spec facts this crate does not project **yet**: `(verb, key)`. Each is a gap, not a choice,
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
-const PENDING: &[(&str, &str)] = &[
-    // The mzLib 1.0.592 readers batch (pyMzLib#65): absent_fields, the per-file block, the
-    // spectra source, mzIdentML skipped items and scores, the _many forms, and version.verbs.
-    // Projected by the port that follows this change; each entry goes as it lands.
-    ("readers read-features", "bulk.field.column_names"),
-    ("readers read-features", "bulk.field.columns"),
-    ("readers read-features", "bulk.field.failed_count"),
-    ("readers read-features", "bulk.field.file_count"),
-    ("readers read-features", "bulk.field.files"),
-    ("readers read-features", "bulk.field.on_error"),
-    ("readers read-features", "bulk.field.output"),
-    ("readers read-features", "bulk.field.read_count"),
-    ("readers read-features", "bulk.field.record_count"),
-    ("readers read-features", "bulk.field.returned_count"),
-    ("readers read-features", "bulk.field.row_count"),
-    ("readers read-features", "bulk.param.on-error"),
-    ("readers read-features", "bulk.param.out"),
-    ("readers read-features", "bulk.param.paths-stdin"),
-    ("readers read-features", "bulk.param.threads"),
-    ("readers read-features", "field.absent_fields"),
-    ("readers read-features", "field.excluded_fields"),
-    ("readers read-features", "field.failed_fields"),
-    ("readers read-features", "field.reader"),
-    ("readers read-features", "field.rows_not_read"),
-    ("readers read-matches", "bulk.field.column_names"),
-    ("readers read-matches", "bulk.field.columns"),
-    ("readers read-matches", "bulk.field.failed_count"),
-    ("readers read-matches", "bulk.field.file_count"),
-    ("readers read-matches", "bulk.field.files"),
-    ("readers read-matches", "bulk.field.on_error"),
-    ("readers read-matches", "bulk.field.output"),
-    ("readers read-matches", "bulk.field.read_count"),
-    ("readers read-matches", "bulk.field.record_count"),
-    ("readers read-matches", "bulk.field.returned_count"),
-    ("readers read-matches", "bulk.field.row_count"),
-    ("readers read-matches", "bulk.field.scores_included"),
-    ("readers read-matches", "bulk.param.on-error"),
-    ("readers read-matches", "bulk.param.out"),
-    ("readers read-matches", "bulk.param.paths-stdin"),
-    ("readers read-matches", "bulk.param.threads"),
-    ("readers read-matches", "field.absent_fields"),
-    ("readers read-matches", "field.excluded_fields"),
-    ("readers read-matches", "field.failed_fields"),
-    ("readers read-matches", "field.reader"),
-    ("readers read-matches", "field.retention_time_unit"),
-    ("readers read-matches", "field.rows_not_read"),
-    ("readers read-matches", "field.scores_included"),
-    ("readers read-matches", "field.skipped"),
-    ("readers read-matches", "field.skipped_count"),
-    ("readers read-matches", "param.limit"),
-    ("readers read-matches", "param.offset"),
-    ("readers read-matches", "param.out"),
-    ("readers read-matches", "param.scores"),
-    ("readers read-records", "bulk.field.column_names"),
-    ("readers read-records", "bulk.field.columns"),
-    ("readers read-records", "bulk.field.failed_count"),
-    ("readers read-records", "bulk.field.file_count"),
-    ("readers read-records", "bulk.field.files"),
-    ("readers read-records", "bulk.field.on_error"),
-    ("readers read-records", "bulk.field.output"),
-    ("readers read-records", "bulk.field.read_count"),
-    ("readers read-records", "bulk.field.record_count"),
-    ("readers read-records", "bulk.field.returned_count"),
-    ("readers read-records", "bulk.field.row_count"),
-    ("readers read-records", "bulk.param.on-error"),
-    ("readers read-records", "bulk.param.out"),
-    ("readers read-records", "bulk.param.paths-stdin"),
-    ("readers read-records", "bulk.param.threads"),
-    ("readers read-records", "field.absent_fields"),
-    ("readers read-records", "field.caveats"),
-    ("readers read-records", "field.retention_time_unit"),
-    ("readers read-records", "field.rows_not_read"),
-    ("readers read-records", "field.skipped"),
-    ("readers read-records", "field.skipped_count"),
-    ("readers read-results", "bulk.field.column_names"),
-    ("readers read-results", "bulk.field.columns"),
-    ("readers read-results", "bulk.field.failed_count"),
-    ("readers read-results", "bulk.field.file_count"),
-    ("readers read-results", "bulk.field.files"),
-    ("readers read-results", "bulk.field.on_error"),
-    ("readers read-results", "bulk.field.output"),
-    ("readers read-results", "bulk.field.read_count"),
-    ("readers read-results", "bulk.field.record_count"),
-    ("readers read-results", "bulk.field.returned_count"),
-    ("readers read-results", "bulk.field.row_count"),
-    ("readers read-results", "bulk.param.on-error"),
-    ("readers read-results", "bulk.param.out"),
-    ("readers read-results", "bulk.param.paths-stdin"),
-    ("readers read-results", "bulk.param.threads"),
-    ("readers read-results", "field.absent_fields"),
-    ("readers read-results", "field.excluded_fields"),
-    ("readers read-results", "field.failed_fields"),
-    ("readers read-results", "field.reader"),
-    ("readers read-spectra", "bulk.field.column_names"),
-    ("readers read-spectra", "bulk.field.columns"),
-    ("readers read-spectra", "bulk.field.failed_count"),
-    ("readers read-spectra", "bulk.field.file_count"),
-    ("readers read-spectra", "bulk.field.files"),
-    ("readers read-spectra", "bulk.field.ms_order"),
-    ("readers read-spectra", "bulk.field.on_error"),
-    ("readers read-spectra", "bulk.field.output"),
-    ("readers read-spectra", "bulk.field.peaks_included"),
-    ("readers read-spectra", "bulk.field.read_count"),
-    ("readers read-spectra", "bulk.field.record_count"),
-    ("readers read-spectra", "bulk.field.returned_count"),
-    ("readers read-spectra", "bulk.field.row_count"),
-    ("readers read-spectra", "bulk.param.on-error"),
-    ("readers read-spectra", "bulk.param.out"),
-    ("readers read-spectra", "bulk.param.paths-stdin"),
-    ("readers read-spectra", "bulk.param.threads"),
-    ("readers read-spectra", "field.absent_fields"),
-    ("readers read-spectra", "field.excluded_fields"),
-    ("readers read-spectra", "field.failed_fields"),
-    ("readers read-spectra", "field.rows_not_read"),
-    ("readers read-spectra", "field.source"),
-];
+const PENDING: &[(&str, &str)] = &[];
 
 // =================================================================================================
 // The vendored specs
@@ -1717,21 +1614,25 @@ fn every_param_and_field_is_documented_with_its_unit() {
                 let key = format!("field.{}", field(f, "wire").unwrap_or_default());
                 check_field(&verb, key, f, &fields, &result, &mut findings, &mut checked);
             }
-            // Record-list results (`results`, `formats`, `proteins`): the columns describe the
-            // entries of the one envelope field whose Rust type is a Vec of a struct.
+            // Record-list results (`results`, `proteins`): the columns describe the entries of
+            // the envelope field whose spec doc says its fields are "under result.columns". A
+            // result that holds a columnar Table carries its columns as data, not as fields.
             if !columns.is_empty() {
-                let tables: Vec<String> = spec_tables(spec).into_iter().map(|(n, _)| n).collect();
-                let entry = rust
-                    .find_struct(&module, &result)
-                    .map(|(_, info)| info.fields.clone())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| !tables.contains(&f.name))
-                    .filter(|f| last_segment(&f.ty).is_some_and(|s| s.ident == "Vec"))
-                    .filter_map(|f| base_struct(&f.ty))
-                    .find(|name| {
-                        rust.find_struct(&module, name)
-                            .is_some_and(|(_, info)| !info.fields.is_empty())
+                let container = envelope.iter().find(|f| {
+                    field(f, "doc").is_some_and(|doc| doc.contains("under result.columns"))
+                });
+                let entry = container
+                    .and_then(|f| {
+                        let wire = field(f, "wire").unwrap_or_default();
+                        self::rust_name(&verb, &format!("field.{wire}"), &wire)
+                    })
+                    .and_then(|name| {
+                        rust.find_struct(&module, &result).and_then(|(_, info)| {
+                            info.fields
+                                .iter()
+                                .find(|f| f.name == name)
+                                .and_then(|f| base_struct(&f.ty))
+                        })
                     });
                 if let Some(entry) = entry {
                     let fields = rust.fields_deep(&module, &entry);

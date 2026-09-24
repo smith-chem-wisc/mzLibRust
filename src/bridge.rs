@@ -693,7 +693,8 @@ fn too_old_message(verb: &str, since: &str, exe: &Path, info: &BridgeVersion) ->
 /// What a many-input call does when one input cannot be read (BULK.md §1).
 ///
 /// The same two answers every bulk verb gives, in every binding.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OnError {
     /// The first unreadable input stops the call with its own error, the message starting
     /// `Input <i> (<path>)`. The default: a batch that quietly lost a file is the wrong answer.

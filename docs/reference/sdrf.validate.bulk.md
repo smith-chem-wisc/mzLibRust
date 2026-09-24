@@ -13,6 +13,6 @@
 | `valid_count` | `int` | documents | never | Documents read with no Error. |
 | `message_count` | `int` | findings | never | Findings over every document read; equals record\_count. |
 | `files` | `object[]` | — | never | One per input, in input order: {path, is\_valid, error\_count, warning\_count, message\_count, row\_count, error}. All but path and error are null when the document was not read; error is null when it was, else {kind: usage \| correctness, message}. |
-| `column_names` | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
+| `columns` (wire `column_names`) | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
 | `columns` | `table` | — | never | Rows in input order, then the order within each document, whatever --threads is. |
 | `caveats` | `string[]` | — | never | As for one document. |

@@ -12,6 +12,6 @@
 | `record_count` | `int` | rows | never | Rows in columns over every document read (BULK.md section 2). |
 | `sample_count` | `int` | samples | never | Samples over every document read. |
 | `files` | `object[]` | — | never | One per input, in input order: {path, sample\_count, row\_count, conflict\_count, problems, error}; all but path and error null when unread. |
-| `column_names` | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
+| `columns` (wire `column_names`) | `string[]` | — | never | source\_index, source\_path, then the single-document columns. |
 | `columns` | `table` | — | never | Rows in input order, then the order within each document, whatever --threads is. |
 | `caveats` | `string[]` | — | never | As for one document. |
