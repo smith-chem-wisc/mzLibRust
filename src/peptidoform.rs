@@ -3,13 +3,15 @@
 //! The question this answers is the one a mass spectrometrist actually asks — *what fragments
 //! would I see for this protein's peptides?* — in one call:
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
-//! let digest = mzlib::peptidoform::fragments("P02768")?;
-//! println!("{} peptides", digest.peptides.len());
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::peptidoform::{fragments_with, FragmentOptions};
+//!
+//! let digest = fragments_with("P02768", &FragmentOptions { max_modifications: 1, ..Default::default() })?;
+//! assert_eq!(digest.name, "ALBU_HUMAN");
 //! println!("{}", digest.modification_census.explain());
-//! # Ok(())
-//! # }
+//! assert!(digest.modification_census.explain().starts_with("14 of 38 annotated modifications"));
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
 //! The defaults are opinions, not placeholders. Tryptic with the proline rule, two missed
@@ -106,7 +108,7 @@ pub struct Peptide {
     /// The sequence with modifications written inline, as mzLib renders them.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub full_sequence: String,
-    /// The neutral monoisotopic mass, modifications included.
+    /// The neutral monoisotopic mass in Da (daltons), modifications included.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub monoisotopic_mass: f64,
     /// The peptide's length in residues.
@@ -118,10 +120,10 @@ pub struct Peptide {
     /// End position within the parent protein.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub one_based_end: i32,
-    /// How many cleavage sites the peptide spans.
+    /// How many missed cleavage sites the peptide spans.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub missed_cleavages: i32,
-    /// Charges the peptide carries **before any protonation**, from modifications that leave a
+    /// Charges (elementary charges) the peptide carries **before any protonation**, from modifications that leave a
     /// permanently charged residue.
     ///
     /// Trimethylation of a lysine ε-amine gives a quaternary ammonium, and UniProt records the
@@ -321,9 +323,10 @@ pub struct Digest {
     pub modifications_applied: bool,
     /// The maximum modifications considered per peptide.
     pub max_modifications: u32,
-    /// The maximum modification isoforms allowed per peptide position.
+    /// The maximum modification isoforms (peptidoforms) allowed per peptide position.
     pub max_isoforms: u32,
-    /// How many peptides hit that isoform cap.
+    /// How many peptide positions hit that isoform cap: each a peptide position whose peptidoforms
+    /// were cut off, so a non-zero value means the list is incomplete.
     pub peptides_at_cap: u32,
     /// What UniProt annotated versus what was applied.
     pub modification_census: ModificationCensus,
@@ -422,19 +425,19 @@ pub struct FragmentOptions {
     pub modifications: bool,
     /// Maximum missed cleavage sites per peptide.
     pub missed_cleavages: u32,
-    /// Shortest peptide to keep.
+    /// Shortest peptide to keep, in residues.
     ///
     /// The default of 7 silently discards shorter peptides — roughly a third of a histone digest —
     /// so pass 1 when you mean *every* peptide.
     pub min_length: u32,
-    /// Longest peptide to keep. `None` means unbounded.
+    /// Longest peptide to keep, in residues. `None` means unbounded.
     pub max_length: Option<u32>,
     /// Maximum modifications considered per peptide.
     ///
     /// Modification isoforms are enumerated combinatorially: histone H3.1 yields 49 bare tryptic
     /// peptides, 2,563 at two modifications and 7,040 at three.
     pub max_modifications: u32,
-    /// Maximum modification isoforms per peptide position.
+    /// Maximum modification isoforms (peptidoforms) per peptide position.
     ///
     /// mzLib's default of 1024 **truncates silently** when it binds — on H3.1 at four modifications
     /// it discards about 30% of the peptidoforms. [`Digest::peptides_at_cap`] reports how many
@@ -645,24 +648,37 @@ fn parse(data: serde_json::Value) -> Result<Digest> {
 
 /// Fetch a UniProt entry, digest it, and fragment every peptide, with the lab's defaults.
 ///
+/// See [`fragments_with`] for the reference.
+///
 /// # Errors
 ///
-/// [`MzLibError::Usage`] if the accession is not recognised; [`MzLibError::ServiceUnavailable`] if
-/// UniProt was unreachable.
+/// As [`fragments_with`].
 pub fn fragments(accession: &str) -> Result<Digest> {
     fragments_with(accession, &FragmentOptions::default())
 }
 
-/// [`fragments`], with the digestion and fragmentation stated explicitly.
+/// Fetch a UniProt entry, digest it, and fragment every peptide, with the digestion and
+/// fragmentation stated explicitly.
 ///
 /// Check [`Digest::modification_census`] before trusting a modification count — it reports what was
 /// annotated as well as what was applied — and [`Digest::truncated`] before treating the peptide
-/// list as exhaustive.
+/// list as exhaustive. A malformed UniProt accession is refused before anything is spawned.
+#[doc = include_str!("../docs/reference/peptidoform.fragments.md")]
 ///
-/// # Errors
+/// # Examples
 ///
-/// [`MzLibError::Usage`] if the accession, protease, dissociation type or terminus is not
-/// recognised; [`MzLibError::ServiceUnavailable`] if UniProt was unreachable.
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::peptidoform::{fragments_with, FragmentOptions};
+///
+/// let digest = fragments_with("P02768", &FragmentOptions { max_modifications: 1, ..Default::default() })?;
+/// assert_eq!((digest.dissociation.as_str(), digest.sequence_length), ("ETD", 609));
+/// assert!(!digest.truncated());                     // no peptide hit the isoform cap
+/// let census = &digest.modification_census;
+/// assert_eq!((census.applied, census.annotated), (14, 38));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/peptidoform.fragments.see-also.md")]
 pub fn fragments_with(accession: &str, options: &FragmentOptions) -> Result<Digest> {
     let args = build_args(accession, options)?;
     let data = bridge::invoke(&args, None, options.timeout)?;

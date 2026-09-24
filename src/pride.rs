@@ -4,10 +4,12 @@
 //! repository. This module lets a Rust user list what is in a project and pull files down, using
 //! the same paging, URL-resolution, and safe-download logic that mzLib uses in C#.
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
+//! ```
+//! # mzlib_replay::activate();
 //! let files = mzlib::pride::list_files("PXD000001")?;
-//! println!("{} files", files.len());
+//! assert_eq!(files.len(), 8);
+//! // 0.51 GB is PRIDE's REST manifest, which omits five files; see list_files.
+//! assert_eq!(mzlib::pride::total_size_bytes(&files), 514_278_049);
 //!
 //! // Filter however you like — the full expressiveness of Rust — then fetch exactly that.
 //! let small: Vec<_> = files
@@ -15,9 +17,15 @@
 //!     .filter(|f| f.size_mb() < 5.0 && f.downloadable())
 //!     .cloned()
 //!     .collect();
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Fetching them is one more call. It is not run here, because it downloads from EBI:
+//!
+//! ```no_run
+//! # let small: Vec<mzlib::pride::PrideFile> = Vec::new();
 //! mzlib::pride::download_files(&small, "downloads", &Default::default())?;
-//! # Ok(())
-//! # }
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -48,7 +56,8 @@ pub struct PrideFile {
     /// The file's name, e.g. `"run1.raw"`.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_name: String,
-    /// Size in bytes as reported by PRIDE.
+    /// Size in bytes as reported by PRIDE. For compressed files PRIDE often reports the
+    /// **decompressed** size (PXD000001's `.mgf.gz`: 16,448,103 reported, 5,984,662 transferred).
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_size_bytes: u64,
     /// The repository's checksum, or `""` if it provides none.
@@ -156,7 +165,7 @@ impl PrideFtpFile {
 #[derive(Debug, Clone)]
 pub struct ListOptions {
     /// How many files to request per underlying API call. Only affects how the manifest is
-    /// fetched, never what you get back.
+    /// fetched, never what you get back. Must be at least 1.
     pub page_size: u32,
     /// Seconds to allow for the whole fetch.
     pub timeout: Option<Duration>,
@@ -610,12 +619,33 @@ pub fn list_files(accession: &str) -> Result<Vec<PrideFile>> {
     list_files_with(accession, &ListOptions::default())
 }
 
-/// [`list_files`], with the paging and timeout stated explicitly.
+/// List every file of a PRIDE project from PRIDE's REST manifest, with the paging and timeout
+/// stated explicitly.
 ///
-/// # Errors
+/// The manifest is knowingly incomplete for some projects; see [`list_files`] and
+/// [`list_ftp_files`]. A malformed accession, or a `page_size` of zero or larger than the API
+/// allows, is refused before anything is spawned.
+#[doc = include_str!("../docs/reference/pride.files.md")]
 ///
-/// As [`list_files`], plus [`MzLibError::Usage`] if `page_size` is zero or larger than the API
-/// allows.
+/// # Errors this crate adds
+///
+/// [`MzLibError::ProjectNotFound`] when PRIDE returns an empty manifest: an unknown accession and a
+/// private project both come back empty rather than as an error, and an empty list would be
+/// indistinguishable from a project that genuinely has nothing matching.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::pride::{list_files_with, ListOptions};
+///
+/// let files = list_files_with("PXD000001", &ListOptions::default())?;
+/// let raw: Vec<_> = files.iter().filter(|f| f.category == "RAW").collect();
+/// assert!(!raw.is_empty());
+/// assert!(files.iter().all(|f| f.project_accession == "PXD000001"));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/pride.files.see-also.md")]
 pub fn list_files_with(accession: &str, options: &ListOptions) -> Result<Vec<PrideFile>> {
     let args = build_list_args(accession, options.page_size)?;
     let canonical = normalise_accession(accession)?;
@@ -644,11 +674,29 @@ pub fn list_ftp_files(accession: &str) -> Result<Vec<PrideFtpFile>> {
     list_ftp_files_with(accession, Some(Duration::from_secs(300)))
 }
 
-/// [`list_ftp_files`], with the timeout stated explicitly.
+/// Return the COMPLETE file list of a PRIDE project from its FTP directory tree, with the timeout
+/// stated explicitly.
 ///
-/// # Errors
+/// See [`list_ftp_files`] for when to prefer this to [`list_files`].
+#[doc = include_str!("../docs/reference/pride.ftp-files.md")]
 ///
-/// As [`list_ftp_files`].
+/// # Errors this crate adds
+///
+/// [`MzLibError::ProjectNotFound`] if no project has that accession (or it lacks the publication
+/// date that locates its FTP directory), or the directory listed no files.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use std::time::Duration;
+///
+/// let files = mzlib::pride::list_ftp_files_with("PXD000001", Some(Duration::from_secs(300)))?;
+/// assert_eq!(files[0].relative_path, "README.txt");
+/// assert!(files[0].url.starts_with("https://ftp.pride.ebi.ac.uk/"));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/pride.ftp-files.see-also.md")]
 pub fn list_ftp_files_with(
     accession: &str,
     timeout: Option<Duration>,
@@ -689,12 +737,34 @@ pub fn list_ftp_files_with(
 /// Download a project's files, optionally filtered, and return where they landed.
 ///
 /// Files are streamed to a temporary name and moved into place only once complete, so an
-/// interrupted download never leaves a truncated file behind.
+/// interrupted download never leaves a truncated file behind. To fetch a selection you made
+/// yourself, use [`download_files`].
+#[doc = include_str!("../docs/reference/pride.download.md")]
 ///
-/// # Errors
+/// # Errors this crate adds
 ///
-/// [`MzLibError::Usage`] if the accession or destination is blank, or if a filter was asked for
-/// and matched nothing; [`MzLibError::Bridge`] if a request failed.
+/// [`MzLibError::Usage`] if a `category` or `extensions` filter was asked for and matched
+/// nothing: an empty download is reported as an error here, not an empty success.
+///
+/// # Examples
+///
+/// Not run: it downloads from EBI.
+///
+/// ```no_run
+/// use mzlib::pride::{download, DownloadOptions};
+///
+/// let written = download(
+///     "PXD000001",
+///     "downloads",
+///     &DownloadOptions {
+///         category: Some("PEAK".to_owned()),
+///         extensions: vec![".gz".to_owned()],
+///         ..Default::default()
+///     },
+/// )?;
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/pride.download.see-also.md")]
 pub fn download(
     accession: &str,
     destination: impl AsRef<Path>,

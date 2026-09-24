@@ -14,31 +14,34 @@
 //! availability-versus-correctness error classification. This crate is the thin, idiomatic Rust
 //! surface over it.
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
+//! ```
+//! # mzlib_replay::activate();
 //! let files = mzlib::pride::list_files("PXD000001")?;
 //! println!(
 //!     "{} files, {:.2} GB",
 //!     files.len(),
 //!     mzlib::pride::total_size_bytes(&files) as f64 / 1e9
 //! );
-//! # Ok(())
-//! # }
+//! # assert_eq!(files.len(), 8);
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
 //! Reading is the widest surface, and it covers instrument data as well as search output.
 //! [`readers::read_spectra`] reads **mzML**, Thermo `.raw`, Bruker `.d`, timsTOF `.d`, MGF and
 //! msalign — scan headers always, peaks opt-in:
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
-//! let scans = mzlib::readers::read_spectra("run.mzML")?;
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::readers::{ReadOptions, SpectraOptions};
+//! # let first_three = SpectraOptions { read: ReadOptions { limit: Some(3), ..Default::default() }, ..Default::default() };
+//! let scans = mzlib::readers::read_spectra_with("sliced_ethcd.mzML", &first_three)?;
 //! println!("{} scans", scans.scan_count);
-//! # Ok(())
-//! # }
+//! # assert_eq!(scans.scan_count, 6);
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! mzLib recognises **31 file types** in all and this crate reads all of them.
+//! mzLib 1.0.592 recognises **36 file types** and this crate reads all of them;
+//! [`readers::formats`] lists them from the mzLib the bridge carries.
 //! [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views. See the [`readers`] module.
@@ -57,6 +60,20 @@
 //! and `0.0` means "not measured here", while a *protein* intensity is [`Option<f64>`] and `None`
 //! means FlashLFQ could not resolve a number at all. In Python that distinction has to live in the
 //! documentation and be remembered; here the compiler makes you handle it.
+//!
+//! ## Every example on these pages runs
+//!
+//! The examples are doctests, executed in CI against a stand-in bridge that answers each call from
+//! a fixture recorded from the real one, and only when the recording fits the call. They are the
+//! same recordings pyMzLib's and mzLibR's examples replay. The few that are not run say why: they
+//! download from EBI.
+//!
+//! ## The reference facts come from the bridge's specs
+//!
+//! Each function that calls a wire verb carries that verb's facts — parameters with their units,
+//! result fields with their units and what a null means, error kinds, caveats, the mzLib code it
+//! wraps, and the same verb's spelling in Python and R — rendered from one language-neutral spec
+//! per verb that all three bindings share. See `docs/reference-facts.md` in the repository.
 
 #![forbid(unsafe_code)]
 

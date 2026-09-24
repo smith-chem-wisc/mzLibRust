@@ -55,14 +55,15 @@ fn every_format_the_bridge_lists_is_one_this_crate_can_describe() {
 
     assert_eq!(
         formats.len(),
-        31,
-        "mzLib recognises 31 file types; a change here means the crate's documented count is stale"
+        36,
+        "mzLib 1.0.592 recognises 36 file types; a change here means the crate's documented \
+         count is stale (the bridge's readers formats spec records the count per pin)"
     );
 
-    // 14 of 31 belong to no cross-format family, which is the fact that makes read_records
+    // 17 of 36 belong to no cross-format family, which is the fact that makes read_records
     // necessary rather than a convenience.
     let viewless = formats.iter().filter(|f| f.views.is_empty()).count();
-    assert_eq!(viewless, 14, "14 of 31 have no view at all");
+    assert_eq!(viewless, 17, "17 of 36 have no view at all");
 
     // Four, not three: mzLib 1.0.585 added DiaNnReport (mzLib #1120), which is how DIA data
     // reaches read_results and FlashLFQ at all.

@@ -12,3 +12,6 @@ Cargo.lock
 .project/
 /CLAUDE.md
 /RESUME.md
+
+# The replay bridge is a nested package; building it on its own puts a target here.
+/tools/replay-bridge/target

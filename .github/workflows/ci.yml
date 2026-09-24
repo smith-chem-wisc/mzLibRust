@@ -52,6 +52,28 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features
 
+  # The reference facts: rustdoc must build with every warning an error (a broken intra-doc link
+  # fails here, not on docs.rs), and the rendered fragments and the docs must match the vendored
+  # specs. `cargo test` in the test job runs the same lint on three platforms; this job also proves
+  # a re-render writes exactly the committed bytes. See docs/reference-facts.md.
+  docs:
+    name: docs + reference facts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc, with every warning an error
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: The docs match the specs, and the fragments are current
+        run: cargo test --test spec_docs
+      - name: A re-render changes nothing that was committed
+        run: |
+          MZLIB_RENDER_SPEC_DOCS=1 cargo test --test spec_docs rendered_fragments_are_current
+          git diff --exit-code -- docs/reference
+
   msrv:
     name: minimum supported Rust version
     runs-on: ubuntu-latest

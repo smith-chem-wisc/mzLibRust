@@ -4,19 +4,35 @@
 //! searched* — which sample, which organism part, which replicate, which instrument settings — and
 //! that is the half you need to group results across experiments.
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
+//! ```
+//! # mzlib_replay::activate();
 //! let doc = mzlib::sdrf::read("PXD000070.sdrf.tsv")?;
-//! println!("{} rows, {} columns", doc.row_count, doc.columns.len());   // 6 rows, 31 columns
+//! assert_eq!((doc.row_count, doc.columns.len()), (6, 31));
 //! let organisms = doc.value("characteristics[organism]");              // Vec<Option<&str>>
+//! assert_eq!(organisms[0], Some("plasmodium falciparum"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
 //!
-//! let pooled = mzlib::sdrf::pool_labelled(&[
-//!     ("PXD000070.sdrf.tsv", "malaria"),
-//!     ("PXD026824.sdrf.tsv", "colon"),
-//! ])?;
-//! println!("{} documents, {} rows", pooled.document_count, pooled.document.row_count);
-//! # Ok(())
-//! # }
+//! Pool several experiments into one analysis table, naming each one yourself:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use std::path::PathBuf;
+//! use mzlib::sdrf::{pool_with, PoolInput, PoolOptions, ReadOptions};
+//!
+//! let documents = PoolInput::Labelled(vec![
+//!     (PathBuf::from("PXD000070.sdrf.tsv"), "malaria".to_owned()),
+//!     (PathBuf::from("PXD026824.sdrf.tsv"), "colon".to_owned()),
+//! ]);
+//! let options = PoolOptions {
+//!     read: ReadOptions { limit: Some(4), ..Default::default() },
+//!     ..Default::default()
+//! };
+//! let pooled = pool_with(&documents, &options)?;
+//! assert_eq!((pooled.document_count, pooled.document.row_count), (2, 24));
+//! assert_eq!(pooled.labels, ["malaria", "colon"]);
+//! assert!(pooled.document.truncated);                 // 4 of the 24 rows came back
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
 //! **Use this, not [`crate::readers::read_records`], for SDRF.** `read_records` recognises SDRF,
@@ -92,13 +108,14 @@ pub struct SdrfDocument {
     /// One `Vec` of cells per row. **Ragged**: a row may be shorter than [`Self::columns`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub rows: Vec<Vec<String>>,
-    /// Rows in the **whole document**, regardless of any limit or offset.
+    /// Data rows in the **whole document** (the header is not a row), regardless of any limit or
+    /// offset.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub row_count: u64,
-    /// Rows actually carried back in [`Self::rows`].
+    /// Data rows actually carried back in [`Self::rows`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub returned_count: u64,
-    /// The offset that was applied.
+    /// The offset that was applied, in rows.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub offset: u64,
     /// **Whether rows were left behind**, by either the limit or the offset. A short answer and a
@@ -246,9 +263,10 @@ impl PooledSdrf {
 /// How much of one document to return.
 #[derive(Debug, Clone)]
 pub struct ReadOptions {
-    /// Maximum rows to return. `None` returns all of them.
+    /// Return at most this many rows. `None` returns all of them. `Some(0)` returns the header
+    /// alone.
     pub limit: Option<u64>,
-    /// Rows to skip.
+    /// Skip this many rows.
     pub offset: u64,
     /// Time to allow. `None` waits indefinitely. Defaults to 60 seconds.
     pub timeout: Option<Duration>,
@@ -392,20 +410,35 @@ fn pool_request(documents: &PoolInput, options: &PoolOptions) -> Result<(Vec<Str
 // The public surface
 // ---------------------------------------------------------------------------------------------
 
-/// Read one SDRF-Proteomics file.
+/// Read one SDRF-Proteomics file, every row.
+///
+/// See [`read_with`] for the reference.
 ///
 /// # Errors
 ///
-/// [`MzLibError::Usage`] if the path is blank, or the file is missing or unreadable as SDRF.
+/// As [`read_with`].
 pub fn read(path: impl AsRef<Path>) -> Result<SdrfDocument> {
     read_with(path, &ReadOptions::default())
 }
 
-/// [`read`], with an explicit window.
+/// Read one SDRF-Proteomics file with every cell intact, in a row-major shape that keeps the
+/// document's repeated column names.
 ///
-/// # Errors
+/// A blank path is refused before anything is spawned.
+#[doc = include_str!("../docs/reference/sdrf.read.md")]
 ///
-/// As [`read`].
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// // PXD059974: a 46-column header over rows of 42 cells. mzLib keeps the raggedness.
+/// let doc = mzlib::sdrf::read("PXD059974.sdrf.tsv")?;
+/// assert_eq!(doc.ragged_row_count(), 17);
+/// let last = doc.columns.last().unwrap();
+/// assert!(doc.value(last).iter().any(Option::is_none)); // a short row reaches no cell there
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/sdrf.read.see-also.md")]
 pub fn read_with(path: impl AsRef<Path>, options: &ReadOptions) -> Result<SdrfDocument> {
     let args = read_args(path.as_ref(), options)?;
     let data = bridge::invoke(&args, None, options.timeout)?;
@@ -443,7 +476,7 @@ pub fn pool_labelled<P: AsRef<Path>, L: AsRef<str>>(documents: &[(P, L)]) -> Res
     )
 }
 
-/// Merge several SDRF documents into one analysis table.
+/// Merge several SDRF documents into one analysis table, with provenance.
 ///
 /// Columns are the union of every document's, ordered by SDRF's own block structure, and a name
 /// that repeats is carried at the highest multiplicity any single document used, so nothing is
@@ -455,10 +488,28 @@ pub fn pool_labelled<P: AsRef<Path>, L: AsRef<str>>(documents: &[(P, L)]) -> Res
 /// `"Sample 1"`, so a pooled table will usually violate SDRF's uniqueness rule. Use the
 /// source-document column as part of any key.
 ///
-/// # Errors
+/// No documents, a blank path or label, or a path or label containing a tab or newline, is refused
+/// before anything is spawned.
+#[doc = include_str!("../docs/reference/sdrf.pool.md")]
 ///
-/// [`MzLibError::Usage`] if no documents were given, a path is blank or missing, a label is blank,
-/// or a path or label contains a tab or newline.
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::sdrf::{pool_with, PoolInput, PoolOptions, ReadOptions, SOURCE_DOCUMENT_COLUMN};
+///
+/// let pooled = pool_with(
+///     &PoolInput::Labelled(vec![
+///         ("PXD000070.sdrf.tsv".into(), "malaria".to_owned()),
+///         ("PXD026824.sdrf.tsv".into(), "colon".to_owned()),
+///     ]),
+///     &PoolOptions { read: ReadOptions { limit: Some(4), ..Default::default() }, out: None },
+/// )?;
+/// assert!(pooled.document.columns.iter().any(|c| c == SOURCE_DOCUMENT_COLUMN));
+/// assert_eq!(pooled.source_documents()[0], Some("malaria"));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/sdrf.pool.see-also.md")]
 pub fn pool_with(documents: &PoolInput, options: &PoolOptions) -> Result<PooledSdrf> {
     let (args, stdin) = pool_request(documents, options)?;
     let data = bridge::invoke(&args, Some(&stdin), options.read.timeout)?;

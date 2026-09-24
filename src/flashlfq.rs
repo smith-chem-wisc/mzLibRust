@@ -4,19 +4,20 @@
 //! identifications and these runs, how much of each peptide and protein is in each run?* — in one
 //! call:
 //!
-//! ```no_run
-//! # fn main() -> Result<(), mzlib::MzLibError> {
+//! ```
+//! # mzlib_replay::activate();
 //! use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
 //!
 //! let result = quantify_with(
 //!     "AllPSMs.psmtsv",
 //!     &[SpectraFile::from("run_3.mzML"), SpectraFile::from("run_4.mzML")],
-//!     &QuantifyOptions { match_between_runs: true, ..Default::default() },
+//!     &QuantifyOptions { match_between_runs: true, max_threads: 1, ..Default::default() },
 //! )?;
 //! println!("{} peptides, {} proteins", result.peptides.len(), result.proteins.len());
 //! println!("{} peptides rescued by MBR", result.mbr_rescued_peptide_count());
-//! # Ok(())
-//! # }
+//! assert_eq!(result.peptides[0].intensity("run_3"), 1000.0);  // a peptide: f64, 0.0 = missing
+//! assert_eq!(result.proteins[1].intensity("run_3"), None);     // a protein: None = unresolvable
+//! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
 //! The whole pipeline is mzLib's: the result file is read by mzLib's `Readers`, turned into
@@ -231,8 +232,8 @@ pub struct Peak {
     /// Apex retention time in minutes, or `None` if the peak has no apex.
     #[serde(default)]
     pub retention_time: Option<f64>,
-    /// How many peptides could explain this peak. Greater than 1 means it is ambiguous and its
-    /// intensity should be treated with care.
+    /// How many identifications (peptides) could explain this peak. Greater than 1 means it is
+    /// ambiguous and its intensity should be treated with care.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub num_identifications: u32,
     /// The protein group(s) the assigned identification(s) belong to, `;`-joined.
@@ -289,7 +290,8 @@ pub struct FlashLfqResults {
     /// The absolute path of the PSM result file that was quantified.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub psm_file: String,
-    /// How many identifications were read from it.
+    /// How many identifications FlashLFQ was given, after the q-value filter mzLib's converter
+    /// applies.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub identification_count: u32,
     /// The FlashLFQ parameters actually used.
@@ -347,9 +349,14 @@ impl FlashLfqResults {
     ///
     /// Neither number is wrong; they answer different questions. If you want the strict one:
     ///
-    /// ```no_run
-    /// # use mzlib::flashlfq::FlashLfqResults;
-    /// # fn strict(result: &FlashLfqResults) -> usize {
+    /// ```
+    /// # mzlib_replay::activate();
+    /// # use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
+    /// # let result = quantify_with(
+    /// #     "AllPSMs.psmtsv",
+    /// #     &[SpectraFile::from("run_3.mzML"), SpectraFile::from("run_4.mzML")],
+    /// #     &QuantifyOptions { match_between_runs: true, max_threads: 1, ..Default::default() },
+    /// # )?;
     /// use std::collections::HashSet;
     /// let identified: HashSet<(&str, &str)> = result
     ///     .peaks
@@ -357,14 +364,15 @@ impl FlashLfqResults {
     ///     .filter(|p| p.detection_type == "MSMS")
     ///     .map(|p| (p.file_name.as_str(), p.sequence.as_str()))
     ///     .collect();
-    /// result
+    /// let strict = result
     ///     .mbr_peaks()
     ///     .iter()
     ///     .filter(|p| !identified.contains(&(p.file_name.as_str(), p.sequence.as_str())))
     ///     .map(|p| p.sequence.as_str())
     ///     .collect::<HashSet<_>>()
-    ///     .len()
-    /// # }
+    ///     .len();
+    /// assert_eq!((strict, result.mbr_rescued_peptide_count()), (1, 1));
+    /// # Ok::<(), mzlib::MzLibError>(())
     /// ```
     ///
     /// Do not read `mbr_rescued_peptide_count() == mbr_peak_count()` as reassurance that nothing
@@ -623,24 +631,43 @@ fn parse(data: serde_json::Value) -> Result<FlashLfqResults> {
 
 /// Quantify a search's peptides across mzML runs with FlashLFQ, with FlashLFQ's own defaults.
 ///
-/// `psms` is a PSM result file — a MetaMorpheus `.psmtsv` gives the full field set (q-values,
+/// See [`quantify_with`] for the reference. `psms` is a PSM result file — a MetaMorpheus `.psmtsv` gives the full field set (q-values,
 /// scores); an MSFragger result file also works. Every run named in it must have a matching mzML in
 /// `spectra`; FlashLFQ matches identifications to runs by base file name, so base names must be
 /// unique.
 ///
 /// # Errors
 ///
-/// [`MzLibError::Usage`] if an argument is malformed, a run is not mzML, an mzML is missing, or the
-/// PSM file names a run with no mzML provided; [`MzLibError::Bridge`] if FlashLFQ itself failed.
+/// As [`quantify_with`].
 pub fn quantify(psms: impl AsRef<Path>, spectra: &[SpectraFile]) -> Result<FlashLfqResults> {
     quantify_with(psms, spectra, &QuantifyOptions::default())
 }
 
-/// [`quantify`], with the FlashLFQ parameters stated explicitly.
+/// Quantify a search's peptides across mzML runs with FlashLFQ, with the FlashLFQ parameters
+/// stated explicitly.
 ///
-/// # Errors
+/// The spectra files travel on stdin, one run per line with its experimental design, so a real
+/// experiment's worth of runs never meets the command line's size ceiling. An empty or malformed
+/// spectra list is refused before anything is spawned.
+#[doc = include_str!("../docs/reference/quant.flashlfq.md")]
 ///
-/// As [`quantify`].
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
+///
+/// let result = quantify_with(
+///     "AllPSMs.psmtsv",
+///     &[SpectraFile::from("run_3.mzML"), SpectraFile::from("run_4.mzML")],
+///     &QuantifyOptions { match_between_runs: true, max_threads: 1, ..Default::default() },
+/// )?;
+/// assert_eq!(result.parameters.max_threads, 1);
+/// assert_eq!(result.mbr_peaks().len(), 1);                  // read MBR from the peaks
+/// assert_eq!(result.peptides[0].detection_type("run_4"), "MBR");
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/quant.flashlfq.see-also.md")]
 pub fn quantify_with(
     psms: impl AsRef<Path>,
     spectra: &[SpectraFile],
