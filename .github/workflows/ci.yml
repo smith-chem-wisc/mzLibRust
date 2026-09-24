@@ -57,6 +57,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # There is no committed Cargo.lock, so a bare `cargo check` on 1.74 resolved the newest
+      # thiserror, which needs 1.77, and this job failed on main for a reason that had nothing to do
+      # with the crate. A current cargo resolves versions whose rust-version fits Cargo.toml's
+      # (the "fallback" MSRV-aware resolver), and 1.74 then checks against that lockfile. This job
+      # only: Cargo.toml's version ranges, and what downstream users resolve, are unchanged.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve dependencies that support the minimum Rust version
+        run: cargo generate-lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
       - uses: dtolnay/rust-toolchain@1.74.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
