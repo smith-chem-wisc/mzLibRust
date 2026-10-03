@@ -124,6 +124,31 @@
 //! Mark contaminant databases with `contaminants` — it changes answers: a contaminant is never
 //! mapped to a gene, and a peptide it shares with a target is shared.
 //!
+//! MetaMorpheus writes the organism *name* in its protein-group table, not the NCBI taxon, and a
+//! mixed-species search (a host and a pathogen, a xenograft, a spike-in) needs the taxon to join
+//! against anything taxonomic. The database you searched has it; ask for your accessions:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::proteins::{read_with, ProteinReadOptions};
+//!
+//! let found = read_with(
+//!     &["human_subset.xml", "human_extra.fasta", "mouse_aifm1.fasta"],
+//!     &ProteinReadOptions {
+//!         contaminants: vec!["contaminants.fasta".into()],
+//!         accessions: Some(vec!["P04406".into(), "Q9Z0X1".into(), "P02769".into(), "P04406-1".into()]),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! let taxa = found.taxonomy()?;
+//! assert_eq!(taxa["P04406"].as_deref(), Some("9606"));    // human GAPDH
+//! assert_eq!(taxa["Q9Z0X1"].as_deref(), Some("10090"));   // mouse AIFM1
+//! assert_eq!(found.organisms()?["P02769"].as_deref(), Some("Bos taurus"));   // the contaminant
+//! // An isoform suffix is a different accession: matching is exact, and a miss is named.
+//! assert_eq!(found.accessions_not_found.as_deref(), Some(&["P04406-1".to_owned()][..]));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! # What these functions will not tell you, and say so instead
 //!
 //! - **A FASTA knows no GO terms and no Ensembl genes.** Its headers carry organism (`OS=`),

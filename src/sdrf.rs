@@ -98,6 +98,22 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
+//! [`assess`] asks whether a file describes its samples at all. PXD000070's sample columns are
+//! filled and its replicates differ, but its factor value never varies, so it is `Partial`; a
+//! file whose characteristics are all blank is a `Skeleton`:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let a = mzlib::sdrf::assess("PXD000070.sdrf.tsv")?;
+//! assert_eq!(a.verdict, "Partial");
+//! assert_eq!(
+//!     (a.factor_value_varies, a.sample_is_described, a.biological_replicate_varies),
+//!     (false, true, true)
+//! );
+//! assert_eq!(mzlib::sdrf::assess("sdrf_skeleton.sdrf.tsv")?.verdict, "Skeleton");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! [`validate_many`], [`assess_many`] and [`samples_many`] read a whole corpus in **one** bridge
 //! call, [`BulkOptions::threads`] documents at a time, and return one long table whose first two
 //! columns say which document each row came from. The answer is identical at any thread count;
