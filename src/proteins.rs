@@ -1,8 +1,16 @@
-//! Protein databases: what each protein *is*, which gene it belongs to, and whether a peptide
-//! identifies it.
+//! Protein databases: what each protein *is*, which gene it belongs to, whether a peptide
+//! identifies it, and what each protein group does.
 //!
-//! Three questions a search result cannot answer on its own, each answered by mzLib from the
-//! protein database you searched.
+//! | You want to … | Call | mzLib type |
+//! |---|---|---|
+//! | know a protein's organism, taxon, genes and mass, and its GO terms and Ensembl links | [`read_with`] | `ProteinDbLoader` |
+//! | map proteins to stable Ensembl gene ids against a release you pin | [`resolve_genes_with`] | `EnsemblGeneResolver` |
+//! | know whether a peptide is unique, shared within a gene, or shared across genes | [`classify_peptides_with`] | `PeptideUniquenessClassifier` |
+//! | annotate MetaMorpheus protein groups with GO terms, every member kept | [`annotate_go_with`] | `GoGroupAnnotator` |
+//! | fetch the current GO release, on purpose | [`update_go`] | `Loaders.UpdateGeneOntology` |
+//!
+//! Questions a search result cannot answer on its own, each answered by mzLib from the protein
+//! database you searched.
 //!
 //! **What is this accession?** [`read_with`] loads UniProt XML or FASTA and returns one row per
 //! protein — organism, NCBI taxonomy id, gene names, length, monoisotopic mass — and, on request,
@@ -70,10 +78,48 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
+//! **What does each protein group do, every member kept?** [`annotate_go_with`] reads the
+//! protein-group table MetaMorpheus wrote, the UniProt XML it searched and a go.obo you pinned, and
+//! returns one row per (group, GO term) that **any** member holds — directly or through an ancestor
+//! in the ontology — naming the members that carry it. MetaMorpheus picks no leading protein, so
+//! neither does this: consensus and direct-only views are filters on the rows. Here the table is a
+//! real MetaMorpheus search (PXD036557):
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::proteins::{annotate_go_with, GoAnnotateOptions};
+//!
+//! let go = annotate_go_with(
+//!     "PXD036557_AllQuantifiedProteinGroups.tsv",
+//!     "pxd036557_proteins.xml",
+//!     &GoAnnotateOptions {
+//!         go_obo: "go-pxd036557.obo".into(),
+//!         category_map: Some("organelle_map.tsv".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!((go.group_count, go.row_count), (5, 563));
+//! assert_eq!(go.header["status_contaminant"], "1");   // bovine albumin: one row, saying why
+//!
+//! // Consensus is a filter: of the histone group's terms, the ones both members carry.
+//! let groups = go.columns.strings("protein_group")?;
+//! let (n_with, n_members) = (go.columns.integers("n_with")?, go.columns.integers("n_members")?);
+//! let consensus = (0..groups.len())
+//!     .filter(|&i| groups[i].as_deref() == Some("P0C0S5|Q71UI9") && n_with[i] == n_members[i])
+//!     .count();
+//! assert_eq!(consensus, 57);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **Pin the ontology.** Terms and their ancestors change between GO releases. [`annotate_go_with`]
+//! reads only a go.obo you name; [`update_go`] is the one function that fetches one. Record
+//! [`GoAnnotations::go`] (its sha256) with your results.
+//!
 //! These examples replay the recordings in `tests/fixtures/`, made over the small databases in
 //! `tests/fixtures/proteins/` — the same ones pyMzLib's examples replay.
 //!
-//! All three take **one database or many**. A list is read in one bridge call, in order;
+//! [`read_with`], [`resolve_genes_with`] and [`classify_peptides_with`] take **one database or
+//! many**. A list is read in one bridge call, in order;
 //! `threads` says how many are read at once (default 1), and the answer is identical at any value.
 //! Mark contaminant databases with `contaminants` — it changes answers: a contaminant is never
 //! mapped to a gene, and a peptide it shares with a target is shared.
@@ -93,7 +139,15 @@
 //!   initiator methionine and signal peptide included — so they are not the mass of the mature
 //!   protein.
 //!
-//! Wire verbs: `proteins read`, `genes resolve` and `proteins classify-peptides`.
+//! - **GO annotation takes exactly one database**, because every row carries its sha256. A
+//!   contaminant member whose entry is not in that XML reads `no_entry`, not `no_go_terms`.
+//!
+//! Wire verbs: `proteins read`, `genes resolve`, `proteins classify-peptides`,
+//! `proteins annotate-go` and `proteins update-go`.
+//!
+//! ## Cite
+//!
+#![doc = include_str!("../docs/reference/cite.proteins.md")]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1055,6 +1109,529 @@ pub fn classify_peptides_with<S: AsRef<str>, P: AsRef<Path>>(
     )
 }
 
+// ---------------------------------------------------------------------------------------------
+// Gene Ontology: annotate stored protein groups, and fetch a release on purpose
+// ---------------------------------------------------------------------------------------------
+
+/// Every `annotation_status` [`annotate_go_with`] can report, as mzLib writes it
+/// (`GoAnnotationTsv.StatusName`). A row with a GO term is always `annotated`; the other three are
+/// the single term-less row of a group that has no term, saying why.
+pub const ANNOTATION_STATUSES: [&str; 4] = ["annotated", "no_go_terms", "no_entry", "contaminant"];
+
+/// How [`annotate_go_with`] annotates: the ontology to propagate over, and what to return.
+///
+/// `go_obo` is required and has no default: a GO annotation means something only relative to one
+/// release, so the release is always a file you chose to keep. [`update_go`] fetches one.
+#[derive(Debug, Clone, Default)]
+pub struct GoAnnotateOptions {
+    /// A go.obo file. It must exist; nothing is downloaded. Fetch a release on purpose with
+    /// [`update_go`], keep the file, and record [`GoAnnotations::go`] with your results.
+    pub go_obo: PathBuf,
+    /// Your own term-to-category map, in mzLib's format (`#!category_map_format 1`, `#!map_name`,
+    /// `#!map_version`, then `category`, `subcategory` and `anchor_go_id` columns). mzLib ships no
+    /// vocabulary. Adds [`GoAnnotations::categories`]. `None` (default): no categories.
+    pub category_map: Option<PathBuf>,
+    /// `false` (default) fails when the database cites a GO id the release lacks — usually a
+    /// UniProt release newer than the go.obo — naming every missing id. `true` drops each such id
+    /// and lists it in [`GoAnnotations::unresolved_go_ids`], so one new term does not cost the run.
+    pub skip_unknown_go_ids: bool,
+    /// Write the **whole** table here with mzLib's own `GoAnnotationTsv` writer, provenance header
+    /// included, whatever `offset` and `limit` are. Must end in `.tsv`, must not name an input,
+    /// and its folder must exist. For a large run, pair it with `limit: Some(0)`.
+    pub out: Option<PathBuf>,
+    /// Write the category table here with mzLib's `GoCategoryTsv` writer. Must end in `.tsv`, and
+    /// needs `category_map`.
+    pub categories_out: Option<PathBuf>,
+    /// Rows to skip before the returned window, in rows (not groups). Default 0.
+    pub offset: u64,
+    /// Return at most this many rows (rows, not groups) in [`GoAnnotations::columns`]. `None`
+    /// (default) returns every row; `Some(0)` returns only the summary. Never shortens `out`.
+    pub limit: Option<u64>,
+    /// Time to allow. `None` (default) waits: a whole proteome XML takes a while.
+    pub timeout: Option<Duration>,
+}
+
+/// The go.obo a result was computed against. Record it with your results.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct GoRelease {
+    /// The file name read.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_file_name: String,
+    /// Lower-case hex sha256 of the file's bytes. This, not the release, is what proves two runs
+    /// used the same ontology.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// The file's `data-version`, e.g. `"releases/2026-07-26"`. `None`: the file has no
+    /// `data-version` header.
+    #[serde(default)]
+    pub release: Option<String>,
+    /// Terms in the file, obsolete terms included (alternative ids are not counted).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub term_count: u64,
+}
+
+/// The protein database whose GO terms annotated the groups.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AnnotationDatabase {
+    /// The path read.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// `"UniProtXml"`, the only type [`annotate_go_with`] accepts.
+    #[serde(default)]
+    pub file_type: Option<String>,
+    /// The mzLib loader used, `"ProteinDbLoader.LoadProteinXML"`.
+    #[serde(default)]
+    pub reader: Option<String>,
+    /// Entries loaded, as written: no decoys generated, no variants expanded.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub protein_count: u64,
+    /// Lower-case hex sha256 of the **decompressed** database, so `.xml` and `.xml.gz` agree.
+    /// Every row's `annotation_db_sha256` is this.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// What mzLib did to the file while loading it, e.g. genotype variants applied.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// A file [`annotate_go_with`] wrote, when asked to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WrittenTable {
+    /// The path written.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// Rows written: the **whole** table, never the `limit`/`offset` window. `None` for the
+    /// category table, whose rows are counted in [`GoCategories::row_count`].
+    #[serde(default)]
+    pub row_count: Option<u64>,
+}
+
+/// Your category map applied to the annotated terms: one row per (term, category, subcategory).
+///
+/// A term belongs to a category when one of that category's anchors is the term itself or one of
+/// its ancestors. A term under no anchor has **no row**, so absence means "outside your map". Join
+/// to [`GoAnnotations`] on `go_id`: both tables come from the same go.obo release.
+///
+/// Columns: `go_id` (an annotated term at or below one of the map's anchors), `category` (the
+/// label, as your map writes it) and `subcategory` (`"category:subcategory"`, the most specific
+/// anchor within the category; `None` where the term reaches only the category's own anchor).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoCategories {
+    /// The map's declared `map_name`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub map_name: String,
+    /// The map's declared `map_version`. Yours to bump; mzLib only records it.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub map_version: String,
+    /// The map file read.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_file_name: String,
+    /// Lower-case hex sha256 of the map file. A version is a claim; the hash is proof.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// Rows (anchors) in the map.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub anchor_count: u64,
+    /// Rows in the table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// The table; see the type's docs for its columns.
+    #[serde(flatten)]
+    pub columns: Table,
+}
+
+/// What [`annotate_go_with`] returns: one row per (protein group, GO term) that **any** member of
+/// the group holds, directly or through an ancestor.
+///
+/// No member of a group is privileged — MetaMorpheus never picks a leading protein — so the table
+/// is the union, and every row says which members carry its term. The views people usually want
+/// are filters you apply: **consensus** is `n_with == n_members`; **direct annotations only** is
+/// `propagated == Some(false)`; **leave out isoform inheritance** is `inherited == Some(false)`.
+///
+/// The column names are **mzLib's own** `GoAnnotationTsv` schema, in its order, so this table and
+/// the file `out` writes (or mzLib writes inside a search) mean the same thing:
+///
+/// | column | read with | meaning; `None` means |
+/// |---|---|---|
+/// | `protein_group` | [`Table::strings`] | the group, as MetaMorpheus named it (`P0C0S5\|Q71UI9`) |
+/// | `accession_used` | [`string_lists`] | members carrying the term, directly or by propagation |
+/// | `accession_direct` | [`string_lists`] | of those, members annotated to this exact term |
+/// | `accession_inherited` | [`string_lists`] | of those, members whose terms were borrowed: an isoform (`P04406-2`) or sequence variant (`P04406_A20T`) absent from the database takes its entry's terms |
+/// | `go_id` | [`Table::strings`] | the term's primary id; `None`: a term-less row |
+/// | `go_name` | [`Table::strings`] | the term's name in this release; `None`: a term-less row |
+/// | `aspect` | [`Table::strings`] | `biological_process`, `cellular_component`, `molecular_function` or `unknown`; `None`: a term-less row |
+/// | `evidence` | [`string_lists`] | evidence codes (ECO) pooled over the carrying members |
+/// | `evidence_by_member` | [`string_list_maps`] | member → its own evidence codes for this term; empty on a term-less row |
+/// | `inherited` | [`Table::booleans`] | every carrying member's terms were borrowed; `None`: a term-less row |
+/// | `propagated` | [`Table::booleans`] | no member is annotated to this exact term — it is implied by a more specific one; `None`: a term-less row |
+/// | `n_members` | [`Table::integers`] | members (proteins) in the group |
+/// | `n_with` | [`Table::integers`] | members (proteins) carrying the term; 0 on a term-less row |
+/// | `entrapment_members` | [`string_lists`] | the group's entrapment members, on every row of the group |
+/// | `annotation_status` | [`Table::strings`] | one of [`ANNOTATION_STATUSES`] |
+/// | `q_value` | [`Table::floats`] | the group's q-value (a fraction, 0 to 1) from the table; never filtered on |
+/// | `go_release` | [`Table::strings`] | the go.obo `data-version`; `None`: the file has none |
+/// | `go_obo_sha256` | [`Table::strings`] | sha256 of the go.obo |
+/// | `annotation_db_sha256` | [`Table::strings`] | sha256 of the decompressed annotation database |
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoAnnotations {
+    /// The protein-group table read.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub groups_file: String,
+    /// Lower-case hex sha256 of that table's bytes; also [`Self::header`]'s `source_file_sha256`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub groups_file_sha256: String,
+    /// Rows in the protein-group table, decoys included.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub table_row_count: u64,
+    /// Of those, decoy groups (a label containing `D`, so an entrapment decoy `ED` too), which are
+    /// skipped: decoys carry no GO.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub decoy_group_count: u64,
+    /// Groups annotated: every non-decoy group, contaminants included, each once even when
+    /// MetaMorpheus wrote it twice (mzLib #1366).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub group_count: u64,
+    /// The database the terms came from.
+    pub annotation_database: AnnotationDatabase,
+    /// The ontology release the terms were propagated over.
+    pub go: GoRelease,
+    /// Whether [`GoAnnotateOptions::skip_unknown_go_ids`] was set.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub skip_unknown_go_ids: bool,
+    /// GO ids the database cites that the release lacks, dropped because
+    /// [`GoAnnotateOptions::skip_unknown_go_ids`] was set, in ordinal order. Always empty otherwise
+    /// (the call fails instead).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub unresolved_go_ids: Vec<String>,
+    /// mzLib's `#!key value` header, as its writer produced it: `go_annotation_format`,
+    /// `mzlib_version`, `mzlib_release`, `go_release`, every sha256, and the counters
+    /// `n_multi_member_groups` and one `status_<status>` per status. **The counters count groups,
+    /// not rows, and only groups at q <= `counter_q_value_max` (0.01)**; the rows themselves are not
+    /// filtered. Every value is a string, as in the file.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub header: BTreeMap<String, String>,
+    /// Rows in the whole table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// Rows in [`Self::columns`]: the `limit`/`offset` window.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub returned_count: u64,
+    /// The offset applied, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub offset: u64,
+    /// True whenever rows were left out of [`Self::columns`] by `limit` or `offset`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub truncated: bool,
+    /// What this result cannot tell you: ids dropped from the database, a go.obo with no release,
+    /// what mzLib did loading the database.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+    /// Where the whole table was written; `None`: `out` was not given.
+    #[serde(default)]
+    pub written: Option<WrittenTable>,
+    /// Your category map applied to these terms; `None`: `category_map` was not given.
+    #[serde(default)]
+    pub categories: Option<GoCategories>,
+    /// Where the category table was written; `None`: `categories_out` was not given.
+    #[serde(default)]
+    pub categories_written: Option<WrittenTable>,
+    /// The table, for the returned window; see the type's docs for its columns.
+    #[serde(flatten)]
+    pub columns: Table,
+}
+
+/// What [`update_go`] returns: which go.obo is now on disk, and whether it changed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct GoUpdate {
+    /// The path written.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub go_obo_file: String,
+    /// Where it was fetched from: GO's PURL, `https://purl.obolibrary.org/obo/go.obo`, which
+    /// always serves the **current** release.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub url: String,
+    /// Whether a file was already at the path.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub existed_before: bool,
+    /// That file's sha256; `None`: no file was there.
+    #[serde(default)]
+    pub previous_sha256: Option<String>,
+    /// Whether the file on disk now differs from what was there (true for a first download). When
+    /// it does and a file existed, the old one was kept beside it as
+    /// `<name>.<yyyyMMdd-HHmmss-fff>`; see [`Self::caveats`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub changed: bool,
+    /// The release now at the path, read back with mzLib's `GeneOntologyGraph.Load`, so a
+    /// truncated download fails here rather than in a later [`annotate_go_with`].
+    pub go: GoRelease,
+    /// The backup kept when a different file was replaced; a file with no `data-version`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// One cell of a map-valued column such as `evidence_by_member`: member accession → its strings.
+pub type StringListMap = BTreeMap<String, Vec<String>>;
+
+/// A column whose every cell maps a string to a list of strings — `evidence_by_member` — with a
+/// wire `null` as `None`.
+///
+/// # Errors
+///
+/// [`MzLibError::Usage`] if the column is absent (the message names the columns there are),
+/// [`MzLibError::Protocol`] if a cell is not such a map.
+pub fn string_list_maps(table: &Table, column: &str) -> Result<Vec<Option<StringListMap>>> {
+    let cells = table.raw(column).ok_or_else(|| {
+        MzLibError::Usage(format!(
+            "No column '{column}' in this table. Its columns are: {}.",
+            table.names().join(", ")
+        ))
+    })?;
+    cells
+        .iter()
+        .enumerate()
+        .map(|(row, cell)| match cell {
+            Value::Null => Ok(None),
+            Value::Object(_) => serde_json::from_value(cell.clone())
+                .map(Some)
+                .map_err(|_| map_error(column, row, cell)),
+            other => Err(map_error(column, row, other)),
+        })
+        .collect()
+}
+
+fn map_error(column: &str, row: usize, cell: &Value) -> MzLibError {
+    MzLibError::Protocol(format!(
+        "Column '{column}' row {row} is not a map of string lists: {cell}"
+    ))
+}
+
+fn annotate_go_request(
+    groups: &Path,
+    database: &Path,
+    options: &GoAnnotateOptions,
+) -> Result<Vec<String>> {
+    let mut args = vec![
+        "proteins".to_owned(),
+        "annotate-go".to_owned(),
+        "--groups".to_owned(),
+        optional_path(groups, "groups")?,
+        "--database".to_owned(),
+        optional_path(database, "database")?,
+        "--go-obo".to_owned(),
+        optional_path(&options.go_obo, "go_obo").map_err(|_| {
+            MzLibError::Usage(
+                "go_obo is required: a go.obo you keep, e.g. 'go.obo'. Nothing is downloaded; \
+                 fetch a release on purpose with mzlib::proteins::update_go."
+                    .to_owned(),
+            )
+        })?,
+    ];
+    for (option, value, what) in [
+        ("--category-map", &options.category_map, "category_map"),
+        ("--out", &options.out, "out"),
+        (
+            "--categories-out",
+            &options.categories_out,
+            "categories_out",
+        ),
+    ] {
+        if let Some(path) = value {
+            args.push(option.to_owned());
+            args.push(optional_path(path, what)?);
+        }
+    }
+    if options.skip_unknown_go_ids {
+        args.push("--skip-unknown-go-ids".to_owned());
+    }
+    if let Some(limit) = options.limit {
+        args.push("--limit".to_owned());
+        args.push(limit.to_string());
+    }
+    args.push("--offset".to_owned());
+    args.push(options.offset.to_string());
+    Ok(args)
+}
+
+fn update_go_request(go_obo: &Path) -> Result<Vec<String>> {
+    Ok(vec![
+        "proteins".to_owned(),
+        "update-go".to_owned(),
+        "--go-obo".to_owned(),
+        optional_path(go_obo, "go_obo")?,
+    ])
+}
+
+/// Annotate MetaMorpheus protein groups with Gene Ontology terms against a go.obo you keep, with
+/// every other default.
+///
+/// See [`annotate_go_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`annotate_go_with`].
+pub fn annotate_go(
+    groups: impl AsRef<Path>,
+    database: impl AsRef<Path>,
+    go_obo: impl AsRef<Path>,
+) -> Result<GoAnnotations> {
+    annotate_go_with(
+        groups,
+        database,
+        &GoAnnotateOptions {
+            go_obo: go_obo.as_ref().to_path_buf(),
+            ..GoAnnotateOptions::default()
+        },
+    )
+}
+
+/// Annotate a stored MetaMorpheus protein-group table with Gene Ontology terms, keeping every
+/// member: one row per (group, term) that any member holds, directly or through an ancestor.
+///
+/// Wraps mzLib's `GoGroupAnnotator` over the table MetaMorpheus wrote
+/// (`ProteinGroupFromTsv.ToGoAnnotationGroups`). For each group it returns one row per GO term that
+/// **any** member holds — directly, or by propagation up `is_a` and `part_of` — and each row names
+/// the members that carry it. Nothing is collapsed: the union, the consensus and the direct-only
+/// views are filters on the rows (see [`GoAnnotations`]).
+///
+/// **Every non-decoy group gets at least one row.** A group with no term gets a single row whose
+/// `annotation_status` says why: `no_go_terms` (its members have none), `no_entry` (a member is not
+/// in the database — annotate against the database the search used), or `contaminant`.
+///
+/// **Pin the ontology.** Terms and their ancestors change between GO releases, so a result means
+/// something only relative to one go.obo. This reads the file you name and never downloads one;
+/// fetch a release on purpose with [`update_go`], keep the file, and record [`GoAnnotations::go`]
+/// (its `sha256`) with your results.
+///
+/// `groups` is a MetaMorpheus protein-group table — `AllQuantifiedProteinGroups.tsv`, or, from a
+/// search without quantification, `AllProteinGroups.tsv` or a file's `<file>_ProteinGroups.tsv`.
+/// `database` is the UniProt XML (`.xml` or `.xml.gz`) the search used; a FASTA is refused, because
+/// it carries no GO and every group would read `no_go_terms` whatever the proteins are.
+///
+/// Needs the bridge from pyMzLib 0.3.0 or later: an older one is refused before anything is read.
+#[doc = include_str!("../docs/reference/proteins.annotate-go.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for an empty `groups`, `database` or
+/// `go_obo` path, or a bridge too old to dispatch the verb.
+///
+/// # Examples
+///
+/// A real MetaMorpheus search (PXD036557): five protein groups and a decoy, the five UniProt
+/// entries they name, and the GO release mzLib propagated over:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{annotate_go_with, string_list_maps, GoAnnotateOptions};
+///
+/// let go = annotate_go_with(
+///     "PXD036557_AllQuantifiedProteinGroups.tsv",
+///     "pxd036557_proteins.xml",
+///     &GoAnnotateOptions {
+///         go_obo: "go-pxd036557.obo".into(),
+///         category_map: Some("organelle_map.tsv".into()),
+///         ..Default::default()
+///     },
+/// )?;
+/// assert_eq!((go.group_count, go.row_count), (5, 563));
+/// assert_eq!(go.go.release.as_deref(), Some("releases/2026-07-26"));
+/// assert_eq!(go.header["status_annotated"], "4");     // groups at q <= 0.01, not rows
+/// assert_eq!(go.header["status_contaminant"], "1");
+///
+/// // The histone group: the union holds 106 terms, of which both members carry 57.
+/// let groups = go.columns.strings("protein_group")?;
+/// let n_with = go.columns.integers("n_with")?;
+/// let n_members = go.columns.integers("n_members")?;
+/// let histones: Vec<usize> = (0..groups.len())
+///     .filter(|&i| groups[i].as_deref() == Some("P0C0S5|Q71UI9"))
+///     .collect();
+/// let consensus = histones.iter().filter(|&&i| n_with[i] == n_members[i]).count();
+/// assert_eq!((histones.len(), consensus), (106, 57));
+///
+/// // Evidence stays per member.
+/// let evidence = string_list_maps(&go.columns, "evidence_by_member")?;
+/// assert!(evidence[histones[0]].as_ref().is_some_and(|by| by.contains_key("P0C0S5")));
+///
+/// let categories = go.categories.as_ref().expect("a category map was given");
+/// assert_eq!((categories.map_name.as_str(), categories.row_count), ("organelle", 30));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// For a whole proteome, write the table with mzLib's own writer and take back only the summary:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{annotate_go_with, GoAnnotateOptions};
+///
+/// let go = annotate_go_with(
+///     "PXD036557_AllQuantifiedProteinGroups.tsv",
+///     "pxd036557_proteins.xml",
+///     &GoAnnotateOptions {
+///         go_obo: "go-pxd036557.obo".into(),
+///         out: Some("go_annotations.tsv".into()),
+///         limit: Some(0),
+///         ..Default::default()
+///     },
+/// )?;
+/// let written = go.written.as_ref().expect("out was given");
+/// assert_eq!(written.row_count, Some(563));            // the whole table, on disk
+/// assert_eq!((go.returned_count, go.truncated), (0, true));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/proteins.annotate-go.see-also.md")]
+pub fn annotate_go_with(
+    groups: impl AsRef<Path>,
+    database: impl AsRef<Path>,
+    options: &GoAnnotateOptions,
+) -> Result<GoAnnotations> {
+    let args = annotate_go_request(groups.as_ref(), database.as_ref(), options)?;
+    bridge::require_verb("proteins annotate-go", bridge::MZLIB_1_0_593_BRIDGE)?;
+    call((args, None), options.timeout)
+}
+
+/// Download the current Gene Ontology release (go.obo) to a path, on purpose, keeping any
+/// different file already there as a timestamped backup.
+///
+/// Wraps mzLib's `Loaders.UpdateGeneOntology`. The whole go.obo (tens of megabytes) is streamed from
+/// GO's PURL, which always serves the **current** release. When a file is already at the path, it
+/// is kept beside the new one as `<name>.<yyyyMMdd-HHmmss-fff>` if the download differs, and left
+/// alone if it is the same, so earlier runs stay reproducible. A failed download leaves any
+/// existing file untouched.
+///
+/// This is the only function in this crate that fetches a go.obo. [`annotate_go_with`] never
+/// does, so the release a result was computed against is always a file you chose to keep. mzLib
+/// itself gives up after two minutes without data; it sets no overall timeout, and neither does
+/// this.
+///
+/// Needs the bridge from pyMzLib 0.3.0 or later: an older one is refused before anything is
+/// fetched.
+#[doc = include_str!("../docs/reference/proteins.update-go.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for an empty path, or a bridge too old to
+/// dispatch the verb.
+///
+/// # Examples
+///
+/// The recording was made into an empty folder, so this was a first download:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// let update = mzlib::proteins::update_go("go.obo")?;
+/// assert_eq!(update.go.release.as_deref(), Some("releases/2026-07-26"));
+/// assert_eq!(update.go.term_count, 48340);
+/// assert_eq!((update.existed_before, update.changed), (false, true));
+/// assert_eq!(update.previous_sha256, None);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/proteins.update-go.see-also.md")]
+pub fn update_go(go_obo: impl AsRef<Path>) -> Result<GoUpdate> {
+    let args = update_go_request(go_obo.as_ref())?;
+    bridge::require_verb("proteins update-go", bridge::MZLIB_1_0_593_BRIDGE)?;
+    call((args, None), None)
+}
+
 #[cfg(test)]
 mod tests {
     //! Offline. The recordings are pyMzLib's, byte for byte, made against the small databases in
@@ -1407,5 +1984,285 @@ mod tests {
             string_lists(&calls.columns, "nonesuch"),
             Err(MzLibError::Usage(_))
         ));
+    }
+
+    // ---- annotate-go and update-go ----------------------------------------------------------------
+
+    const GO: &str = include_str!("../tests/fixtures/proteins_annotate_go_pxd036557.json");
+    const GO_OUT: &str = include_str!("../tests/fixtures/proteins_annotate_go_out.json");
+    const GO_UPDATE: &str = include_str!("../tests/fixtures/proteins_update_go.json");
+
+    fn go_options() -> GoAnnotateOptions {
+        GoAnnotateOptions {
+            go_obo: "go-pxd036557.obo".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Row indices whose `protein_group` is `group`.
+    fn rows_of(go: &GoAnnotations, group: &str) -> Vec<usize> {
+        let groups = go.columns.strings("protein_group").unwrap();
+        (0..groups.len())
+            .filter(|&i| groups[i].as_deref() == Some(group))
+            .collect()
+    }
+
+    #[test]
+    fn every_non_decoy_group_is_annotated_and_the_decoy_skipped() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        assert_eq!(
+            (go.table_row_count, go.decoy_group_count, go.group_count),
+            (6, 1, 5)
+        );
+        assert_eq!((go.row_count, go.returned_count), (563, 563));
+        assert_eq!(go.columns.rows(), 563);
+        assert!(!go.truncated);
+        let mut groups: Vec<String> = Vec::new();
+        for group in go
+            .columns
+            .strings("protein_group")
+            .unwrap()
+            .into_iter()
+            .flatten()
+        {
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+        assert_eq!(
+            groups,
+            ["P68363", "P05141", "P0C0S5|Q71UI9", "P02769", "P63104"]
+        );
+    }
+
+    #[test]
+    fn a_contaminant_is_one_term_less_row_that_says_why() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        let albumin = rows_of(&go, "P02769");
+        assert_eq!(albumin.len(), 1);
+        let i = albumin[0];
+        assert_eq!(
+            go.columns.strings("annotation_status").unwrap()[i].as_deref(),
+            Some("contaminant")
+        );
+        assert_eq!(go.columns.strings("go_id").unwrap()[i], None);
+        assert_eq!(go.columns.strings("aspect").unwrap()[i], None);
+        assert_eq!(go.columns.booleans("inherited").unwrap()[i], None);
+        assert_eq!(go.columns.booleans("propagated").unwrap()[i], None);
+        assert_eq!(go.columns.integers("n_with").unwrap()[i], Some(0));
+        assert_eq!(
+            string_lists(&go.columns, "accession_used").unwrap()[i],
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn the_union_keeps_both_histones_and_the_consensus_is_a_filter() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        let histones = rows_of(&go, "P0C0S5|Q71UI9");
+        let n_with = go.columns.integers("n_with").unwrap();
+        let n_members = go.columns.integers("n_members").unwrap();
+        let consensus = histones
+            .iter()
+            .filter(|&&i| n_with[i] == n_members[i])
+            .count();
+        assert_eq!((histones.len(), consensus), (106, 57));
+    }
+
+    #[test]
+    fn evidence_is_kept_per_member() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        let names = go.columns.strings("go_name").unwrap();
+        let evidence = string_list_maps(&go.columns, "evidence_by_member").unwrap();
+        let nucleosome = rows_of(&go, "P0C0S5|Q71UI9")
+            .into_iter()
+            .find(|&i| names[i].as_deref() == Some("nucleosome"))
+            .unwrap();
+        let mut want = BTreeMap::new();
+        want.insert("P0C0S5".to_owned(), vec!["ECO:0000353".to_owned()]);
+        want.insert("Q71UI9".to_owned(), vec!["ECO:0000353".to_owned()]);
+        assert_eq!(evidence[nucleosome], Some(want));
+        assert!(matches!(
+            string_list_maps(&go.columns, "go_id"),
+            Err(MzLibError::Protocol(_))
+        ));
+        assert!(matches!(
+            string_list_maps(&go.columns, "nonesuch"),
+            Err(MzLibError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn the_column_names_are_mzlibs_schema() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        let names = go.columns.names();
+        assert_eq!(names.len(), 19);
+        assert_eq!(names[0], "protein_group");
+        assert_eq!(
+            names[16..],
+            ["go_release", "go_obo_sha256", "annotation_db_sha256"]
+        );
+    }
+
+    #[test]
+    fn provenance_pins_every_input() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        assert_eq!(go.go.source_file_name, "go-pxd036557.obo");
+        assert_eq!(go.go.release.as_deref(), Some("releases/2026-07-26"));
+        assert_eq!(go.go.term_count, 412);
+        assert_eq!(
+            go.annotation_database.file_type.as_deref(),
+            Some("UniProtXml")
+        );
+        assert_eq!(go.annotation_database.protein_count, 5);
+        assert_eq!(go.header["source_file_sha256"], go.groups_file_sha256);
+        assert_eq!(
+            go.header["annotation_db_sha256"],
+            go.annotation_database.sha256
+        );
+        assert_eq!(go.header["counter_q_value_max"], "0.01");
+        assert_eq!(go.header["n_multi_member_groups"], "1");
+        assert!(go
+            .columns
+            .strings("go_obo_sha256")
+            .unwrap()
+            .iter()
+            .all(|sha| sha.as_deref() == Some(go.go.sha256.as_str())));
+    }
+
+    #[test]
+    fn categories_join_on_go_id_and_say_the_subcategory() {
+        let go: GoAnnotations = serde_json::from_str(GO).unwrap();
+        let cats = go.categories.as_ref().unwrap();
+        assert_eq!(
+            (
+                cats.map_name.as_str(),
+                cats.map_version.as_str(),
+                cats.anchor_count,
+                cats.row_count
+            ),
+            ("organelle", "1", 9, 30)
+        );
+        let ids = cats.columns.strings("go_id").unwrap();
+        let subs = cats.columns.strings("subcategory").unwrap();
+        let sub_of = |id: &str| {
+            let i = ids.iter().position(|x| x.as_deref() == Some(id)).unwrap();
+            subs[i].clone()
+        };
+        assert_eq!(
+            sub_of("GO:0005743").as_deref(),
+            Some("mitochondrion:inner_membrane")
+        );
+        assert_eq!(sub_of("GO:0005739"), None);
+        assert!(go.written.is_none() && go.categories_written.is_none());
+        assert!(!go.skip_unknown_go_ids && go.unresolved_go_ids.is_empty());
+    }
+
+    #[test]
+    fn out_with_limit_zero_returns_only_the_summary() {
+        let go: GoAnnotations = serde_json::from_str(GO_OUT).unwrap();
+        assert_eq!(
+            go.written,
+            Some(WrittenTable {
+                path: "go_annotations.tsv".to_owned(),
+                row_count: Some(563)
+            })
+        );
+        assert_eq!((go.returned_count, go.columns.rows()), (0, 0));
+        assert!(go.truncated && go.categories.is_none());
+    }
+
+    #[test]
+    fn the_required_inputs_go_on_argv_and_the_optional_ones_follow() {
+        let args = annotate_go_request(Path::new("groups.tsv"), Path::new("db.xml"), &go_options())
+            .unwrap();
+        assert_eq!(
+            args,
+            [
+                "proteins",
+                "annotate-go",
+                "--groups",
+                "groups.tsv",
+                "--database",
+                "db.xml",
+                "--go-obo",
+                "go-pxd036557.obo",
+                "--offset",
+                "0"
+            ]
+        );
+        let args = annotate_go_request(
+            Path::new("groups.tsv"),
+            Path::new("db.xml"),
+            &GoAnnotateOptions {
+                category_map: Some("map.tsv".into()),
+                skip_unknown_go_ids: true,
+                out: Some("go.tsv".into()),
+                categories_out: Some("cats.tsv".into()),
+                limit: Some(0),
+                offset: 5,
+                ..go_options()
+            },
+        )
+        .unwrap();
+        for (option, value) in [
+            ("--category-map", "map.tsv"),
+            ("--out", "go.tsv"),
+            ("--categories-out", "cats.tsv"),
+            ("--limit", "0"),
+            ("--offset", "5"),
+        ] {
+            let at = args.iter().position(|a| a == option).unwrap();
+            assert_eq!(args[at + 1], value);
+        }
+        assert!(args.contains(&"--skip-unknown-go-ids".to_owned()));
+    }
+
+    #[test]
+    fn a_missing_go_obo_or_input_is_refused_before_anything_is_spawned() {
+        let error = annotate_go_request(
+            Path::new("groups.tsv"),
+            Path::new("db.xml"),
+            &GoAnnotateOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("update_go"), "{error}");
+        for (groups, database) in [("", "db.xml"), ("groups.tsv", " ")] {
+            let error = annotate_go_request(Path::new(groups), Path::new(database), &go_options())
+                .unwrap_err();
+            assert!(matches!(error, MzLibError::Usage(_)), "{error}");
+        }
+    }
+
+    #[test]
+    fn update_go_reports_the_release_now_on_disk() {
+        let update: GoUpdate = serde_json::from_str(GO_UPDATE).unwrap();
+        assert_eq!(
+            update_go_request(Path::new("go.obo")).unwrap(),
+            ["proteins", "update-go", "--go-obo", "go.obo"]
+        );
+        assert_eq!(
+            (
+                update.existed_before,
+                update.previous_sha256.as_deref(),
+                update.changed
+            ),
+            (false, None, true)
+        );
+        assert_eq!(update.go.release.as_deref(), Some("releases/2026-07-26"));
+        assert_eq!(update.go.term_count, 48340);
+        assert_eq!(update.url, "https://purl.obolibrary.org/obo/go.obo");
+        assert!(matches!(
+            update_go_request(Path::new("")),
+            Err(MzLibError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn the_statuses_are_mzlibs_four() {
+        assert_eq!(
+            ANNOTATION_STATUSES,
+            ["annotated", "no_go_terms", "no_entry", "contaminant"]
+        );
     }
 }

@@ -15,6 +15,17 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **Gene Ontology for protein groups** (pyMzLib #70; specs `proteins.annotate-go.yaml`,
+  `proteins.update-go.yaml`). `proteins::annotate_go_with` (+ `annotate_go`, `GoAnnotateOptions`)
+  annotates a stored MetaMorpheus protein-group table against a UniProt XML and a go.obo you keep,
+  with mzLib's `GoGroupAnnotator`: one row per (group, GO term) that any member holds, directly or
+  through an ancestor, in mzLib's `GoAnnotationTsv` columns, with every input's sha256, mzLib's
+  header counters, an optional category map (`GoCategories`), and `out` / `categories_out` written
+  by mzLib's own writers. `proteins::update_go` fetches the current release on purpose, keeping a
+  different file as a timestamped backup (`GoUpdate`). `string_list_maps` reads the
+  `evidence_by_member` column. Both need the bridge from pyMzLib 0.3.0 and are refused, before
+  anything is spawned, by an older one.
+
 - **The bridge pin moves to pyMzLib v0.3.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
   fetches it, verified against that release's `SHA256SUMS`.
 - **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365).

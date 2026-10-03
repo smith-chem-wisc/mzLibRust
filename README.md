@@ -84,6 +84,9 @@ let ages = mzlib::sdrf::parse_ages(&["58Y", "40Y-85Y", ">=90Y", "63"])?;   // ye
 let db = mzlib::proteins::read(&["human.xml"])?;
 println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
 let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bovine.fasta"])?;
+
+// Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
+let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
 ```
 
 ### Reading: one universal function, four typed views
@@ -131,7 +134,11 @@ organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on re
 `resolve_genes_with` resolves proteins to stable Ensembl gene ids against a gene set you pin;
 `classify_peptides` sorts peptides into Unique, SharedWithinGene, SharedAcrossGenes or
 NotInDatabase, treating I and L as the same residue. A FASTA's silence about GO and Ensembl is
-reported in `absent_fields`, never as an empty answer.
+reported in `absent_fields`, never as an empty answer. `annotate_go_with` annotates a stored
+MetaMorpheus protein-group table with GO terms: one row per (group, term) that any member holds,
+directly or through an ancestor, naming the members that carry it, so consensus and direct-only
+views are filters rather than a pick. It reads only a go.obo you keep; `update_go` is the one call
+that fetches a release.
 
 Because the column set depends on the format, a read returns a `Table` rather than a struct with
 named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can

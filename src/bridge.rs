@@ -635,7 +635,6 @@ pub(crate) const MZLIB_1_0_592_BRIDGE: &str = "0.2.0";
 /// Checked before `proteins annotate-go`, `proteins update-go`, `stats fit`, `stats adjust` and
 /// `stats meta`, the same five pyMzLib checks. `sdrf design` and `isobaric kits` are not checked,
 /// in either binding.
-#[allow(dead_code)]
 pub(crate) const MZLIB_1_0_593_BRIDGE: &str = "0.3.0";
 
 /// The verbs each bridge reported, keyed by the executable's path, so the check below costs one
