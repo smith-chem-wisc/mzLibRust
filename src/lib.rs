@@ -82,6 +82,10 @@
 //! per verb that all three bindings share. See `docs/reference-facts.md` in the repository.
 
 #![forbid(unsafe_code)]
+// The reference fragments (docs/reference/) are rendered once and included into modules with
+// different imports, so they link `crate::MzLibError::Usage` explicitly: the target is needed where
+// `MzLibError` is not in scope and redundant where it is. rustdoc 1.99 reports the second case.
+#![allow(rustdoc::redundant_explicit_links)]
 
 pub mod bridge;
 pub mod flashlfq;
