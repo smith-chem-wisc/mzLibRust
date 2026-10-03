@@ -15,6 +15,50 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **Every guide opens with a question table, runs on real data, and says what to cite** (pyMzLib
+  #72). A module's `//!` documentation is its guide; `tests/docs_lint.rs` holds each one to a
+  `| You want to | Call | mzLib type |` table in its first lines, a `## Cite` section rendered from
+  the specs' DOIs (`docs/reference/cite.<module>.md`), examples that run or say `Not run:` and why,
+  and no counts or mzLib versions in prose (README and the crate front page included). New worked
+  examples replay pyMzLib's guide recordings: the K562 MBR run and its median polish, the full
+  albumin digest, PXD000001's FTP tree and an unknown accession, the MSFragger identify, the RNA
+  transcript groups, MS1 peaks, a filtered protein read and the SDRF assessments. The crate front
+  page gains *Citing* and a generated *Which function do I want?* table; `MzLibError` lists every
+  error each verb can return; `docs/upgrading.md` lists the changes that give a different answer
+  from the same file; `CITATION.cff` gives the software citation.
+
+- **Gene Ontology for protein groups** (pyMzLib #70; specs `proteins.annotate-go.yaml`,
+  `proteins.update-go.yaml`). `proteins::annotate_go_with` (+ `annotate_go`, `GoAnnotateOptions`)
+  annotates a stored MetaMorpheus protein-group table against a UniProt XML and a go.obo you keep,
+  with mzLib's `GoGroupAnnotator`: one row per (group, GO term) that any member holds, directly or
+  through an ancestor, in mzLib's `GoAnnotationTsv` columns, with every input's sha256, mzLib's
+  header counters, an optional category map (`GoCategories`), and `out` / `categories_out` written
+  by mzLib's own writers. `proteins::update_go` fetches the current release on purpose, keeping a
+  different file as a timestamped backup (`GoUpdate`). `string_list_maps` reads the
+  `evidence_by_member` column. Both need the bridge from pyMzLib 0.3.0 and are refused, before
+  anything is spawned, by an older one.
+- **`sdrf::design_with`, `sdrf::design`** (`sdrf design`, pyMzLib #69, mzLib #1363): the
+  label-free experimental design read out of an SDRF by mzLib's `SdrfLabelFreeDesign`, as an
+  `SdrfDesign` with `is_valid`, every refusal at once, and `notes` recording each renumbering.
+  `DesignOptions { condition_columns, searched_files, out, timeout }`. `SdrfDesign::files` gives
+  the 0-based `DesignedFile` rows; `spectra` and `run_design` hand them to `flashlfq::quantify_with`
+  and `median_polish_with`, and refuse a refused design. `out` writes MetaMorpheus's 1-based
+  `ExperimentalDesign.tsv` through mzLib's writer.
+- **The `isobaric` module** (`isobaric kits`, pyMzLib #69): `isobaric::kits(None)` lists every
+  kit mzLib can name and `kits(Some("TMT18"))` one, matched by mzLib's whole-name rule. Each
+  channel's label, theoretical reporter-ion m/z and matching window as an `IsobaricKits` table,
+  grouped by `by_kit` and `kit`.
+
+- **`stats`, a new module: differential abundance with no R** (pyMzLib #71; specs
+  `stats.fit.yaml`, `stats.adjust.yaml`, `stats.meta.yaml`). `fit`/`fit_with` is limma's `lmFit`
+  then `eBayes(legacy = TRUE)` (`FitOptions { trend, spline_basis, threads, timeout }`, returning
+  `ModeratedFit` with its `VariancePrior` and typed `FitRow`s per coefficient); `adjust` is
+  Benjamini-Hochberg over `&[Option<f64>]`, `None` left out of the family; `meta`/`meta_with` pools
+  `Study` effect sizes per feature with DerSimonian-Laird (`MetaOptions { confidence, timeout }`).
+  Every number is mzLib's. Against limma's and metafor's own reference output, through this crate,
+  the worst relative difference is below 1e-10. Needs the bridge from pyMzLib 0.3.0: an older one is
+  refused before anything is read. The reference tables are pyMzLib's `tests/fixtures/stats/`, byte
+  for byte.
 - **The bridge pin moves to pyMzLib v0.3.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
   fetches it, verified against that release's `SHA256SUMS`.
 - **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365).
@@ -102,6 +146,12 @@ A wire verb's first appearance here is the version its spec in the bridge record
 - This changelog.
 
 ### Changed
+
+- **`QuantifyOptions::use_pep_q_value` says what it does**: it filters nothing, and changes the
+  q-value FlashLFQ carries, which match-between-runs reads. `bayesian_protein_quant`'s results are
+  written to `output_directory` only (pyMzLib #72).
+- **The hand-written `pride_ftp_PXD000001.json` is gone**: the FTP examples and tests replay
+  pyMzLib's recording of the real tree, which holds 14 files.
 
 - **Four shipped modifications now write their Unimod accession in `pro_forma`** (mzLib #1328):
   `GG (Ubiquitination Site)` as `[UNIMOD:121]`, both `Myristoylation` entries as `[UNIMOD:45]` and

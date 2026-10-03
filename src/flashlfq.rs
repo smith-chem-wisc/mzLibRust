@@ -1,5 +1,68 @@
 //! Label-free quantification with FlashLFQ: quantify a search's peptides across mzML runs.
 //!
+//! | You want to | Call | mzLib type |
+//! |---|---|---|
+//! | Quantify peptides and proteins across runs | [`quantify_with`] | `FlashLfqEngine.Run` |
+//! | Fill in peptides missing from a run | [`quantify_with`] with [`QuantifyOptions::match_between_runs`], then [`FlashLfqResults::peaks`] | FlashLFQ's match-between-runs |
+//! | Group runs into conditions and replicates | [`SpectraFile`] (`condition`, `biological_replicate`, ...) | `SpectraFileInfo` |
+//! | Re-roll proteins from a peptide table, without the mzML | [`median_polish_with`] | `FlashLfqResults.CalculateProteinResultsMedianPolish` |
+//!
+//! ## A real run, end to end
+//!
+//! Every example in this guide runs in CI against a FlashLFQ run recorded through the real bridge
+//! on mzLib's own test data: two K562 runs and their MetaMorpheus search, with match-between-runs
+//! on.
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
+//!
+//! let runs = [
+//!     SpectraFile::from("20100614_Velos1_TaGe_SA_K562_3.mzML"),
+//!     SpectraFile::from("20100614_Velos1_TaGe_SA_K562_4.mzML"),
+//! ];
+//! let result = quantify_with(
+//!     "AllPSMs.psmtsv", // a MetaMorpheus search result
+//!     &runs,
+//!     &QuantifyOptions { match_between_runs: true, max_threads: 1, ..Default::default() },
+//! )?;
+//! assert_eq!(result.identification_count, 594);
+//! assert_eq!((result.peptides.len(), result.proteins.len()), (354, 943));
+//!
+//! // A peptide carries its intensity in each run, keyed by the run's base file name. The identity
+//! // FlashLFQ quantifies is the modified sequence.
+//! let run3 = result.spectra_files[0].file_name.as_str();
+//! assert_eq!(run3, "20100614_Velos1_TaGe_SA_K562_3");
+//! let p = &result.peptides[0];
+//! assert_eq!(p.sequence, "AHQLVMEGYNWC[Common Fixed:Carbamidomethyl on C]HDR");
+//! assert_eq!(p.protein_groups, "H0YC23;P62714;P67775");
+//! assert_eq!((p.intensity(run3).round(), p.detection_type(run3)), (1_930_193.0, "MSMS"));
+//!
+//! // Match-between-runs: 140 peaks were quantified in a run where their peptide was never
+//! // identified. The peptide table carries few of them, and none of run 3's.
+//! assert_eq!(result.mbr_peak_count(), 140);
+//! let in_peptide_table = result.peptides.iter().filter(|p| p.detection_type(run3) == "MBR").count();
+//! assert_eq!(in_peptide_table, 0);
+//! let first = result.mbr_peaks()[0];
+//! assert_eq!((first.file_name.as_str(), first.sequence.as_str()), (run3, "RVHVTQEDFEMAVAK"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! So a peptide × run matrix built from [`Peptide::intensity`] silently drops most of what MBR
+//! filled in: build it from [`FlashLfqResults::peaks`], which carry every transfer.
+//!
+//! The table that run wrote, `QuantifiedPeptides.tsv` (renamed here to tell it apart), re-rolls into
+//! the same proteins with [`median_polish_with`], because it is the method [`quantify_with`] runs:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let proteins = mzlib::flashlfq::median_polish("K562_QuantifiedPeptides.tsv")?;
+//! assert_eq!(proteins.proteins.len(), 943);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! ## Smaller examples
+//!
 //! The question this answers is the one a quant workflow actually asks — *given these
 //! identifications and these runs, how much of each peptide and protein is in each run?* — in one
 //! call:
@@ -68,6 +131,12 @@
 //! carry the same set of fractions. And [`QuantifyOptions::mbr_q_value_threshold`] is the FDR
 //! control that makes transfers trustworthy — without it a bake-off arm measured roughly 80% false
 //! transfers.
+//!
+//! ## Cite
+//!
+//! Cite mzLib, this crate, and the method:
+//!
+#![doc = include_str!("../docs/reference/cite.flashlfq.md")]
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -477,9 +546,12 @@ pub struct QuantifyOptions {
     pub mbr_q_value_threshold: f64,
     /// Let peptides shared between protein groups contribute to protein quant.
     pub use_shared_peptides_for_protein_quant: bool,
-    /// Run FlashLFQ's Bayesian protein-fold-change engine.
+    /// Also run FlashLFQ's Bayesian protein-fold-change engine. Its results are written to
+    /// [`Self::output_directory`] only; nothing in the returned [`FlashLfqResults`] changes.
     pub bayesian_protein_quant: bool,
-    /// Filter identifications on PEP q-value rather than q-value.
+    /// Store each identification's PEP q-value as its q-value, instead of its q-value. **It
+    /// filters nothing here**: FlashLFQ is given every identification either way. It changes the
+    /// q-value FlashLFQ carries, which match-between-runs reads.
     pub use_pep_q_value: bool,
     /// Worker threads (FlashLFQ `MaxThreads`); `-1` lets FlashLFQ choose. mzLib resolves `-1`, or
     /// any value at least the core count, to cores − 1, and the result's
@@ -492,7 +564,9 @@ pub struct QuantifyOptions {
     /// intend to publish.
     pub max_threads: i32,
     /// If given, FlashLFQ also writes `QuantifiedPeaks.tsv`, `QuantifiedPeptides.tsv` and
-    /// `QuantifiedProteins.tsv` there.
+    /// `QuantifiedProteins.tsv` there, and, with [`Self::bayesian_protein_quant`],
+    /// `BayesianProteinQuant.tsv`. That file is the only place the Bayesian results appear: they
+    /// are not returned.
     pub output_directory: Option<String>,
     /// Seconds to allow. Large experiments legitimately take a while; `None` waits indefinitely.
     pub timeout: Option<Duration>,

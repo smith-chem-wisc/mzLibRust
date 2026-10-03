@@ -20,6 +20,8 @@ spec contradicts what the bridge emits, the spec is wrong, and it is fixed in th
 | Fragments | `docs/reference/<verb>.md`, `.bulk.md`, `.see-also.md` | Markdown rendered from each spec, included into rustdoc with `#[doc = include_str!(...)]`. Committed. |
 | Renderer and lint | `tests/spec_docs.rs` | Renders the fragments, fails when a committed one is stale, and holds every documented parameter and field to its spec. |
 | Replay bridge | `tools/replay-bridge/` | A stand-in bridge the doc examples run against, answering from `tests/fixtures/`. |
+| Indexes | `docs/reference/cite.<module>.md`, `index.which-function.md`, `index.errors.md` | Rendered from every spec: each guide's *Cite* section, the front page's *Which function do I want?*, and the errors listed on `MzLibError`. |
+| Guide lint | `tests/docs_lint.rs` | Holds every module guide to a question table, a *Cite* section, runnable examples and no counts or mzLib versions in prose. pyMzLib's `test_docs_lint.py`. |
 
 ## What a function's page looks like
 

@@ -5,6 +5,17 @@
 //! searched* — which sample, which organism part, which replicate, which instrument settings — and
 //! that is the half you need to group results across experiments.
 //!
+//! | You want to | Call | mzLib type |
+//! |---|---|---|
+//! | Read what the file says, cell for cell | [`read`], [`read_with`] | `SdrfDocument` |
+//! | Put several experiments in one table | [`pool_labelled`], [`pool`], [`pool_with`] | `SdrfCollection.Merge` |
+//! | Know whether a file is well-formed | [`validate`], [`validate_many`] | `SdrfValidator` |
+//! | Know whether several files write the same thing the same way | [`lint_labelled`], [`lint`] | `SdrfDriftLint` |
+//! | Know whether a file describes its samples at all | [`assess`], [`assess_many`] | `SdrfSampleInformativeness` |
+//! | Get what it says about each sample | [`samples`], [`samples_many`] | `SdrfSampleBlock` |
+//! | Read ages in years | [`parse_ages`] | `SdrfAge.TryParse` |
+//! | Drive a quantification from it, or learn why it cannot | [`design_with`], [`design`] | `SdrfLabelFreeDesign` |
+//!
 //! ```
 //! # mzlib_replay::activate();
 //! let doc = mzlib::sdrf::read("PXD000070.sdrf.tsv")?;
@@ -66,16 +77,8 @@
 //!
 //! ## Three questions about a document, and one about ages
 //!
-//! Each is mzLib's own answer (mzLib 1.0.592), projected once in the bridge for all three
-//! bindings, never reimplemented here:
-//!
-//! | question | function | mzLib |
-//! |---|---|---|
-//! | *Is this file well-formed?* | [`validate`], [`validate_many`] | `SdrfValidator` |
-//! | *Do these files write the same thing the same way?* | [`lint_labelled`], [`lint`] | `SdrfDriftLint` |
-//! | *Does this file describe its samples at all?* | [`assess`], [`assess_many`] | `SdrfSampleInformativeness` |
-//! | *What does it say about each sample?* | [`samples`], [`samples_many`] | `SdrfSampleBlock` |
-//! | *How old, in years?* | [`parse_ages`] | `SdrfAge.TryParse` |
+//! Each is mzLib's own answer, projected once in the bridge for all three bindings, never
+//! reimplemented here — the mzLib types are in the table at the top of this page.
 //!
 //! **The first three are blind in different places, which is why there are three.** A file of
 //! `"not available"` validates cleanly and lints clean, and only [`assess`] sees that it says
@@ -92,6 +95,22 @@
 //!     ("sdrf_cohort_partner.sdrf.tsv", "partner"),
 //! ])?;
 //! assert_eq!(drift.finding_count, 4);                                // ...but not like its partner
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! [`assess`] asks whether a file describes its samples at all. PXD000070's sample columns are
+//! filled and its replicates differ, but its factor value never varies, so it is `Partial`; a
+//! file whose characteristics are all blank is a `Skeleton`:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let a = mzlib::sdrf::assess("PXD000070.sdrf.tsv")?;
+//! assert_eq!(a.verdict, "Partial");
+//! assert_eq!(
+//!     (a.factor_value_varies, a.sample_is_described, a.biological_replicate_varies),
+//!     (false, true, true)
+//! );
+//! assert_eq!(mzlib::sdrf::assess("sdrf_skeleton.sdrf.tsv")?.verdict, "Skeleton");
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
@@ -114,7 +133,94 @@
 //! that would need a guess is refused with its reason, never assumed. A bare `63` is refused,
 //! because 63 years and 63 days are both plausible in one study.
 //!
+//! ## Turn an SDRF into a quantification design
+//!
+//! FlashLFQ and MetaMorpheus need an experimental design: which runs are the same condition,
+//! which are biological replicates, which are fractions of one sample. The SDRF already says all
+//! of that, and an invalid hand-written `ExperimentalDesign.tsv` is worse than none: MetaMorpheus
+//! skips quantification with one warning and no error. [`design_with`] reads the design out of the
+//! SDRF with mzLib's `SdrfLabelFreeDesign` (mzLib #1363), or refuses and lists **every** reason at
+//! once, so you fix the file once rather than once per failure.
+//!
+//! PXD067622, a TurboID proximity-labelling study — two genotypes by four treatments, three
+//! biological replicates each. Name the factor columns that make up the condition; their values
+//! are joined with `_`, in that order:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::sdrf::{design_with, DesignOptions};
+//!
+//! let both = DesignOptions {
+//!     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+//!     ..Default::default()
+//! };
+//! let d = design_with("PXD067622.sdrf.tsv", &both)?;
+//! assert_eq!((d.is_valid, d.file_count), (true, 24));
+//! for run in &d.files()?[..3] {
+//!     println!("{} | {} | {}", run.file_name, run.condition, run.biological_replicate);
+//! }
+//! assert_eq!(d.files()?[2].biological_replicate, 2);  // 0-based: the third replicate
+//!
+//! let spectra = d.spectra()?;                          // what flashlfq::quantify_with takes
+//! assert_eq!(spectra[0].condition.as_deref(), Some("SPRTN-TurboID CA_DMSO (vehicle)"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **The design is 0-based; `ExperimentalDesign.tsv` is 1-based.** `biological_replicate`,
+//! `technical_replicate` and `fraction` are mzLib's `SpectraFileInfo` coordinates, exactly what
+//! [`crate::flashlfq::quantify_with`] and [`crate::flashlfq::median_polish_with`] take.
+//! [`DesignOptions::out`] writes MetaMorpheus's file, and mzLib adds the one when it writes and
+//! nowhere else. Never add it yourself.
+//!
+//! **A refusal is a result, not an error.** PXD049018's depositors did not say which pulldown was
+//! treated: its `factor value[treatment]` is `not available` on every row, and a condition built
+//! from an unknown factor would pair samples nobody said were alike:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::sdrf::{design_with, DesignOptions};
+//! # let both = DesignOptions {
+//! #     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+//! #     ..Default::default()
+//! # };
+//! let refused = design_with("PXD049018.sdrf.tsv", &both)?;
+//! assert_eq!((refused.is_valid, refused.refusals.len()), (false, 20)); // one per run
+//! println!("{}", refused.report);                                       // mzLib's whole account
+//! assert!(refused.spectra().is_err());       // so it cannot reach FlashLFQ by accident
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **Replicate numbers are ranked within each condition**, and [`SdrfDesign::notes`] is the only
+//! record of the renumbering. A drafted SDRF often copies the study-wide run index from the file
+//! names (WT_DMSO1-3, CA_DMSO4-6, … CA_FA22-24); mzLib ranks them back, and the result is the
+//! hand-numbered design exactly:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::sdrf::{design_with, DesignOptions};
+//! # let both = DesignOptions {
+//! #     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+//! #     ..Default::default()
+//! # };
+//! let ranked = design_with("PXD067622_studywide.sdrf.tsv", &both)?;
+//! assert_eq!(ranked.notes.len(), 7);
+//! assert!(ranked.notes[1].ends_with("biological replicates renumbered 22 -> 1, 23 -> 2, 24 -> 3."));
+//! assert_eq!(ranked.columns, design_with("PXD067622.sdrf.tsv", &both)?.columns);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Without condition columns, mzLib uses the document's only factor column; PXD067622 has two, so
+//! leaving them undeclared is itself a refusal. When the SDRF names files without the directory
+//! you keep them in, or the search read only some of them, pass [`DesignOptions::searched_files`]:
+//! each must be named exactly (case and extension) by one row, and rows for other files are
+//! dropped and listed in `notes`. **Label-free only**: an isobaric SDRF needs a channel design this
+//! does not build; the channels themselves are [`crate::isobaric`].
+//!
 //! Ported from pyMzLib's `pymzlib.sdrf`, which decided the verbs, the wire fields and the caveats.
+//!
+//! ## Cite
+//!
+#![doc = include_str!("../docs/reference/cite.sdrf.md")]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1688,6 +1794,365 @@ pub fn parse_ages<S: AsRef<str>>(cells: &[S]) -> Result<ParsedAges> {
     call(&args, Some(&stdin), Some(DEFAULT_TIMEOUT))
 }
 
+// ---- design ---------------------------------------------------------------------------------
+
+/// How [`design_with`] reads a design. Every default is mzLib's.
+#[derive(Debug, Clone)]
+pub struct DesignOptions {
+    /// The `factor value[...]` columns the condition is built from, by exact (case-sensitive)
+    /// name, in the order their values are joined with `_`.
+    ///
+    /// **Empty** (the default) sends nothing, and mzLib uses the document's only factor column —
+    /// and refuses a document with several, because joining every factor could split a condition
+    /// on a nuisance factor. A blank name, or one holding a tab or line break, is a usage error.
+    pub condition_columns: Vec<String>,
+    /// The files the search will read, as paths or bare names. Each must be named **exactly**
+    /// (case and extension) by one SDRF row; rows for other files are dropped and reported in
+    /// [`SdrfDesign::notes`], and these paths become `full_path`.
+    ///
+    /// `None` (the default) takes the SDRF's own file names. `Some(vec![])` is sent as an empty
+    /// list, which mzLib refuses as a design, not as a usage error.
+    pub searched_files: Option<Vec<PathBuf>>,
+    /// Also write MetaMorpheus's `ExperimentalDesign.tsv` (1-based) here. Must end in `.tsv`,
+    /// checked before the SDRF is read. Written only when the design is valid: a refused design
+    /// writes nothing and [`SdrfDesign::written`] is `None`. MetaMorpheus finds the file only when
+    /// it is named `ExperimentalDesign.tsv` and sits beside the spectra.
+    pub out: Option<PathBuf>,
+    /// The longest the call may take. `None` waits indefinitely.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for DesignOptions {
+    fn default() -> Self {
+        Self {
+            condition_columns: Vec::new(),
+            searched_files: None,
+            out: None,
+            timeout: Some(DEFAULT_TIMEOUT),
+        }
+    }
+}
+
+/// The `ExperimentalDesign.tsv` that [`design_with`] wrote under [`DesignOptions::out`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DesignWritten {
+    /// The path written, as given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// Runs written, in files.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub file_count: u64,
+}
+
+/// One run of a label-free design, in mzLib's `SpectraFileInfo` coordinates: a row of
+/// [`SdrfDesign::files`].
+///
+/// The design coordinates are **0-based**, exactly as [`crate::flashlfq::quantify_with`] and
+/// [`crate::flashlfq::median_polish_with`] take them. `ExperimentalDesign.tsv` writes the same
+/// numbers plus one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesignedFile {
+    /// The file as the SDRF names it, or the searched path you passed for it.
+    pub full_path: String,
+    /// `full_path`'s file name without its extension — the run key FlashLFQ uses
+    /// (`Intensity_<file_name>`).
+    pub file_name: String,
+    /// The condition columns' values joined with `_`.
+    pub condition: String,
+    /// 0-based, ranked within the condition.
+    pub biological_replicate: u32,
+    /// 0-based.
+    pub technical_replicate: u32,
+    /// 0-based.
+    pub fraction: u32,
+}
+
+/// A label-free experimental design read from an SDRF, or every reason it was refused — what
+/// [`design_with`] returns.
+///
+/// **A refusal is an answer, not an error.** When [`Self::is_valid`] is `false`,
+/// [`Self::refusals`] lists every reason at once and the table is empty, and [`Self::spectra`]
+/// and [`Self::run_design`] refuse, so a design MetaMorpheus would reject cannot reach FlashLFQ
+/// by mistake. mzLib refuses rather than repairs because MetaMorpheus skips quantification with
+/// only a warning when its design file is invalid.
+///
+/// The table has one row per run, in SDRF row order: `full_path`, `file_name`, `condition`,
+/// `biological_replicate`, `technical_replicate` and `fraction`, with the meanings of
+/// [`DesignedFile`]. [`Self::files`] gives the same rows as structs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SdrfDesign {
+    /// The SDRF path as given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// `true` when there are no refusals. `false` is an answer: the table is then empty.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub is_valid: bool,
+    /// The column runs were keyed on — `comment[searched data file]` when the SDRF has it, else
+    /// `comment[data file]`. `None` when it has neither, so no row names a file; that is itself a
+    /// refusal.
+    #[serde(default)]
+    pub file_key_column: Option<String>,
+    /// The factor columns the condition was built from, in join order; empty when none could be
+    /// chosen.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub condition_columns: Vec<String>,
+    /// Whether [`DesignOptions::condition_columns`] was given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub condition_columns_declared: bool,
+    /// Whether [`DesignOptions::searched_files`] was given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub searched_files_given: bool,
+    /// Runs in the design, in files; `0` when refused.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub file_count: u64,
+    /// Every reason the design was refused, in mzLib's words. Empty when valid.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub refusals: Vec<String>,
+    /// Every relabelling on the way to a valid design: biological replicates ranked within a
+    /// condition, with the `old -> new` mapping, and rows dropped because the search does not
+    /// read their file. **The only record of a renumbering — read it.**
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub notes: Vec<String>,
+    /// mzLib's human-readable account of all of the above (`SdrfLabelFreeDesign.Report`). Print
+    /// it.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub report: String,
+    /// The design table, one row per run.
+    #[serde(flatten)]
+    pub columns: Table,
+    /// The `ExperimentalDesign.tsv` written; `None` when [`DesignOptions::out`] was not given,
+    /// or the design was refused and nothing was written.
+    #[serde(default)]
+    pub written: Option<DesignWritten>,
+    /// What the design does and does not cover — read these once.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+impl SdrfDesign {
+    /// Every run as a [`DesignedFile`], in SDRF row order. Empty when refused.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not the type the wire contract says.
+    pub fn files(&self) -> Result<Vec<DesignedFile>> {
+        if self.columns.names().is_empty() {
+            return Ok(Vec::new());
+        }
+        let full_path = self.columns.strings("full_path")?;
+        let file_name = self.columns.strings("file_name")?;
+        let condition = self.columns.strings("condition")?;
+        let biological = self.columns.integers("biological_replicate")?;
+        let technical = self.columns.integers("technical_replicate")?;
+        let fraction = self.columns.integers("fraction")?;
+        let coordinate = |value: Option<i64>, what: &str| -> Result<u32> {
+            value.and_then(|v| u32::try_from(v).ok()).ok_or_else(|| {
+                MzLibError::Protocol(format!(
+                    "sdrf design returned a {what} that is not a 0-based integer: {value:?}"
+                ))
+            })
+        };
+        (0..full_path.len())
+            .map(|i| {
+                Ok(DesignedFile {
+                    full_path: full_path[i].clone().unwrap_or_default(),
+                    file_name: file_name[i].clone().unwrap_or_default(),
+                    condition: condition[i].clone().unwrap_or_default(),
+                    biological_replicate: coordinate(biological[i], "biological_replicate")?,
+                    technical_replicate: coordinate(technical[i], "technical_replicate")?,
+                    fraction: coordinate(fraction[i], "fraction")?,
+                })
+            })
+            .collect()
+    }
+
+    fn require_valid(&self, what: &str) -> Result<()> {
+        if self.is_valid {
+            return Ok(());
+        }
+        Err(MzLibError::Usage(format!(
+            "The design was refused, so there is no {what} to give. mzLib's reasons:\n  {}",
+            self.refusals.join("\n  ")
+        )))
+    }
+
+    /// The design as [`crate::flashlfq::quantify_with`] takes its spectra: one
+    /// [`SpectraFile`](crate::flashlfq::SpectraFile) per run, `path` set to `full_path` and the
+    /// four design fields set, so the SDRF drives FlashLFQ with no hand-written design.
+    ///
+    /// Pass [`DesignOptions::searched_files`] when the SDRF names files without the directory you
+    /// keep them in.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] when the design was refused (mzLib's `ToExperimentalDesign` refuses
+    /// too); otherwise as [`Self::files`].
+    pub fn spectra(&self) -> Result<Vec<crate::flashlfq::SpectraFile>> {
+        self.require_valid("spectra list")?;
+        Ok(self
+            .files()?
+            .into_iter()
+            .map(|f| crate::flashlfq::SpectraFile {
+                path: f.full_path,
+                condition: Some(f.condition),
+                biological_replicate: Some(f.biological_replicate),
+                technical_replicate: Some(f.technical_replicate),
+                fraction: Some(f.fraction),
+            })
+            .collect())
+    }
+
+    /// The design as [`crate::flashlfq::MedianPolishOptions::design`] takes it: one
+    /// [`DesignEntry`](crate::flashlfq::DesignEntry) per run, keyed by `file_name` (the
+    /// `Intensity_<file_name>` column of a `QuantifiedPeptides.tsv`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::spectra`].
+    pub fn run_design(&self) -> Result<Vec<crate::flashlfq::DesignEntry>> {
+        self.require_valid("run design")?;
+        Ok(self
+            .files()?
+            .into_iter()
+            .map(|f| crate::flashlfq::DesignEntry {
+                file_name: f.file_name,
+                condition: Some(f.condition),
+                biological_replicate: Some(f.biological_replicate),
+                technical_replicate: Some(f.technical_replicate),
+                fraction: Some(f.fraction),
+            })
+            .collect())
+    }
+}
+
+/// The arguments and stdin of a `sdrf design` call, validated before anything is spawned.
+fn design_request(path: &Path, options: &DesignOptions) -> Result<(Vec<String>, Option<String>)> {
+    let mut args = one_path_args("design", path)?;
+
+    if !options.condition_columns.is_empty() {
+        for (index, name) in options.condition_columns.iter().enumerate() {
+            if name.trim().is_empty() {
+                return Err(MzLibError::Usage(format!(
+                    "Condition column {index} is blank; every condition column must name a \
+                     factor value[...] column."
+                )));
+            }
+            if name.contains(['\t', '\n', '\r']) {
+                return Err(MzLibError::Usage(format!(
+                    "Condition column {index} contains a tab or line break, which the wire uses \
+                     to separate names: {name:?}."
+                )));
+            }
+        }
+        args.push("--condition-columns".to_owned());
+        args.push(options.condition_columns.join("\t"));
+    }
+
+    let stdin = match &options.searched_files {
+        None => None,
+        Some(files) => {
+            let lines = if files.is_empty() {
+                Vec::new()
+            } else {
+                bridge::path_lines(files, "searched file")?
+            };
+            args.push("--searched-files-stdin".to_owned());
+            Some(lines.join("\n") + "\n")
+        }
+    };
+
+    if let Some(out) = &options.out {
+        let out = path_text(out, "out path")?;
+        if out.is_empty() {
+            return Err(MzLibError::Usage(
+                "out must be a file path ending in .tsv, e.g. 'ExperimentalDesign.tsv'.".to_owned(),
+            ));
+        }
+        args.push("--out".to_owned());
+        args.push(out.to_owned());
+    }
+    Ok((args, stdin))
+}
+
+/// Read a label-free experimental design out of an SDRF with every default: the document's only
+/// factor column as the condition, and the SDRF's own file names.
+///
+/// See [`design_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`design_with`].
+pub fn design(path: impl AsRef<Path>) -> Result<SdrfDesign> {
+    design_with(path, &DesignOptions::default())
+}
+
+/// Read a label-free experimental design out of an SDRF, in MetaMorpheus's terms, or every
+/// reason it cannot be read.
+///
+/// Calls mzLib's `SdrfLabelFreeDesign.Read` (mzLib #1363). It runs every check MetaMorpheus's own
+/// design validator runs and **refuses rather than repairs**: a factor written `not available`,
+/// two files claiming the same replicate and fraction, a document with several factor columns and
+/// none declared — each is a refusal, and all are reported at once. It relabels in only two ways,
+/// both recorded in [`SdrfDesign::notes`]: study-wide biological replicate numbers are ranked
+/// within each condition (`22 -> 1`), and rows for files the search does not read are dropped.
+///
+/// **Label-free only.** An isobaric (TMT, iTRAQ) SDRF needs a channel design this does not
+/// produce; for the channels themselves see [`crate::isobaric::kits`].
+#[doc = include_str!("../docs/reference/sdrf.design.md")]
+///
+/// # Examples
+///
+/// A valid two-factor design — PXD067622, two genotypes by four treatments, three biological
+/// replicates each:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::sdrf::{design_with, DesignOptions};
+///
+/// let both = DesignOptions {
+///     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+///     ..Default::default()
+/// };
+/// let d = design_with("PXD067622.sdrf.tsv", &both)?;
+/// assert!(d.is_valid);
+/// assert_eq!(d.file_count, 24);
+/// assert_eq!(d.file_key_column.as_deref(), Some("comment[data file]"));
+///
+/// let first = &d.files()?[0];
+/// assert_eq!(first.file_name, "20240830_HF_LC3_MAA_RK_12032_CA_DMSO4");
+/// assert_eq!(first.condition, "SPRTN-TurboID CA_DMSO (vehicle)");
+/// assert_eq!(first.biological_replicate, 0);                 // 0-based, as FlashLFQ takes it
+///
+/// // Straight into FlashLFQ, with no hand-written design.
+/// let spectra = d.spectra()?;
+/// assert_eq!(spectra[0].path, "20240830_HF_LC3_MAA_RK_12032_CA_DMSO4.raw");
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// A refusal lists every reason at once — here one per run, because PXD049018's treatment is
+/// `not available`:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// # use mzlib::sdrf::{design_with, DesignOptions};
+/// # let both = DesignOptions {
+/// #     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+/// #     ..Default::default()
+/// # };
+/// let refused = design_with("PXD049018.sdrf.tsv", &both)?;
+/// assert_eq!((refused.is_valid, refused.refusals.len(), refused.file_count), (false, 20, 0));
+/// assert!(refused.refusals[0].starts_with(
+///     "Line 2 (MSB67868ABand_01.raw): 'factor value[treatment]' is 'not available'."
+/// ));
+/// assert!(refused.spectra().is_err());                       // cannot reach FlashLFQ by mistake
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/sdrf.design.see-also.md")]
+pub fn design_with(path: impl AsRef<Path>, options: &DesignOptions) -> Result<SdrfDesign> {
+    let (args, stdin) = design_request(path.as_ref(), options)?;
+    call(&args, stdin.as_deref(), options.timeout)
+}
+
 fn protocol(error: serde_json::Error) -> MzLibError {
     MzLibError::Protocol(format!("sdrf payload could not be interpreted: {error}"))
 }
@@ -2240,5 +2705,150 @@ mod tests {
             document_lines(&labelled(&[("a.sdrf.tsv", "one"), ("b.sdrf.tsv", "two")])).unwrap();
         assert_eq!(lines, ["a.sdrf.tsv\tone", "b.sdrf.tsv\ttwo"]);
         assert!(document_lines(&labelled(&[("a.sdrf.tsv", " ")])).is_err());
+    }
+
+    // ---- design -------------------------------------------------------------------------------
+
+    fn two_factors() -> DesignOptions {
+        DesignOptions {
+            condition_columns: vec![
+                "factor value[genotype]".to_owned(),
+                "factor value[treatment]".to_owned(),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_valid_design_reads_into_zero_based_runs() {
+        let d: SdrfDesign = fixture(include_str!("../tests/fixtures/sdrf_design_PXD067622.json"));
+        assert!(d.is_valid);
+        assert_eq!(d.file_count, 24);
+        assert_eq!(d.written, None);
+        let files = d.files().unwrap();
+        assert_eq!(files.len(), 24);
+        assert_eq!(
+            files[0],
+            DesignedFile {
+                full_path: "20240830_HF_LC3_MAA_RK_12032_CA_DMSO4.raw".to_owned(),
+                file_name: "20240830_HF_LC3_MAA_RK_12032_CA_DMSO4".to_owned(),
+                condition: "SPRTN-TurboID CA_DMSO (vehicle)".to_owned(),
+                biological_replicate: 0,
+                technical_replicate: 0,
+                fraction: 0,
+            }
+        );
+        let conditions: std::collections::BTreeSet<&str> =
+            files.iter().map(|f| f.condition.as_str()).collect();
+        assert_eq!(conditions.len(), 8);
+    }
+
+    #[test]
+    fn a_design_feeds_flashlfq_unchanged() {
+        let d: SdrfDesign = fixture(include_str!("../tests/fixtures/sdrf_design_PXD067622.json"));
+        let files = d.files().unwrap();
+        let spectra = d.spectra().unwrap();
+        let runs = d.run_design().unwrap();
+        for ((file, spectrum), run) in files.iter().zip(&spectra).zip(&runs) {
+            assert_eq!(spectrum.path, file.full_path);
+            assert_eq!(
+                spectrum.biological_replicate,
+                Some(file.biological_replicate)
+            );
+            assert_eq!(run.file_name, file.file_name);
+            assert_eq!(run.condition.as_deref(), Some(file.condition.as_str()));
+            assert_eq!(run.fraction, Some(file.fraction));
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_an_answer_and_refuses_to_feed_flashlfq() {
+        let refused: SdrfDesign =
+            fixture(include_str!("../tests/fixtures/sdrf_design_PXD049018.json"));
+        assert!(!refused.is_valid);
+        assert_eq!((refused.refusals.len(), refused.file_count), (20, 0));
+        assert!(refused.files().unwrap().is_empty());
+        let error = refused.spectra().unwrap_err();
+        assert!(
+            matches!(error, MzLibError::Usage(ref m) if m.contains("MSB67868ABand_01.raw")),
+            "{error}"
+        );
+        assert!(refused.run_design().is_err());
+    }
+
+    #[test]
+    fn a_renumbering_is_recorded_and_lands_on_the_hand_numbered_design() {
+        let ranked: SdrfDesign =
+            fixture(include_str!("../tests/fixtures/sdrf_design_studywide.json"));
+        let hand: SdrfDesign =
+            fixture(include_str!("../tests/fixtures/sdrf_design_PXD067622.json"));
+        assert_eq!(ranked.notes.len(), 7);
+        assert!(ranked.notes[1].contains("22 -> 1, 23 -> 2, 24 -> 3"));
+        assert_eq!(ranked.columns, hand.columns);
+    }
+
+    #[test]
+    fn design_sends_tab_joined_columns_searched_files_on_stdin_and_out() {
+        let (args, stdin) =
+            design_request(Path::new("a.sdrf.tsv"), &DesignOptions::default()).unwrap();
+        assert_eq!(args, ["sdrf", "design", "--path", "a.sdrf.tsv"]);
+        assert_eq!(stdin, None);
+
+        let options = DesignOptions {
+            searched_files: Some(vec![PathBuf::from("/data/r1.raw"), PathBuf::from("r2.raw")]),
+            out: Some(PathBuf::from("ExperimentalDesign.tsv")),
+            ..two_factors()
+        };
+        let (args, stdin) = design_request(Path::new("a.sdrf.tsv"), &options).unwrap();
+        assert_eq!(
+            args,
+            [
+                "sdrf",
+                "design",
+                "--path",
+                "a.sdrf.tsv",
+                "--condition-columns",
+                "factor value[genotype]\tfactor value[treatment]",
+                "--searched-files-stdin",
+                "--out",
+                "ExperimentalDesign.tsv"
+            ]
+        );
+        assert_eq!(stdin.as_deref(), Some("/data/r1.raw\nr2.raw\n"));
+
+        // An empty searched list is sent: mzLib's refusal, not a usage error here.
+        let empty = DesignOptions {
+            searched_files: Some(Vec::new()),
+            ..Default::default()
+        };
+        let (args, stdin) = design_request(Path::new("a.sdrf.tsv"), &empty).unwrap();
+        assert!(args.contains(&"--searched-files-stdin".to_owned()));
+        assert_eq!(stdin.as_deref(), Some("\n"));
+    }
+
+    #[test]
+    fn design_refuses_bad_input_before_anything_is_spawned() {
+        let blank = DesignOptions {
+            condition_columns: vec![" ".to_owned()],
+            ..Default::default()
+        };
+        assert!(design_request(Path::new("a.sdrf.tsv"), &blank).is_err());
+        let tabbed = DesignOptions {
+            condition_columns: vec!["a\tb".to_owned()],
+            ..Default::default()
+        };
+        assert!(design_request(Path::new("a.sdrf.tsv"), &tabbed).is_err());
+        let bad_file = DesignOptions {
+            searched_files: Some(vec![PathBuf::from("a\nb.raw")]),
+            ..Default::default()
+        };
+        assert!(design_request(Path::new("a.sdrf.tsv"), &bad_file).is_err());
+        let empty_out = DesignOptions {
+            out: Some(PathBuf::from("")),
+            ..Default::default()
+        };
+        assert!(design_request(Path::new("a.sdrf.tsv"), &empty_out).is_err());
+        assert!(design_request(Path::new(""), &DesignOptions::default()).is_err());
+        assert_eq!(DesignOptions::default().timeout, Some(DEFAULT_TIMEOUT));
     }
 }

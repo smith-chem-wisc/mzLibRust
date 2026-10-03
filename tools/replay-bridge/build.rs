@@ -19,11 +19,19 @@ use serde_json::Value;
 
 /// Recordings for verbs whose spec does not list them as an example, or that have no spec yet.
 ///
-/// Mirrors `REPLAY_EXTRA` in pyMzLib's `pkg/python/src/conftest.py`, plus the one recording only
-/// this crate has (`pride ftp-files`). When a verb's spec lands with one of these among its
-/// `examples`, delete it here.
+/// Mirrors `REPLAY_EXTRA` in pyMzLib's `pkg/python/src/conftest.py`, plus the small recordings
+/// this crate's function examples have always replayed. When a verb's spec lands with one of these
+/// among its `examples`, delete it here.
 const REPLAY_EXTRA: &[(&str, &[&str])] = &[
-    ("readers read-spectra", &["readers_spectra_ms2.json"]),
+    (
+        "readers read-spectra",
+        &["readers_spectra_ms2.json", "readers_spectra_peaks.json"],
+    ),
+    (
+        "readers read-protein-groups",
+        &["readers_protein_groups_rna.json"],
+    ),
+    ("readers identify", &["readers_identify_fragger.json"]),
     ("readers read-features", &["readers_features_topfd.json"]),
     (
         "readers read-matches",
@@ -38,12 +46,38 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
     // The identify bulk shape is not a spec example: check_verbs.py has no table-less bulk verb.
     ("readers identify", &["readers_many_identify.json"]),
     ("version", &["bridge_version.json"]),
-    ("pride files", &["pride_PXD000001_files.json"]),
-    ("pride ftp-files", &["pride_ftp_PXD000001.json"]),
+    // The PRIDE guide: PRIDE's empty answer for an unknown accession, and the complete FTP listing.
+    (
+        "pride files",
+        &[
+            "pride_PXD000001_files.json",
+            "pride_PXD999999999_files.json",
+        ],
+    ),
+    ("pride ftp-files", &["pride_PXD000001_ftp_files.json"]),
     ("pride search", &["pride_search_plasmodium.json"]),
-    ("quant flashlfq", &["flashlfq_small.json"]),
-    ("quant median-polish", &["median_polish_small.json"]),
-    ("peptidoform fragments", &["peptidoform_P02768_small.json"]),
+    // The FlashLFQ guide: mzLib's two K562 test runs with MBR, and median polish of the peptide
+    // table that run wrote (renamed K562_QuantifiedPeptides.tsv so it is told apart).
+    (
+        "quant flashlfq",
+        &["flashlfq_small.json", "flashlfq_k562_mbr.json"],
+    ),
+    (
+        "quant median-polish",
+        &["median_polish_small.json", "median_polish_k562.json"],
+    ),
+    // The full albumin digest the peptidoforms guide reads.
+    (
+        "peptidoform fragments",
+        &["peptidoform_P02768_small.json", "peptidoform_P02768.json"],
+    ),
+    // The SDRF guide: assess on a Partial file and on a skeleton.
+    (
+        "sdrf assess",
+        &["sdrf_assess_PXD000070.json", "sdrf_assess_skeleton.json"],
+    ),
+    // The proteins guide: three databases and a contaminant, filtered to four accessions.
+    ("proteins read", &["proteins_read_accessions.json"]),
 ];
 
 fn main() {

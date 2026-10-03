@@ -20,7 +20,7 @@ Top-level fields:
 | Field | Type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `go_obo_file` | `string` | — | never | Absolute path written. |
-| `url` | `string` | — | never | Loaders.GeneOntologyUrl, https://purl.obolibrary.org/obo/go.obo: a moving PURL that always serves the current release. |
+| `url` | `string` | — | never | Loaders.GeneOntologyUrl, <https://purl.obolibrary.org/obo/go.obo>: a moving PURL that always serves the current release. |
 | `existed_before` | `bool` | — | never | Whether a file was already at the path. |
 | `previous_sha256` | `string` | — | yes: no file was there | sha256 of the file that was there. |
 | `changed` | `bool` | — | never | Whether the file on disk now differs from what was there (true for a first download). |

@@ -80,10 +80,26 @@ let findings = mzlib::sdrf::validate("PXD000070.sdrf.tsv")?;
 let verdicts = mzlib::sdrf::assess_many(&corpus, &Default::default())?;   // Informative / Partial / Skeleton
 let ages = mzlib::sdrf::parse_ages(&["58Y", "40Y-85Y", ">=90Y", "63"])?;   // years, or why not
 
+// The label-free design FlashLFQ needs, read out of the SDRF — or every reason it cannot be.
+let design = mzlib::sdrf::design_with("PXD067622.sdrf.tsv", &mzlib::sdrf::DesignOptions {
+    condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+    ..Default::default()
+})?;
+let spectra = design.spectra()?;          // Vec<SpectraFile>, 0-based, for flashlfq::quantify_with
+
+// Isobaric kits — every TMT, TMTpro, iTRAQ and DiLeu channel with its reporter-ion m/z, from mzLib.
+let tmtpro = mzlib::isobaric::kits(Some("TMT18"))?;
+
 // Protein databases — what an accession is, which gene it is, whether a peptide is unique.
 let db = mzlib::proteins::read(&["human.xml"])?;
 println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
 let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bovine.fasta"])?;
+
+// Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
+let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
+// Differential abundance with no R — limma's moderated t, held by mzLib to limma itself.
+let fit = mzlib::stats::fit("log2_intensities.tsv", "design.tsv", &["treated"])?;
+let q = mzlib::stats::adjust(&[Some(0.0002), None, Some(0.031)])?;   // None: not in the family
 ```
 
 ### Reading: one universal function, four typed views
@@ -124,14 +140,30 @@ module asks mzLib's three questions about a document — `validate` (is it well-
 `lint_labelled` (do several files write the same thing the same way?) and `assess` (does it
 describe its samples at all?) — which are blind in different places, which is why there are three.
 `samples` lifts each sample's characteristics, and `parse_ages` reads `characteristics[age]` into
-years, refusing any cell that would need a guess.
+years, refusing any cell that would need a guess. `design_with` reads the label-free experimental
+design out of an SDRF in MetaMorpheus's terms, 0-based and ready for FlashLFQ, or refuses and lists
+every reason at once; `out` writes MetaMorpheus's `ExperimentalDesign.tsv`.
+
+**Isobaric kits have their own module**, `isobaric`: `kits` lists every kit mzLib can name, each
+channel's label and theoretical reporter-ion m/z, and the window mzLib reads a reporter intensity
+in. Nothing in the table is typed in on this side.
+
+**Statistics have their own module**, `stats`: `fit` runs limma's `lmFit` and
+`eBayes(legacy = TRUE)` on a feature-by-sample table and a design, one moderated t per feature and
+coefficient with Benjamini-Hochberg; `adjust` adjusts p-values from anywhere else; `meta` pools
+effect sizes across studies with DerSimonian-Laird. mzLib holds each to the R reference (limma,
+metafor) to 1e-8, and the crate ships that reference so the check can be re-run.
 
 **Protein databases have their own module**, `proteins`: `read` gives one row per protein —
 organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;
 `resolve_genes_with` resolves proteins to stable Ensembl gene ids against a gene set you pin;
 `classify_peptides` sorts peptides into Unique, SharedWithinGene, SharedAcrossGenes or
 NotInDatabase, treating I and L as the same residue. A FASTA's silence about GO and Ensembl is
-reported in `absent_fields`, never as an empty answer.
+reported in `absent_fields`, never as an empty answer. `annotate_go_with` annotates a stored
+MetaMorpheus protein-group table with GO terms: one row per (group, term) that any member holds,
+directly or through an ancestor, naming the members that carry it, so consensus and direct-only
+views are filters rather than a pick. It reads only a go.obo you keep; `update_go` is the one call
+that fetches a release.
 
 Because the column set depends on the format, a read returns a `Table` rather than a struct with
 named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can

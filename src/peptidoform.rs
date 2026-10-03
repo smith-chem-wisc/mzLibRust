@@ -1,5 +1,44 @@
 //! Peptidoform-level questions: digest an annotated protein and fragment its peptides.
 //!
+//! | You want to know | Call | mzLib type |
+//! |---|---|---|
+//! | Which peptides and fragments a protein gives | [`fragments`], [`fragments_with`] | `Protein.Digest`, `PeptideWithSetModifications.Fragment` |
+//! | Which UniProt modifications were used, and which were not | [`Digest::modification_census`] | the UniProt XML reader and its PTM list |
+//! | A peptide's m/z at a charge | [`Peptide::mz`] | `ClassExtensions.ToMz`, with fixed charges accounted for |
+//! | Whether the list is complete | [`Digest::truncated`] | `DigestionParams.MaxModificationIsoforms` |
+//!
+//! Every example in this guide runs in CI against a digest recorded from the real bridge. Human
+//! serum albumin at the defaults:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let digest = mzlib::peptidoform::fragments("P02768")?;
+//! assert_eq!((digest.full_name.as_str(), digest.organism.as_str()), ("Albumin", "Homo sapiens"));
+//! assert_eq!(digest.sequence_length, 609);                 // residues
+//! assert_eq!((digest.peptides.len(), digest.modified_peptides().len()), (303, 108));
+//!
+//! // The result echoes the settings it ran with, so a saved digest says how it was made.
+//! assert_eq!((digest.protease.as_str(), digest.dissociation.as_str()), ("trypsin|P", "ETD"));
+//! assert_eq!((digest.max_modifications, digest.max_isoforms), (2, 1024));
+//! assert!(!digest.truncated());                            // complete at the defaults
+//!
+//! // The first modified peptide, with its modification inline as mzLib writes it.
+//! let p = digest.modified_peptides()[0];
+//! assert_eq!(p.full_sequence, "TCVADES[UniProt:Phosphoserine on S]AENCDK");
+//! assert_eq!((p.monoisotopic_mass * 1e4).round() / 1e4, 1463.4946);   // Da, neutral
+//! assert_eq!((p.mz(2)? * 1e4).round() / 1e4, 732.7546);              // m/z at 2+
+//!
+//! // Each fragment carries a neutral mass in Da, not an m/z.
+//! let f = &p.fragments[0];
+//! assert_eq!((f.product_type.as_str(), f.fragment_number), ("c", 1));
+//!
+//! // What UniProt annotated against what mzLib could apply.
+//! let census = &digest.modification_census;
+//! assert_eq!((census.annotated, census.applied, census.sites), (38, 14, 14));
+//! assert!(census.unresolved.is_empty());
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! The question this answers is the one a mass spectrometrist actually asks — *what fragments
 //! would I see for this protein's peptides?* — in one call:
 //!
@@ -19,6 +58,12 @@
 //! this lab makes when it does not have a reason to choose otherwise, so the common question needs
 //! no parameters — and every one of them is reachable, because the point is to open the doors, not
 //! to hide them.
+//!
+//! ## Cite
+//!
+//! Cite mzLib, this crate, and the annotations the digest applies:
+//!
+#![doc = include_str!("../docs/reference/cite.peptidoform.md")]
 
 use std::time::Duration;
 
