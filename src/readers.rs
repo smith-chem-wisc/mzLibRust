@@ -1,6 +1,32 @@
 //! Reading mass-spectrometry data files and proteomics search results: what a file *is*, and
 //! every one of them read — one file at a time, or hundreds in one call.
 //!
+//! | You want to | Call | mzLib type |
+//! |---|---|---|
+//! | Know what a file is, and which views it offers | [`identify`] | `SupportedFileTypes.ParseFileType` |
+//! | Read **everything** a file has, under mzLib's names | [`read_records`] | the format's own `ResultFile<T>` |
+//! | Compare search results across tools, or feed FlashLFQ | [`read_results`] | `IQuantifiableRecord` |
+//! | Read deconvolved MS1 features | [`read_features`] | `ISingleChargeMs1Feature` |
+//! | Compare identifications from MsPathFinderT, Casanovo or mzIdentML | [`read_matches`] | `ISpectralMatch` |
+//! | Read scans and peaks | [`read_spectra`] | `MsDataFile` |
+//! | Read per-sample protein (or RNA transcript) groups, peptides or PTM occupancy | [`read_protein_groups`], [`read_quantified_peptides`], [`read_occupancy`] | `ProteinGroupFromTsvFile`, `QuantifiedPeptideFile` |
+//! | Read many files into one table | the `_many` twins, e.g. [`read_spectra_many`] | the same readers, in one bridge process |
+//! | See every format mzLib knows | [`formats`] | `SupportedFileType` |
+//!
+//! Every example in this guide runs in CI against output recorded from the real bridge, on the
+//! small files mzLib ships with its own tests:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let info = mzlib::readers::identify("FraggerPsm_FragPipev21.1_psm.tsv")?;
+//! assert_eq!((info.file_type.as_str(), info.views.as_slice()), ("MsFraggerPsm", &["quantifiable".to_owned()][..]));
+//!
+//! // An RNA search's transcript groups read through the protein-group reader (mzLib #1388).
+//! let rna = mzlib::readers::read_protein_groups("MetaMorpheus_RNA_AllQuantifiedTranscriptGroups.tsv")?;
+//! assert_eq!((rna.record_count, rna.row_count), (3, 111));   // groups; groups x sample groups
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! **Spectra files are read here, not just search output.** [`read_spectra`] reads **mzML**,
 //! Thermo `.raw`, Bruker `.d`, timsTOF `.d`, MGF and msalign — scan headers always, peaks opt-in —
 //! and reports what the file records about the run it came from:
@@ -22,6 +48,27 @@
 //! let source = scans.source.as_ref().expect("an mzML records its source");
 //! assert_eq!(source.instrument_model.as_deref(), Some("Orbitrap Fusion"));
 //! assert_eq!(source.instrument_serial_number.as_deref(), Some("FSN10189"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Peaks come back on request, one list per scan:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::readers::{read_spectra_with, ReadOptions, SpectraOptions};
+//!
+//! let one = read_spectra_with(
+//!     "sliced_ethcd.mzML",
+//!     &SpectraOptions {
+//!         ms_order: Some(1),
+//!         peaks: true,
+//!         read: ReadOptions { limit: Some(1), ..Default::default() },
+//!         ..Default::default()
+//!     },
+//! )?;
+//! let mz = one.columns.float_arrays("mz")?;
+//! assert_eq!(one.columns.integers("peak_count")?[0], Some(484));
+//! assert_eq!(mz[0].as_ref().map(Vec::len), Some(484));      // m/z values of the first MS1 scan
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
@@ -173,6 +220,12 @@
 //! **Nothing here is FDR-filtered.** Every result format records confidence somewhere, and none of
 //! these functions filters on it. [`read_matches`] carries mzIdentML's q-value, rank and threshold
 //! as columns; filter before you report.
+//!
+//! ## Cite
+//!
+//! Cite mzLib and this crate, and the tool that wrote each file you read:
+//!
+#![doc = include_str!("../docs/reference/cite.readers.md")]
 
 use std::collections::BTreeMap;
 use std::path::Path;

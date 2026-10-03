@@ -1,5 +1,17 @@
 //! PRIDE Archive access, backed by mzLib's `PrideArchiveClient`.
 //!
+//! | You want to | Call | mzLib type |
+//! |---|---|---|
+//! | Find datasets about a subject | [`search`] | `PrideArchiveClient.SearchProjectsAsync` |
+//! | See a project's files, with categories and checksums | [`list_files`] | `PrideArchiveClient.GetProjectFilesAsync` |
+//! | See **every** file, including ones the manifest omits | [`list_ftp_files`] | `PrideArchiveClient.GetProjectFilesFromFtpAsync` |
+//! | Size a project before downloading it | [`total_size_bytes`], [`approximate_total_size_bytes`] | `TotalApproximateSizeBytes` |
+//! | Download the files you picked | [`download_files`] | `PrideArchiveClient.DownloadFilesAsync` |
+//! | Download by category or extension | [`download`] | `WhereCategory`, `WhereExtension` |
+//!
+//! Every example in this guide runs in CI against answers recorded from the live PRIDE Archive,
+//! replayed by a stand-in bridge; the one that downloads says so.
+//!
 //! The [PRIDE Archive](https://www.ebi.ac.uk/pride/archive/) is EBI's public proteomics data
 //! repository. This module lets a Rust user list what is in a project and pull files down, using
 //! the same paging, URL-resolution, and safe-download logic that mzLib uses in C#.
@@ -35,13 +47,47 @@
 //! flattened to display strings, and a zero or an empty list means "not reported". Follow the
 //! accession to [`list_files`] for what you can act on.
 //!
-//! Fetching files is one more call. It is not run here, because it downloads from EBI:
+//! An accession that does not exist is an error, not an empty list, so a typo cannot pass for a
+//! project with no files:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let error = mzlib::pride::list_files("PXD999999999").unwrap_err();
+//! assert!(matches!(error, mzlib::MzLibError::ProjectNotFound(_)));
+//! ```
+//!
+//! The REST manifest is not the whole project. The FTP tree is, subdirectories included, and for
+//! PXD000001 it holds an mzML the manifest leaves out:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let manifest = mzlib::pride::list_files("PXD000001")?;
+//! let tree = mzlib::pride::list_ftp_files("PXD000001")?;
+//! assert_eq!((tree.len(), manifest.len()), (14, 8));
+//! let hidden: Vec<&str> = tree
+//!     .iter()
+//!     .filter(|f| f.extension() == ".mzml" && !manifest.iter().any(|m| m.file_name == f.file_name))
+//!     .map(|f| f.relative_path.as_str())
+//!     .collect();
+//! assert_eq!(hidden, ["TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01-20141210.mzML"]);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Fetching files is one more call.
+//!
+//! Not run: it downloads from EBI.
 //!
 //! ```no_run
 //! # let small: Vec<mzlib::pride::PrideFile> = Vec::new();
 //! mzlib::pride::download_files(&small, "downloads", &Default::default())?;
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
+//!
+//! ## Cite
+//!
+//! Cite mzLib, this crate, and the archive:
+//!
+#![doc = include_str!("../docs/reference/cite.pride.md")]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -708,7 +754,8 @@ pub fn list_ftp_files(accession: &str) -> Result<Vec<PrideFtpFile>> {
 /// use std::time::Duration;
 ///
 /// let files = mzlib::pride::list_ftp_files_with("PXD000001", Some(Duration::from_secs(300)))?;
-/// assert_eq!(files[0].relative_path, "README.txt");
+/// assert_eq!(files.len(), 14);
+/// assert_eq!(files[0].relative_path, "F063721.dat");
 /// assert!(files[0].url.starts_with("https://ftp.pride.ebi.ac.uk/"));
 /// # Ok::<(), mzlib::MzLibError>(())
 /// ```
@@ -1215,7 +1262,7 @@ mod tests {
 
     // ---------------------------------------------------------- ftp-files (mzLib #1121)
 
-    const FTP_FIXTURE: &str = include_str!("../tests/fixtures/pride_ftp_PXD000001.json");
+    const FTP_FIXTURE: &str = include_str!("../tests/fixtures/pride_PXD000001_ftp_files.json");
 
     fn recorded_ftp() -> Vec<PrideFtpFile> {
         let data: serde_json::Value =
@@ -1226,11 +1273,10 @@ mod tests {
     #[test]
     fn ftp_files_parse_every_file_including_the_rest_hidden_one() {
         let files = recorded_ftp();
-        assert_eq!(files.len(), 4);
-        // The whole point of the verb: a subdirectory file the REST manifest hides is present.
-        assert!(files
-            .iter()
-            .any(|f| f.relative_path == "generated/summary.mztab"));
+        assert_eq!(files.len(), 14);
+        // The whole point of the verb: the mzML the REST manifest omits is present.
+        assert!(files.iter().any(|f| f.relative_path
+            == "TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01-20141210.mzML"));
     }
 
     #[test]
@@ -1239,9 +1285,12 @@ mod tests {
             .into_iter()
             .find(|f| f.relative_path.contains('/'))
             .expect("a nested file");
-        assert_eq!(nested.relative_path, "generated/summary.mztab");
-        assert_eq!(nested.file_name, "summary.mztab");
-        assert_eq!(nested.extension(), ".mztab");
+        assert_eq!(
+            nested.relative_path,
+            "generated/PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz"
+        );
+        assert_eq!(nested.file_name, "PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz");
+        assert_eq!(nested.extension(), ".gz");
         assert!(nested.url.starts_with("https://"));
     }
 
@@ -1253,8 +1302,8 @@ mod tests {
 
         let run = files
             .iter()
-            .find(|f| f.file_name == "run1.raw")
-            .expect("run1.raw");
+            .find(|f| f.file_name.ends_with(".raw"))
+            .expect("the raw file");
         assert!(
             (run.approximate_size_mb() - run.approximate_size_bytes as f64 / 1_000_000.0).abs()
                 < f64::EPSILON

@@ -215,11 +215,20 @@ fn versions_in(line: &str) -> Vec<String> {
 
 #[test]
 fn the_count_and_version_rules_match_pymzlib() {
-    assert_eq!(counts_in("all 36 file types mzLib knows"), ["36 file types"]);
-    assert_eq!(counts_in("Nineteen formats offer no view"), ["nineteen formats"]);
+    assert_eq!(
+        counts_in("all 36 file types mzLib knows"),
+        ["36 file types"]
+    );
+    assert_eq!(
+        counts_in("Nineteen formats offer no view"),
+        ["nineteen formats"]
+    );
     assert!(counts_in("19 of the 38 have it").is_empty());
     assert!(counts_in("36 columns").is_empty());
-    assert_eq!(versions_in("since mzLib 1.0.593 (#1388)"), ["mzLib 1.0.593"]);
+    assert_eq!(
+        versions_in("since mzLib 1.0.593 (#1388)"),
+        ["mzLib 1.0.593"]
+    );
     assert_eq!(versions_in("mzLib v1.0.592"), ["mzLib 1.0.592"]);
     assert!(versions_in("mzLib #1388").is_empty());
 }

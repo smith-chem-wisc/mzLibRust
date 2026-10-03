@@ -43,6 +43,10 @@ pub const SERVICE_UNAVAILABLE_TYPE: &str = "ServiceUnavailable";
 ///
 /// The classification itself is made in the **bridge**, not here, so every consumer of the wire
 /// format inherits it and not only this crate.
+///
+/// # Every error each verb can return
+///
+#[doc = include_str!("../docs/reference/index.errors.md")]
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MzLibError {

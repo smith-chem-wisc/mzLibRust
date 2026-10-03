@@ -80,7 +80,33 @@
 //! result fields with their units and what a null means, error kinds, caveats, the mzLib code it
 //! wraps, and the same verb's spelling in Python and R — rendered from one language-neutral spec
 //! per verb that all three bindings share. See `docs/reference-facts.md` in the repository.
-
+//! Every error each of those verbs can return is listed on [`MzLibError`].
+//!
+//! ## Citing
+//!
+//! mzLibRust has no paper of its own yet, and no release DOI has been minted.
+//! [`CITATION.cff`](https://github.com/smith-chem-wisc/mzLibRust/blob/main/CITATION.cff) gives the
+//! software citation; GitHub's "Cite this repository" button renders it.
+//!
+//! This crate is an interface to mzLib, not a reimplementation of it, so cite the science where it
+//! lives:
+//!
+//! - **mzLib**, the library every result comes from: cite it as software,
+//!   [smith-chem-wisc/mzLib](https://github.com/smith-chem-wisc/mzLib), with the version
+//!   [`bridge_version`] reports in [`BridgeVersion::mzlib`].
+//! - **MetaMorpheus**, whose search, digestion and modification handling mzLib carries: Solntsev
+//!   S.K., Shortreed M.R., Frey B.L., Smith L.M. Enhanced Global Post-translational Modification
+//!   Discovery with MetaMorpheus. *J. Proteome Res.* **17**, 1844–1851 (2018).
+//!   [doi:10.1021/acs.jproteome.7b00873](https://doi.org/10.1021/acs.jproteome.7b00873)
+//! - **The method or resource behind each function**: every module's guide ends with a *Cite*
+//!   section listing the papers its functions rest on, taken from the same specs the reference
+//!   facts are rendered from.
+//!
+//! ## Which function do I want?
+//!
+//! Every wire verb, the question it answers, and its name in each binding:
+//!
+#![doc = include_str!("../docs/reference/index.which-function.md")]
 #![forbid(unsafe_code)]
 // The reference fragments (docs/reference/) are rendered once and included into modules with
 // different imports, so they link `crate::MzLibError::Usage` explicitly: the target is needed where
