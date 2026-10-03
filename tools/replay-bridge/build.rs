@@ -55,6 +55,9 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
         ],
     ),
     ("pride ftp-files", &["pride_PXD000001_ftp_files.json"]),
+    // The peptidoforms guide: MetaMorpheus's BottomUpExample.psmtsv (mzLib's test data), whose
+    // full sequences it converts to Unimod and ProForma.
+    ("readers read-results", &["readers_results_psmtsv.json"]),
     ("pride search", &["pride_search_plasmodium.json"]),
     // The FlashLFQ guide: mzLib's two K562 test runs with MBR, and median polish of the peptide
     // table that run wrote (renamed K562_QuantifiedPeptides.tsv so it is told apart).
@@ -242,9 +245,17 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
         _ => Vec::new(),
     };
 
+    // The sequences a `peptidoform convert` recording was made from (stub.rs STDIN_ECHO).
+    let inputs: Vec<&str> = match map.get("columns").and_then(|c| c.get("input")) {
+        Some(Value::Array(rows)) if map.contains_key("source_format") => {
+            rows.iter().filter_map(Value::as_str).collect()
+        }
+        _ => Vec::new(),
+    };
+
     format!(
         "        Recording {{ fixture: {name:?}, envelope: include_str!({path:?}), fields: &[{fields}], \
-         bulk: {bulk}, runs: &{runs:?}, window: {window} }},\n",
+         bulk: {bulk}, runs: &{runs:?}, inputs: &{inputs:?}, window: {window} }},\n",
         path = envelope.display().to_string(),
     )
 }

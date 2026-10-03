@@ -15,6 +15,24 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **`peptidoform::convert_with`, `peptidoform::convert`: rewrite full sequences in another notation
+  with mzLib** (`peptidoform convert`, pyMzLib #75; spec `peptidoform.convert.yaml`). The main use
+  is MetaMorpheus full sequences to Unimod accessions: `[UniProt:N-acetylserine on S]SEQK` becomes
+  `[UNIMOD:1]SEQK`, and dimethyllysine becomes `UNIMOD:36`. `SequenceConversions` holds one row per
+  input, in order, with mzLib's own verdict (`converted`, `converted_with_warnings` or `failed`),
+  the modifications it could not write, and its warnings; `sequences()` and `not_converted()` give
+  them as `ConvertedSequence` rows. `ConvertOptions::source` and `target` take any notation mzLib
+  has registered, and every result lists them; `mode` is mzLib's `SequenceConversionHandlingMode`
+  (`ConversionMode`). **The ProForma target does not resolve UniProt modifications** in this mzLib
+  build and writes them back by name; convert to Unimod for those. The verb needs the bridge from
+  pyMzLib 0.4.0, which is unreleased: this crate still pins 0.3.0's, whose bridge does not dispatch
+  it, so the call is refused before anything is spawned and the live tests skip until the pin
+  moves. The replay bridge holds a `peptidoform convert` call to the recording made from the same
+  sequences, as pyMzLib's does.
+- **Specs re-vendored at bridge `c0cc923`**: adds `peptidoform.convert.yaml`, and records pyMzLib
+  0.3.0 as the first release of four verbs, a corrected isobaric citation note, and mzLibR #29 as
+  where the R stats functions are.
+
 - **Every guide opens with a question table, runs on real data, and says what to cite** (pyMzLib
   #72). A module's `//!` documentation is its guide; `tests/docs_lint.rs` holds each one to a
   `| You want to | Call | mzLib type |` table in its first lines, a `## Cite` section rendered from

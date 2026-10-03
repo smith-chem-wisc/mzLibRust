@@ -1,4 +1,5 @@
-//! Peptidoform-level questions: digest an annotated protein and fragment its peptides.
+//! Peptidoform-level questions: digest an annotated protein and fragment its peptides, and rewrite
+//! a full sequence in another notation.
 //!
 //! | You want to know | Call | mzLib type |
 //! |---|---|---|
@@ -6,6 +7,10 @@
 //! | Which UniProt modifications were used, and which were not | [`Digest::modification_census`] | the UniProt XML reader and its PTM list |
 //! | A peptide's m/z at a charge | [`Peptide::mz`] | `ClassExtensions.ToMz`, with fixed charges accounted for |
 //! | Whether the list is complete | [`Digest::truncated`] | `DigestionParams.MaxModificationIsoforms` |
+//! | A MetaMorpheus full sequence in Unimod accessions | [`convert`], [`convert_with`] | `SequenceConversionService.Convert`, Unimod serializer |
+//! | The same sequence in ProForma | [`convert_with`] with `target: "ProForma"` | `SequenceConversionService.Convert`, ProForma serializer |
+//! | Which sequences mzLib could not convert, and why | [`SequenceConversions::not_converted`] | `ConversionWarnings` |
+//! | Which notations mzLib can read and write | [`SequenceConversions::source_formats`], [`SequenceConversions::target_formats`] | `SequenceConversionService.AvailableSourceFormats`, `AvailableTargetFormats` |
 //!
 //! Every example in this guide runs in CI against a digest recorded from the real bridge. Human
 //! serum albumin at the defaults:
@@ -59,9 +64,161 @@
 //! no parameters — and every one of them is reachable, because the point is to open the doors, not
 //! to hide them.
 //!
+//! ## Converting full sequences to Unimod or ProForma
+//!
+//! A MetaMorpheus result names each modification the way mzLib's databases do:
+//! `[UniProt:N-acetylserine on S]`, `[Common Variable:Oxidation on M]`. Most other tools want a
+//! Unimod accession instead, such as `[UNIMOD:1]`. [`convert`] hands each sequence to mzLib's
+//! `SequenceConversionService` and returns one row per input, in order. This crate maps no
+//! modification itself; every output is mzLib's.
+//!
+//! This example uses `BottomUpExample.psmtsv`, a MetaMorpheus search result that ships with
+//! mzLib's tests. Read its full sequences, then convert them:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let psms = mzlib::readers::read_results("BottomUpExample.psmtsv")?;
+//! let full_sequences: Vec<String> = psms
+//!     .columns
+//!     .strings("full_sequence")?
+//!     .into_iter()
+//!     .collect::<Option<_>>()
+//!     .expect("every PSM has a full sequence");
+//!
+//! let unimod = mzlib::peptidoform::convert(&full_sequences)?;
+//! assert_eq!(
+//!     (unimod.source_format.as_str(), unimod.target_format.as_str(), unimod.mode.as_str()),
+//!     ("mzLib", "Unimod", "ReturnNull")
+//! );
+//! let rows = unimod.sequences()?;
+//! assert_eq!(rows[0].output.as_deref(), Some("YPIEH[UNIMOD:34]GIVTNWDDMEK"));
+//! assert_eq!(rows[2].output.as_deref(), Some("AYHEQLSVAEITNAC[UNIMOD:4]FEPANQMVK"));
+//! assert_eq!(rows[4].output.as_deref(), Some("YPIEH[UNIMOD:34]GIVTNWDDM[UNIMOD:35]EK"));
+//! assert!(rows.iter().all(|row| row.ok()));
+//! assert_eq!(unimod.converted_count, unimod.record_count);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! UniProt's tele-methylhistidine became `UNIMOD:34` (Methyl). Carbamidomethyl became `UNIMOD:4`,
+//! and oxidation became `UNIMOD:35`. Unmodified sequences pass through unchanged.
+//!
+//! Every result lists the notations mzLib has registered, so you never need to guess a name:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # let psms = mzlib::readers::read_results("BottomUpExample.psmtsv")?;
+//! # let full_sequences: Vec<String> =
+//! #     psms.columns.strings("full_sequence")?.into_iter().flatten().collect();
+//! let unimod = mzlib::peptidoform::convert(&full_sequences)?;
+//! assert_eq!(unimod.source_formats, ["MassShift", "Modomics", "ProForma", "mzLib"]);
+//! assert_eq!(
+//!     unimod.target_formats,
+//!     ["Chronologer", "Essential", "MassShift", "ProForma", "Unimod", "mzLib"]
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! ### ProForma does not resolve UniProt modifications yet
+//!
+//! Ask for ProForma and the same file gives a different answer. Carbamidomethyl and oxidation
+//! become UNIMOD accessions. The UniProt modification is written back under its mzLib name, and
+//! the row still says `converted`:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # let psms = mzlib::readers::read_results("BottomUpExample.psmtsv")?;
+//! # let full_sequences: Vec<String> =
+//! #     psms.columns.strings("full_sequence")?.into_iter().flatten().collect();
+//! use mzlib::peptidoform::{convert_with, ConvertOptions};
+//!
+//! let proforma = convert_with(
+//!     &full_sequences,
+//!     &ConvertOptions { target: "ProForma".into(), ..Default::default() },
+//! )?;
+//! let outputs = proforma.outputs()?;
+//! assert_eq!(
+//!     outputs[0].as_deref(),
+//!     Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDMEK")
+//! );
+//! assert_eq!(
+//!     outputs[4].as_deref(),
+//!     Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDM[UNIMOD:35]EK")
+//! );
+//! assert_eq!(proforma.sequences()?[0].status, "converted");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! The cause is in mzLib, not in this crate. mzLib's ProForma serializer looks modifications up
+//! only in MetaMorpheus's own list, which has no UniProt entries. The Unimod serializer looks them
+//! up in every list mzLib loads. Until mzLib fixes this, **convert to Unimod when your sequences
+//! carry UniProt modifications**. In ProForma output, treat any bracket that is not a `UNIMOD:`
+//! term as unresolved. This crate does not patch around the gap: a patch here would leave the same
+//! gap in pyMzLib, mzLibR and MetaMorpheus. The `pro_forma` column that
+//! [`crate::readers::read_records`] gives a `.psmtsv` comes from the same serializer, so it has the
+//! same gap.
+//!
+//! ### When mzLib cannot convert a sequence
+//!
+//! What happens to a modification the target cannot write depends on [`ConvertOptions::mode`],
+//! which is mzLib's `SequenceConversionHandlingMode`:
+//!
+//! | `mode` | The row | `output` |
+//! |---|---|---|
+//! | [`ConversionMode::ReturnNull`] (default) | `failed` | `None` |
+//! | [`ConversionMode::RemoveIncompatibleElements`] | `converted_with_warnings` | the sequence without that modification |
+//! | [`ConversionMode::UsePrimarySequence`] | `converted_with_warnings` | the sequence without that modification |
+//! | [`ConversionMode::ThrowException`] | no rows: the call returns [`MzLibError::Usage`] naming the first such sequence | none |
+//!
+//! `status` is mzLib's own verdict:
+//!
+//! - `converted`: mzLib returned an output and recorded nothing against it.
+//! - `converted_with_warnings`: mzLib returned an output but noted something, such as a dropped
+//!   modification or a skipped character.
+//! - `failed`: mzLib returned nothing.
+//!
+//! These four sequences include one modification that has no Unimod accession:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let result = mzlib::peptidoform::convert(&[
+//!     "[UniProt:N-acetylserine on S]SEQK",
+//!     "PEPK[UniProt:N6,N6-dimethyllysine on K]R",
+//!     "PEPM[Common Variable:Oxidation on M]K",
+//!     "PEPK[Made Up:Not a modification on K]R",
+//! ])?;
+//! assert_eq!(
+//!     result.outputs()?,
+//!     [
+//!         Some("[UNIMOD:1]SEQK".to_owned()),
+//!         Some("PEPK[UNIMOD:36]R".to_owned()),
+//!         Some("PEPM[UNIMOD:35]K".to_owned()),
+//!         None,
+//!     ]
+//! );
+//! let bad = &result.not_converted()?[0];
+//! assert_eq!(
+//!     (bad.input.as_str(), bad.status.as_str(), bad.failure_reason.as_deref()),
+//!     ("PEPK[Made Up:Not a modification on K]R", "failed", None)
+//! );
+//! assert_eq!(bad.incompatible_items, ["Made Up:Not a modification on K @3(K)"]);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! `failure_reason` is `None` here. Under `ReturnNull`, mzLib's Unimod serializer records the
+//! incompatible modification but no reason code, so read `incompatible_items` to see what failed.
+//!
+//! **Split ambiguous sequences first.** When MetaMorpheus cannot tell candidates apart, it joins
+//! their full sequences with `|`. mzLib's parser does not refuse this. It skips each `|` with a
+//! warning and joins the candidates into one sequence. The row is `converted_with_warnings`, but
+//! the output is not a real peptide. Split on `|` before you convert.
+//!
+//! [`convert`] needs the bridge from pyMzLib 0.4.0 or later; an older one is refused with
+//! [`MzLibError::Usage`] before the verb is spawned.
+//!
 //! ## Cite
 //!
-//! Cite mzLib, this crate, and the annotations the digest applies:
+//! Cite mzLib, this crate, the annotations the digest applies, and the notations [`convert`]
+//! writes:
 //!
 #![doc = include_str!("../docs/reference/cite.peptidoform.md")]
 
@@ -70,6 +227,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::bridge::{self, MzLibError, Result};
+use crate::readers::Table;
 
 /// The proton mass, in daltons.
 ///
@@ -730,6 +888,407 @@ pub fn fragments_with(accession: &str, options: &FragmentOptions) -> Result<Dige
     parse(data)
 }
 
+// ------------------------------------------------------------------ convert
+
+/// The first pyMzLib whose bridge has `peptidoform convert`: its spec's `since.pymzlib`.
+const CONVERT_SINCE: &str = "0.4.0";
+
+/// The default timeout, matching pyMzLib's `peptidoform.convert`.
+const CONVERT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// mzLib's `SequenceConversionHandlingMode`: what [`convert_with`] does with a sequence the target
+/// notation cannot write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ConversionMode {
+    /// The first sequence mzLib cannot convert, in input order, fails the whole call with
+    /// [`MzLibError::Usage`] naming it, and nothing is returned.
+    ThrowException,
+    /// A sequence mzLib cannot convert is a `failed` row with no output. The default.
+    #[default]
+    ReturnNull,
+    /// What the target cannot write is dropped, named in
+    /// [`ConvertedSequence::incompatible_items`], and the row is `converted_with_warnings`.
+    RemoveIncompatibleElements,
+    /// As [`Self::RemoveIncompatibleElements`], falling back to the primary sequence.
+    UsePrimarySequence,
+}
+
+impl ConversionMode {
+    /// Every mode, in mzLib's declaration order.
+    pub const ALL: [Self; 4] = [
+        Self::ThrowException,
+        Self::ReturnNull,
+        Self::RemoveIncompatibleElements,
+        Self::UsePrimarySequence,
+    ];
+
+    /// mzLib's name for the mode, which is what the wire takes.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ThrowException => "ThrowException",
+            Self::ReturnNull => "ReturnNull",
+            Self::RemoveIncompatibleElements => "RemoveIncompatibleElements",
+            Self::UsePrimarySequence => "UsePrimarySequence",
+        }
+    }
+}
+
+impl std::fmt::Display for ConversionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ConversionMode {
+    type Err = MzLibError;
+
+    /// mzLib's name for a mode, case-insensitively, as pyMzLib's `mode=` takes it.
+    fn from_str(name: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str().eq_ignore_ascii_case(name))
+            .ok_or_else(|| {
+                let names: Vec<&str> = Self::ALL.iter().map(|m| m.as_str()).collect();
+                MzLibError::Usage(format!(
+                    "mode must be one of {} (mzLib's SequenceConversionHandlingMode); got {name:?}.",
+                    names.join(", ")
+                ))
+            })
+    }
+}
+
+/// How [`convert_with`] reads and writes the sequences. The defaults are the wire's.
+#[derive(Debug, Clone)]
+pub struct ConvertOptions {
+    /// The notation the sequences are in: one of mzLib's registered source formats
+    /// ([`SequenceConversions::source_formats`]), matched case-insensitively. Default `"mzLib"`,
+    /// the MetaMorpheus full-sequence notation.
+    pub source: String,
+    /// The notation to write: one of mzLib's registered target formats
+    /// ([`SequenceConversions::target_formats`]), matched case-insensitively. Default `"Unimod"`.
+    /// Prefer it to `"ProForma"` for UniProt-sourced modifications; see the module guide.
+    pub target: String,
+    /// What a sequence the target cannot write does to its row: mzLib's
+    /// `SequenceConversionHandlingMode`. Default [`ConversionMode::ReturnNull`].
+    pub mode: ConversionMode,
+    /// Sequences converted at once: 1 or more, or -1 for every core. Default 1. The rows are the
+    /// same, in the same order, at any value.
+    pub threads: i32,
+    /// Seconds to allow. `None` waits indefinitely.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            source: "mzLib".to_owned(),
+            target: "Unimod".to_owned(),
+            mode: ConversionMode::ReturnNull,
+            threads: 1,
+            timeout: Some(CONVERT_TIMEOUT),
+        }
+    }
+}
+
+/// One input sequence and what mzLib made of it: a row of [`SequenceConversions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConvertedSequence {
+    /// The sequence exactly as given.
+    pub input: String,
+    /// The sequence in the target notation, or `None` when mzLib could not convert it
+    /// (`status` is `"failed"`).
+    pub output: Option<String>,
+    /// mzLib's verdict. `"converted"`: an output and nothing recorded against it.
+    /// `"converted_with_warnings"`: an output, but mzLib recorded a warning, an error or an
+    /// incompatible item (a modification dropped, a character skipped); read
+    /// [`Self::incompatible_items`] and [`Self::warnings`]. `"failed"`: no output.
+    pub status: String,
+    /// mzLib's `ConversionFailureReason` (`"InvalidSequence"`, `"IncompatibleModifications"`,
+    /// `"UnsupportedDirection"`, `"UnknownFormat"`), or `None` when mzLib recorded none. A failed
+    /// row can have none: the Unimod target under `ReturnNull` names only the
+    /// [`Self::incompatible_items`].
+    pub failure_reason: Option<String>,
+    /// The modifications (or other elements) mzLib could not write in the target, as mzLib
+    /// describes them (`"Made Up:Not a modification on K @3(K)"`). Empty when none.
+    pub incompatible_items: Vec<String>,
+    /// mzLib's non-fatal messages for this input.
+    pub warnings: Vec<String>,
+    /// mzLib's error messages for this input.
+    pub errors: Vec<String>,
+}
+
+impl ConvertedSequence {
+    /// Whether mzLib converted it with nothing recorded against it (`status` is `"converted"`).
+    #[must_use]
+    pub fn ok(&self) -> bool {
+        self.status == "converted"
+    }
+}
+
+/// What [`convert_with`] returned: one row per input sequence, in input order.
+///
+/// The table has the columns `input`, `output`, `status`, `failure_reason`, `incompatible_items`,
+/// `warnings` and `errors`, with the meanings of [`ConvertedSequence`]; [`Self::sequences`] gives
+/// the same rows as structs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SequenceConversions {
+    /// The source notation, spelled as mzLib registered it (`"mzLib"`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_format: String,
+    /// The target notation, spelled as mzLib registered it (`"Unimod"`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub target_format: String,
+    /// The `SequenceConversionHandlingMode` used, by mzLib's name (`"ReturnNull"`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub mode: String,
+    /// Every source notation mzLib has registered, in ordinal order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_formats: Vec<String>,
+    /// Every target notation mzLib has registered, in ordinal order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub target_formats: Vec<String>,
+    /// Rows: the input sequences, duplicates included.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub record_count: u64,
+    /// Input sequences with status `"converted"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub converted_count: u64,
+    /// Input sequences with status `"converted_with_warnings"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub warned_count: u64,
+    /// Input sequences with status `"failed"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub failed_count: u64,
+    /// The table, one row per input sequence.
+    #[serde(flatten)]
+    pub columns: Table,
+    /// What a status does and does not promise, per target. Read these once.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+impl SequenceConversions {
+    /// The converted sequences in input order, `None` where a row failed.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if the `output` column is not strings and nulls.
+    pub fn outputs(&self) -> Result<Vec<Option<String>>> {
+        if self.columns.names().is_empty() {
+            return Ok(Vec::new());
+        }
+        self.columns.strings("output")
+    }
+
+    /// Every row as a [`ConvertedSequence`], in input order.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not the type the wire contract says.
+    pub fn sequences(&self) -> Result<Vec<ConvertedSequence>> {
+        if self.columns.names().is_empty() {
+            return Ok(Vec::new());
+        }
+        let input = self.columns.strings("input")?;
+        let output = self.columns.strings("output")?;
+        let status = self.columns.strings("status")?;
+        let failure_reason = self.columns.strings("failure_reason")?;
+        let incompatible_items = self.string_lists("incompatible_items")?;
+        let warnings = self.string_lists("warnings")?;
+        let errors = self.string_lists("errors")?;
+        let missing = |what: &str, row: usize| {
+            MzLibError::Protocol(format!(
+                "peptidoform convert returned no {what} on row {row}"
+            ))
+        };
+        (0..input.len())
+            .map(|i| {
+                Ok(ConvertedSequence {
+                    input: input[i].clone().ok_or_else(|| missing("input", i))?,
+                    output: output.get(i).cloned().flatten(),
+                    status: status
+                        .get(i)
+                        .cloned()
+                        .flatten()
+                        .ok_or_else(|| missing("status", i))?,
+                    failure_reason: failure_reason.get(i).cloned().flatten(),
+                    incompatible_items: incompatible_items.get(i).cloned().unwrap_or_default(),
+                    warnings: warnings.get(i).cloned().unwrap_or_default(),
+                    errors: errors.get(i).cloned().unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    /// The rows whose status is not `"converted"`: failed, or converted with warnings.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::sequences`].
+    pub fn not_converted(&self) -> Result<Vec<ConvertedSequence>> {
+        Ok(self
+            .sequences()?
+            .into_iter()
+            .filter(|row| !row.ok())
+            .collect())
+    }
+
+    /// A column whose every cell is a list of strings; `null` is an empty list.
+    fn string_lists(&self, name: &str) -> Result<Vec<Vec<String>>> {
+        let column = self.columns.raw(name).ok_or_else(|| {
+            MzLibError::Protocol(format!("peptidoform convert returned no '{name}' column"))
+        })?;
+        column
+            .iter()
+            .enumerate()
+            .map(|(row, value)| match value {
+                serde_json::Value::Null => Ok(Vec::new()),
+                serde_json::Value::Array(items) => items
+                    .iter()
+                    .map(|item| {
+                        item.as_str().map(str::to_owned).ok_or_else(|| {
+                            MzLibError::Protocol(format!(
+                                "Column '{name}' row {row} is not a list of strings: {value}"
+                            ))
+                        })
+                    })
+                    .collect(),
+                other => Err(MzLibError::Protocol(format!(
+                    "Column '{name}' row {row} is not a list of strings: {other}"
+                ))),
+            })
+            .collect()
+    }
+}
+
+/// The wire arguments and stdin for a conversion, refusing before anything is spawned what the
+/// bridge would refuse or what would shift the rows.
+fn convert_request<S: AsRef<str>>(
+    sequences: &[S],
+    options: &ConvertOptions,
+) -> Result<(Vec<String>, String)> {
+    if sequences.is_empty() {
+        return Err(MzLibError::Usage(
+            "At least one sequence is required, e.g. [\"[UniProt:N-acetylserine on S]SEQK\"]."
+                .to_owned(),
+        ));
+    }
+    let mut stdin = String::new();
+    for sequence in sequences {
+        let sequence = sequence.as_ref();
+        // The bridge skips blank lines and splits on line breaks, so either would put every later
+        // result on the wrong row. Refused here rather than silently re-aligned.
+        if sequence.trim().is_empty() {
+            return Err(MzLibError::Usage(
+                "sequences contains a blank entry; every entry is one result row.".to_owned(),
+            ));
+        }
+        if sequence.contains(['\n', '\r']) {
+            return Err(MzLibError::Usage(format!(
+                "A sequence contains a line break: {sequence:?}."
+            )));
+        }
+        stdin.push_str(sequence);
+        stdin.push('\n');
+    }
+    for (name, value) in [("source", &options.source), ("target", &options.target)] {
+        if value.trim().is_empty() {
+            return Err(MzLibError::Usage(format!(
+                "{name} must be a non-empty format name; got {value:?}."
+            )));
+        }
+    }
+    let threads = bridge::threads_arg(options.threads)?;
+    let args = vec![
+        "peptidoform".to_owned(),
+        "convert".to_owned(),
+        "--from".to_owned(),
+        options.source.clone(),
+        "--to".to_owned(),
+        options.target.clone(),
+        "--mode".to_owned(),
+        options.mode.as_str().to_owned(),
+        "--threads".to_owned(),
+        threads,
+    ];
+    Ok((args, stdin))
+}
+
+fn parse_conversions(data: serde_json::Value) -> Result<SequenceConversions> {
+    serde_json::from_value(data).map_err(|error| {
+        MzLibError::Protocol(format!(
+            "peptidoform convert payload could not be interpreted: {error}"
+        ))
+    })
+}
+
+/// Convert full sequences from mzLib's notation to Unimod accessions, one result per input.
+///
+/// See [`convert_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`convert_with`].
+pub fn convert<S: AsRef<str>>(sequences: &[S]) -> Result<SequenceConversions> {
+    convert_with(sequences, &ConvertOptions::default())
+}
+
+/// Convert full sequences from one notation to another with mzLib, one result per input.
+///
+/// Wraps mzLib's `SequenceConversionService.Default` (with ProForma registered). The main use is
+/// MetaMorpheus or mzLib full sequences to Unimod accessions: `[UniProt:N-acetylserine on S]SEQK`
+/// becomes `[UNIMOD:1]SEQK`. Nothing is converted in Rust or in the bridge; every output and every
+/// status is mzLib's.
+///
+/// **Choose Unimod, not ProForma, for UniProt-sourced modifications.** mzLib's ProForma target
+/// does not resolve them and writes them back under their mzLib name, status `"converted"`. See the
+/// caveats.
+///
+/// `sequences` are full sequences, one result row each, in order, duplicates included, sent to
+/// mzLib exactly as given. Split an ambiguous MetaMorpheus full sequence (`|`-joined candidates)
+/// first: mzLib joins the candidates into one sequence.
+#[doc = include_str!("../docs/reference/peptidoform.convert.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`], before anything is spawned, for no sequences, a blank one or one with a
+/// line break (either would shift every later row), a blank `source` or `target`, or `threads` 0
+/// or below -1; and for a bridge older than pyMzLib 0.4.0's, which does not dispatch the verb.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::peptidoform::{convert_with, ConvertOptions};
+///
+/// let sequences = [
+///     "[UniProt:N-acetylserine on S]SEQK",
+///     "PEPK[UniProt:N6,N6-dimethyllysine on K]R",
+///     "PEPM[Common Variable:Oxidation on M]K",
+///     "PEPK[Made Up:Not a modification on K]R",
+/// ];
+/// let result = convert_with(&sequences, &ConvertOptions::default())?;
+/// let rows = result.sequences()?;
+/// assert_eq!(rows[1].output.as_deref(), Some("PEPK[UNIMOD:36]R"));     // not Ethyl, UNIMOD:280
+/// assert_eq!((rows[3].status.as_str(), rows[3].output.as_deref()), ("failed", None));
+/// assert_eq!(
+///     (result.converted_count, result.warned_count, result.failed_count),
+///     (3, 0, 1)
+/// );
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/peptidoform.convert.see-also.md")]
+pub fn convert_with<S: AsRef<str>>(
+    sequences: &[S],
+    options: &ConvertOptions,
+) -> Result<SequenceConversions> {
+    let (args, stdin) = convert_request(sequences, options)?;
+    bridge::require_verb("peptidoform convert", CONVERT_SINCE)?;
+    let data = bridge::invoke(&args, Some(&stdin), options.timeout)?;
+    parse_conversions(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1208,5 +1767,278 @@ mod tests {
         assert!(!modification.id.is_empty());
         assert!(modification.mass.is_some_and(|mass| mass > 0.0));
         assert_eq!(modification.formal_charge, 0);
+    }
+
+    // ---------------------------------------------------------- convert
+    //
+    // Against pyMzLib's recordings of the real bridge, shared byte for byte:
+    // peptidoform_convert_unimod.json (four probe sequences to Unimod under ReturnNull) and
+    // peptidoform_convert_psmtsv{,_proforma}.json (mzLib's BottomUpExample.psmtsv to Unimod and to
+    // ProForma). What is pinned is that the call sent is the one mzLib needs and that mzLib's answer
+    // is projected row for row, without repair. The ports of pyMzLib's test_peptidoform_convert.py.
+
+    const PROBE: [&str; 4] = [
+        "[UniProt:N-acetylserine on S]SEQK",
+        "PEPK[UniProt:N6,N6-dimethyllysine on K]R",
+        "PEPM[Common Variable:Oxidation on M]K",
+        "PEPK[Made Up:Not a modification on K]R",
+    ];
+
+    fn conversions(text: &str) -> SequenceConversions {
+        parse_conversions(serde_json::from_str(text).unwrap()).unwrap()
+    }
+
+    fn unimod() -> SequenceConversions {
+        conversions(include_str!(
+            "../tests/fixtures/peptidoform_convert_unimod.json"
+        ))
+    }
+
+    fn psm_full_sequences() -> Vec<String> {
+        let psms: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/readers_results_psmtsv.json"
+        ))
+        .unwrap();
+        psms["columns"]["full_sequence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_probe_cases_map_to_their_unimod_accessions() {
+        let (args, stdin) = convert_request(&PROBE, &ConvertOptions::default()).unwrap();
+        assert_eq!(
+            args,
+            [
+                "peptidoform",
+                "convert",
+                "--from",
+                "mzLib",
+                "--to",
+                "Unimod",
+                "--mode",
+                "ReturnNull",
+                "--threads",
+                "1"
+            ]
+        );
+        assert_eq!(stdin, PROBE.join("\n") + "\n");
+
+        let rows = unimod().sequences().unwrap();
+        let inputs: Vec<&str> = rows.iter().map(|r| r.input.as_str()).collect();
+        assert_eq!(inputs, PROBE);
+        assert_eq!(rows[0].output.as_deref(), Some("[UNIMOD:1]SEQK")); // N-acetylserine
+        assert_eq!(rows[1].output.as_deref(), Some("PEPK[UNIMOD:36]R")); // not Ethyl (UNIMOD:280)
+        assert_eq!(rows[2].output.as_deref(), Some("PEPM[UNIMOD:35]K")); // Oxidation on M
+        assert!(rows[..3].iter().all(|r| r.status == "converted" && r.ok()));
+    }
+
+    #[test]
+    fn an_unmappable_modification_fails_its_row_and_names_itself() {
+        let result = unimod();
+        let not_converted = result.not_converted().unwrap();
+        assert_eq!(not_converted.len(), 1);
+        let bad = &not_converted[0];
+        assert_eq!(bad.input, "PEPK[Made Up:Not a modification on K]R");
+        assert_eq!(bad.output, None);
+        assert_eq!(bad.status, "failed");
+        assert!(!bad.ok());
+        assert_eq!(
+            bad.incompatible_items,
+            ["Made Up:Not a modification on K @3(K)"]
+        );
+        // mzLib's Unimod serializer under ReturnNull records no reason code: None, not filled in.
+        assert_eq!(bad.failure_reason, None);
+        assert_eq!(
+            result.outputs().unwrap(),
+            [
+                Some("[UNIMOD:1]SEQK".to_owned()),
+                Some("PEPK[UNIMOD:36]R".to_owned()),
+                Some("PEPM[UNIMOD:35]K".to_owned()),
+                None
+            ]
+        );
+        assert_eq!(
+            (
+                result.record_count,
+                result.converted_count,
+                result.warned_count,
+                result.failed_count
+            ),
+            (4, 3, 0, 1)
+        );
+    }
+
+    #[test]
+    fn the_envelope_names_the_formats_mzlib_registered() {
+        let result = unimod();
+        assert_eq!(
+            (
+                result.source_format.as_str(),
+                result.target_format.as_str(),
+                result.mode.as_str()
+            ),
+            ("mzLib", "Unimod", "ReturnNull")
+        );
+        assert_eq!(
+            result.source_formats,
+            ["MassShift", "Modomics", "ProForma", "mzLib"]
+        );
+        assert_eq!(
+            result.target_formats,
+            [
+                "Chronologer",
+                "Essential",
+                "MassShift",
+                "ProForma",
+                "Unimod",
+                "mzLib"
+            ]
+        );
+        assert_eq!(
+            result.columns.names(),
+            [
+                "input",
+                "output",
+                "status",
+                "failure_reason",
+                "incompatible_items",
+                "warnings",
+                "errors"
+            ]
+        );
+        assert_eq!(result.caveats.len(), 6);
+        assert!(result
+            .caveats
+            .iter()
+            .any(|c| c.contains("ProForma") && c.contains("UniProt")));
+    }
+
+    #[test]
+    fn real_psmtsv_sequences_to_unimod() {
+        let full_sequences = psm_full_sequences();
+        let result = conversions(include_str!(
+            "../tests/fixtures/peptidoform_convert_psmtsv.json"
+        ));
+        let rows = result.sequences().unwrap();
+        let inputs: Vec<String> = rows.iter().map(|r| r.input.clone()).collect();
+        assert_eq!(inputs, full_sequences);
+        let outputs = result.outputs().unwrap();
+        assert_eq!(outputs[0].as_deref(), Some("YPIEH[UNIMOD:34]GIVTNWDDMEK"));
+        assert_eq!(
+            outputs[4].as_deref(),
+            Some("YPIEH[UNIMOD:34]GIVTNWDDM[UNIMOD:35]EK")
+        );
+        assert_eq!(result.converted_count, 8);
+        assert_eq!(result.record_count, 8);
+        assert!(outputs.iter().flatten().all(|o| !o.contains("UniProt:")));
+    }
+
+    #[test]
+    fn proforma_leaves_uniprot_modifications_unresolved() {
+        // The mzLib gap the caveats describe, pinned so a fix upstream is noticed when re-recorded.
+        let options = ConvertOptions {
+            target: "ProForma".into(),
+            ..Default::default()
+        };
+        let (args, _) = convert_request(&psm_full_sequences(), &options).unwrap();
+        assert_eq!(args[5], "ProForma");
+
+        let result = conversions(include_str!(
+            "../tests/fixtures/peptidoform_convert_psmtsv_proforma.json"
+        ));
+        let outputs = result.outputs().unwrap();
+        assert_eq!(
+            outputs[0].as_deref(),
+            Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDMEK")
+        );
+        assert_eq!(
+            outputs[2].as_deref(),
+            Some("AYHEQLSVAEITNAC[UNIMOD:4]FEPANQMVK")
+        );
+        assert_eq!(result.sequences().unwrap()[0].status, "converted");
+    }
+
+    #[test]
+    fn mode_and_threads_are_passed_through() {
+        let options = ConvertOptions {
+            mode: "removeincompatibleelements".parse().unwrap(),
+            threads: -1,
+            ..Default::default()
+        };
+        let (args, _) = convert_request(&PROBE, &options).unwrap();
+        assert_eq!(
+            args[6..],
+            ["--mode", "RemoveIncompatibleElements", "--threads", "-1"]
+        );
+        for mode in ConversionMode::ALL {
+            assert_eq!(mode.as_str().parse::<ConversionMode>().unwrap(), mode);
+            assert_eq!(mode.to_string(), mode.as_str());
+        }
+        assert_eq!(ConversionMode::default(), ConversionMode::ReturnNull);
+    }
+
+    #[test]
+    fn bad_arguments_are_refused_before_the_bridge() {
+        let usage =
+            |sequences: &[&str], options: ConvertOptions, needle: &str| match convert_request(
+                sequences, &options,
+            ) {
+                Err(MzLibError::Usage(message)) => {
+                    assert!(message.contains(needle), "{message:?} lacks {needle:?}");
+                }
+                other => panic!("expected a usage error containing {needle:?}, got {other:?}"),
+            };
+        let d = ConvertOptions::default;
+        usage(&[], d(), "At least one sequence");
+        usage(&["PEPTIDE", "  "], d(), "blank entry");
+        usage(&["PEP\nTIDE"], d(), "line break");
+        usage(&["PEP\rTIDE"], d(), "line break");
+        usage(
+            &["PEPTIDE"],
+            ConvertOptions {
+                source: " ".into(),
+                ..d()
+            },
+            "source must be",
+        );
+        usage(
+            &["PEPTIDE"],
+            ConvertOptions {
+                target: String::new(),
+                ..d()
+            },
+            "target must be",
+        );
+        usage(
+            &["PEPTIDE"],
+            ConvertOptions { threads: 0, ..d() },
+            "threads",
+        );
+        usage(
+            &["PEPTIDE"],
+            ConvertOptions { threads: -2, ..d() },
+            "threads",
+        );
+        let error = "Strict".parse::<ConversionMode>().unwrap_err();
+        assert!(
+            matches!(error, MzLibError::Usage(ref m) if m.contains("mode must be one of")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_older_bridge_without_new_fields_still_projects() {
+        let result = parse_conversions(serde_json::json!({
+            "column_names": ["input", "output"],
+            "columns": {"input": ["A"], "output": [null]}
+        }))
+        .unwrap();
+        assert_eq!(result.record_count, 0);
+        assert!(result.caveats.is_empty() && result.source_formats.is_empty());
+        assert_eq!(result.outputs().unwrap(), [None]);
     }
 }

@@ -17,7 +17,8 @@
 //!   under another name (`ECHOED_AS`), must name the recording's file;
 //! * a `proteins read` recording made with an accession filter answers only a filtered call, and
 //!   the reverse; a recording for one isobaric `kit` answers only a call that names a kit;
-//! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs.
+//! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs, and
+//!   for `peptidoform convert` the sequences sent must be the recording's `input` column, in order.
 //!
 //! No match, or more than one, is answered as a usage error naming the candidates, so the doctest
 //! fails and says why.
@@ -39,6 +40,8 @@ struct Recording {
     bulk: bool,
     /// The file names of the recording's `spectra_files[].full_path`, for `STDIN_ECHO` verbs.
     runs: &'static [&'static str],
+    /// The recording's `input` column, for `peptidoform convert` (`STDIN_ECHO`).
+    inputs: &'static [&'static str],
     /// (record_count or row_count, returned_count, offset) when the recording has a window.
     window: Option<(u64, u64, u64)>,
 }
@@ -97,11 +100,13 @@ const ECHOED_AS: &[(&str, &str)] = &[
     ("max-isoforms", "max_modification_isoforms"),
     ("psms", "psm_file"),
     ("peptides", "peptides_file"),
+    ("from", "source_format"),
+    ("to", "target_format"),
 ];
 
 /// Verbs whose input travels on stdin and is echoed in the recording, so a recording answers only a
 /// call that sent the same input. stdin is read only for these.
-const STDIN_ECHO: &[&str] = &["quant flashlfq"];
+const STDIN_ECHO: &[&str] = &["quant flashlfq", "peptidoform convert"];
 
 fn option<'a>(options: &'a [(String, Option<String>)], name: &str) -> Option<&'a Option<String>> {
     options.iter().find(|(n, _)| n == name).map(|(_, v)| v)
@@ -278,9 +283,15 @@ fn describe(options: &[(String, Option<String>)]) -> String {
         .join(" ")
 }
 
-/// For `STDIN_ECHO` verbs: the call's runs (the first tab-separated cell of each stdin line) must be
-/// the recording's runs, compared by file name.
-fn stdin_mismatch(recording: &Recording, stdin: &str) -> Option<String> {
+/// For `STDIN_ECHO` verbs: the call's stdin must be the recording's input. `quant flashlfq`: the
+/// same runs (the first tab-separated cell of each stdin line), compared by file name.
+/// `peptidoform convert`: the same sequences, in the same order, as the recording's `input` column.
+fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<String> {
+    if verb == "peptidoform convert" {
+        let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();
+        return (sent != recording.inputs)
+            .then(|| format!("recorded for sequences {:?}, not {sent:?}", recording.inputs));
+    }
     let mut sent: Vec<&str> = stdin
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -308,7 +319,7 @@ fn answer(argv: &[String], stdin: &str) -> (bool, String) {
     for recording in *candidates {
         let why = mismatch(recording, &options).or_else(|| {
             if STDIN_ECHO.contains(&verb.as_str()) {
-                stdin_mismatch(recording, stdin)
+                stdin_mismatch(recording, stdin, &verb)
             } else {
                 None
             }

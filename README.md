@@ -35,6 +35,10 @@ println!("{}", digest.modification_census.explain());
 //   14 of 38 annotated modifications were applied, across 14 residue positions.
 //   Excluded by type: 24 × glycosylation site — mzLib loads only 'modified residue' and …
 
+// A MetaMorpheus full sequence in Unimod accessions, by mzLib's own sequence conversion.
+let unimod = mzlib::peptidoform::convert(&["[UniProt:N-acetylserine on S]SEQK"])?;
+println!("{:?}", unimod.outputs()?);                     // [Some("[UNIMOD:1]SEQK")]
+
 // FlashLFQ — label-free quantification across runs.
 use mzlib::flashlfq::{quantify_with, QuantifyOptions, SpectraFile};
 let result = quantify_with(
@@ -143,6 +147,14 @@ describe its samples at all?) — which are blind in different places, which is 
 years, refusing any cell that would need a guess. `design_with` reads the label-free experimental
 design out of an SDRF in MetaMorpheus's terms, 0-based and ready for FlashLFQ, or refuses and lists
 every reason at once; `out` writes MetaMorpheus's `ExperimentalDesign.tsv`.
+
+**Full sequences convert in the `peptidoform` module**: `convert_with` hands MetaMorpheus or mzLib
+full sequences to mzLib's `SequenceConversionService` and returns one row per input with mzLib's
+verdict (`converted`, `converted_with_warnings` or `failed`), the modifications it could not write,
+and its warnings. Unimod is the default target. mzLib's ProForma target does not yet resolve
+UniProt modifications and writes them back by name, so convert to Unimod for those. It needs the
+bridge from pyMzLib 0.4.0, which this crate does not pin yet; an older bridge is refused before
+anything is spawned.
 
 **Isobaric kits have their own module**, `isobaric`: `kits` lists every kit mzLib can name, each
 channel's label and theoretical reporter-ion m/z, and the window mzLib reads a reporter intensity

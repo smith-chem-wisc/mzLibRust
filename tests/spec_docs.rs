@@ -461,6 +461,19 @@ const PEPTIDOFORM: &[Deviation] = &[
         None,
         "Peptide::modifications is a Vec; this is its len()",
     ),
+    dev(
+        "peptidoform convert",
+        "param.from",
+        Some("source"),
+        "the pair source/target, as pyMzLib spells them and mzLib's own Convert(input, \
+         sourceFormat, targetFormat) names them",
+    ),
+    dev(
+        "peptidoform convert",
+        "param.to",
+        Some("target"),
+        "the pair to ConvertOptions::source; mzLib calls it targetFormat",
+    ),
 ];
 
 /// Deviations: quant (flashlfq).
