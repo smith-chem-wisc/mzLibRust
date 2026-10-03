@@ -9,7 +9,7 @@
 
 Never returned: `service_unavailable`.
 
-### `isobaric kits` · `mzlib::isobaric::kits` (not yet)
+### `isobaric kits` · [`mzlib::isobaric::kits`](crate::isobaric::kits)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -59,7 +59,7 @@ Never returned: `service_unavailable`.
 | `service_unavailable` | [`MzLibError::ServiceUnavailable`](crate::MzLibError::ServiceUnavailable) | the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (\#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx, or a body cut off in transit |
 | `correctness` | [`MzLibError::Bridge`](crate::MzLibError::Bridge) | any other HTTP status; a paging contract violation (MzLibException: an identical page while total\_records says more remain); the page limit (mzLib MaxPages) exceeded |
 
-### `proteins annotate-go` · `mzlib::proteins::annotate_go_with` (not yet)
+### `proteins annotate-go` · [`mzlib::proteins::annotate_go_with`](crate::proteins::annotate_go_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -89,7 +89,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `proteins update-go` · `mzlib::proteins::update_go` (not yet)
+### `proteins update-go` · [`mzlib::proteins::update_go`](crate::proteins::update_go)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -251,7 +251,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `sdrf design` · `mzlib::sdrf::design_with` (not yet)
+### `sdrf design` · [`mzlib::sdrf::design_with`](crate::sdrf::design_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -319,7 +319,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `stats adjust` · `mzlib::stats::adjust` (not yet)
+### `stats adjust` · [`mzlib::stats::adjust`](crate::stats::adjust)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -328,7 +328,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `stats fit` · `mzlib::stats::fit_with` (not yet)
+### `stats fit` · [`mzlib::stats::fit_with`](crate::stats::fit_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -339,7 +339,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `stats meta` · `mzlib::stats::meta_with` (not yet)
+### `stats meta` · [`mzlib::stats::meta_with`](crate::stats::meta_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

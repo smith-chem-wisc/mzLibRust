@@ -6,11 +6,11 @@
 |---|---|---|---|---|
 | Resolve every protein in the given databases to stable Ensembl gene ids, counted against a caller-supplied, release-pinned gene set, with one outcome per protein and the hash of every input. | [`mzlib::proteins::resolve_genes_with`](crate::proteins::resolve_genes_with) | `pymzlib.proteins.resolve_genes` | `proteins_resolve_genes` | `genes resolve` |
 
-## `isobaric`
+## `isobaric` · guide: [`isobaric`](crate::isobaric)
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| List the isobaric labelling kits mzLib can name, with every channel's label and reporter-ion m/z. | `mzlib::isobaric::kits` (not yet) | `pymzlib.isobaric.kits` | `isobaric_kits` | `isobaric kits` |
+| List the isobaric labelling kits mzLib can name, with every channel's label and reporter-ion m/z. | [`mzlib::isobaric::kits`](crate::isobaric::kits) | `pymzlib.isobaric.kits` | `isobaric_kits` | `isobaric kits` |
 
 ## `peptidoform` · guide: [`peptidoform`](crate::peptidoform)
 
@@ -31,10 +31,10 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Annotate a stored MetaMorpheus protein-group table with Gene Ontology terms: one row per (group, term) that any member holds, directly or through an ancestor, with no member privileged. | `mzlib::proteins::annotate_go_with` (not yet) | `pymzlib.proteins.annotate_go` | `proteins_annotate_go` | `proteins annotate-go` |
+| Annotate a stored MetaMorpheus protein-group table with Gene Ontology terms: one row per (group, term) that any member holds, directly or through an ancestor, with no member privileged. | [`mzlib::proteins::annotate_go_with`](crate::proteins::annotate_go_with) | `pymzlib.proteins.annotate_go` | `proteins_annotate_go` | `proteins annotate-go` |
 | Classify peptides as unique to one sequence, shared within a gene, shared across genes, or not in the databases, treating I and L as the same residue. | [`mzlib::proteins::classify_peptides_with`](crate::proteins::classify_peptides_with) | `pymzlib.proteins.classify_peptides` | `proteins_classify_peptides` | `proteins classify-peptides` |
 | Read protein databases (UniProt XML or FASTA) into one row per protein, with GO terms and Ensembl gene links as long tables on request. | [`mzlib::proteins::read_with`](crate::proteins::read_with) | `pymzlib.proteins.read` | `proteins_read` | `proteins read` |
-| Download the current Gene Ontology release (go.obo) to a path, on purpose, keeping any different file already there as a timestamped backup. | `mzlib::proteins::update_go` (not yet) | `pymzlib.proteins.update_go` | `proteins_update_go` | `proteins update-go` |
+| Download the current Gene Ontology release (go.obo) to a path, on purpose, keeping any different file already there as a timestamped backup. | [`mzlib::proteins::update_go`](crate::proteins::update_go) | `pymzlib.proteins.update_go` | `proteins_update_go` | `proteins update-go` |
 
 ## `quant` · guide: [`flashlfq`](crate::flashlfq)
 
@@ -63,7 +63,7 @@
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
 | Decide whether each SDRF file's sample half describes an experimental design - Informative, Partial or Skeleton - with the per-column counts behind the verdict. | [`mzlib::sdrf::assess`](crate::sdrf::assess) | `pymzlib.sdrf.assess` | `sdrf_assess` | `sdrf assess` |
-| Read a label-free experimental design out of an SDRF, in MetaMorpheus's terms, or every reason it was refused. | `mzlib::sdrf::design_with` (not yet) | `pymzlib.sdrf.design` | `sdrf_design` | `sdrf design` |
+| Read a label-free experimental design out of an SDRF, in MetaMorpheus's terms, or every reason it was refused. | [`mzlib::sdrf::design_with`](crate::sdrf::design_with) | `pymzlib.sdrf.design` | `sdrf_design` | `sdrf design` |
 | Find the concepts a set of SDRF documents wrote inconsistently, one row per finding and spelling. | [`mzlib::sdrf::lint_labelled`](crate::sdrf::lint_labelled) | `pymzlib.sdrf.lint` | `sdrf_lint` | `sdrf lint` |
 | Read characteristics\[age\] cells into years with an honest precision, refusing any cell that would need a guess. | [`mzlib::sdrf::parse_ages`](crate::sdrf::parse_ages) | `pymzlib.sdrf.parse_ages` | `sdrf_parse_ages` | `sdrf parse-age` |
 | Merge several SDRF documents into one analysis table, stamping each row with the document it came from. | [`mzlib::sdrf::pool_with`](crate::sdrf::pool_with) | `pymzlib.sdrf.pool` | `sdrf_pool` | `sdrf pool` |
@@ -71,13 +71,13 @@
 | One row per sample, column and position: what each source name's rows agree on, the columns they disagree about named and withheld, and characteristics\[age\] read into years. | [`mzlib::sdrf::samples`](crate::sdrf::samples) | `pymzlib.sdrf.samples` | `sdrf_samples` | `sdrf samples` |
 | Check SDRF-Proteomics files against the specification's structural rules, one row per finding. | [`mzlib::sdrf::validate`](crate::sdrf::validate) | `pymzlib.sdrf.validate` | `sdrf_validate` | `sdrf validate` |
 
-## `stats`
+## `stats` · guide: [`stats`](crate::stats)
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Adjust a list of p-values for the false discovery rate with Benjamini-Hochberg, keeping every input position and leaving untested entries out of the family. | `mzlib::stats::adjust` (not yet) | `pymzlib.stats.adjust` | `stats_adjust` | `stats adjust` |
-| Fit one linear model per feature of a feature-by-sample table and test each named coefficient with limma's empirical-Bayes moderated t, Benjamini-Hochberg adjusted, in one call. | `mzlib::stats::fit_with` (not yet) | `pymzlib.stats.fit` | `stats_fit` | `stats fit` |
-| Pool one effect size per study into a random-effects estimate per feature (DerSimonian-Laird), with heterogeneity, direction agreement and the largest leave-one-out change. | `mzlib::stats::meta_with` (not yet) | `pymzlib.stats.meta` | `stats_meta` | `stats meta` |
+| Adjust a list of p-values for the false discovery rate with Benjamini-Hochberg, keeping every input position and leaving untested entries out of the family. | [`mzlib::stats::adjust`](crate::stats::adjust) | `pymzlib.stats.adjust` | `stats_adjust` | `stats adjust` |
+| Fit one linear model per feature of a feature-by-sample table and test each named coefficient with limma's empirical-Bayes moderated t, Benjamini-Hochberg adjusted, in one call. | [`mzlib::stats::fit_with`](crate::stats::fit_with) | `pymzlib.stats.fit` | `stats_fit` | `stats fit` |
+| Pool one effect size per study into a random-effects estimate per feature (DerSimonian-Laird), with heterogeneity, direction agreement and the largest leave-one-out change. | [`mzlib::stats::meta_with`](crate::stats::meta_with) | `pymzlib.stats.meta` | `stats_meta` | `stats meta` |
 
 ## `version`
 

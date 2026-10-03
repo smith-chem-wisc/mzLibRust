@@ -15,6 +15,18 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **Every guide opens with a question table, runs on real data, and says what to cite** (pyMzLib
+  #72). A module's `//!` documentation is its guide; `tests/docs_lint.rs` holds each one to a
+  `| You want to | Call | mzLib type |` table in its first lines, a `## Cite` section rendered from
+  the specs' DOIs (`docs/reference/cite.<module>.md`), examples that run or say `Not run:` and why,
+  and no counts or mzLib versions in prose (README and the crate front page included). New worked
+  examples replay pyMzLib's guide recordings: the K562 MBR run and its median polish, the full
+  albumin digest, PXD000001's FTP tree and an unknown accession, the MSFragger identify, the RNA
+  transcript groups, MS1 peaks, a filtered protein read and the SDRF assessments. The crate front
+  page gains *Citing* and a generated *Which function do I want?* table; `MzLibError` lists every
+  error each verb can return; `docs/upgrading.md` lists the changes that give a different answer
+  from the same file; `CITATION.cff` gives the software citation.
+
 - **Gene Ontology for protein groups** (pyMzLib #70; specs `proteins.annotate-go.yaml`,
   `proteins.update-go.yaml`). `proteins::annotate_go_with` (+ `annotate_go`, `GoAnnotateOptions`)
   annotates a stored MetaMorpheus protein-group table against a UniProt XML and a go.obo you keep,
@@ -134,6 +146,12 @@ A wire verb's first appearance here is the version its spec in the bridge record
 - This changelog.
 
 ### Changed
+
+- **`QuantifyOptions::use_pep_q_value` says what it does**: it filters nothing, and changes the
+  q-value FlashLFQ carries, which match-between-runs reads. `bayesian_protein_quant`'s results are
+  written to `output_directory` only (pyMzLib #72).
+- **The hand-written `pride_ftp_PXD000001.json` is gone**: the FTP examples and tests replay
+  pyMzLib's recording of the real tree, which holds 14 files.
 
 - **Four shipped modifications now write their Unimod accession in `pro_forma`** (mzLib #1328):
   `GG (Ubiquitination Site)` as `[UNIMOD:121]`, both `Myristoylation` entries as `[UNIMOD:45]` and
