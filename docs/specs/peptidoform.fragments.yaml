@@ -167,7 +167,7 @@ examples:
     r: "digest <- peptidoform_fragments('P02768', max_modifications = 1)"
 
 open_questions:
-  - "peptides_at_isoform_cap is computed on the DE-DUPLICATED list, although FragmentsAsync's own comment says it must count the raw digest (a truncated locus deduped below the cap then reads as untruncated); the correctly computed peptidesAtCap local is never used. Likely a bridge bug; the doc above describes what the wire does."
+  - "peptides_at_isoform_cap is computed on the DE-DUPLICATED list, although FragmentsAsync's own comment says it must count the raw digest (a truncated locus deduped below the cap then reads as untruncated); the correctly computed peptidesAtCap local is never used. Confirmed a bridge bug (pyMzLib 005), fixed on pyMzLib main by #67 (unreleased after 0.2.0): the wire then counts the raw digest, as the doc above says. Close this once a release carries #67."
   - "The example fixture is hand-trimmed (2 peptides of a max-mods 1 digest), so its peptide_count is not what the live call returns; the envelope keys are the live ones."
   - "Integer options are not range-checked by the bridge (negative min-length, max-isoforms 0); the bindings check them. Enum.TryParse also accepts numeric strings, so --dissociation 3 or --terminus 7 pass as undefined members. Behaviour of mzLib on such values is unverified."
   - "The wire names max-mods and no-modifications project as max_modifications and modifications (inverted) in every binding; pyMzLib's spec lint will need PYTHON_DEVIATIONS entries for them."

@@ -171,11 +171,14 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
     // BULK.md: a --paths-stdin call has its own envelope. A recording is bulk when it carries the
     // per-input files[] (entries with a path) and no top-level path. `pride files` also has a
     // files list, of PRIDE files, which carry no path.
+    // An empty list says nothing either way (PRIDE's answer for an unknown accession is files=[]),
+    // so it counts as bulk only when BULK.md's read_count says so.
     let bulk = match map.get("files") {
         Some(Value::Array(files)) => {
-            files
-                .iter()
-                .all(|f| f.as_object().is_some_and(|f| f.contains_key("path")))
+            (!files.is_empty() || map.contains_key("read_count"))
+                && files
+                    .iter()
+                    .all(|f| f.as_object().is_some_and(|f| f.contains_key("path")))
                 && !map.contains_key("path")
         }
         _ => false,
@@ -195,9 +198,19 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
         _ => "None".to_owned(),
     };
 
+    // The runs a `quant flashlfq` recording was made from, by file name (stub.rs STDIN_ECHO).
+    let runs: Vec<String> = match map.get("spectra_files") {
+        Some(Value::Array(files)) => files
+            .iter()
+            .filter_map(|f| f.get("full_path").and_then(Value::as_str))
+            .map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned())
+            .collect(),
+        _ => Vec::new(),
+    };
+
     format!(
         "        Recording {{ fixture: {name:?}, envelope: include_str!({path:?}), fields: &[{fields}], \
-         bulk: {bulk}, window: {window} }},\n",
+         bulk: {bulk}, runs: &{runs:?}, window: {window} }},\n",
         path = envelope.display().to_string(),
     )
 }

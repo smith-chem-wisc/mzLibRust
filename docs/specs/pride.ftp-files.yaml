@@ -44,7 +44,7 @@ result:
 
 errors:
   - {kind: usage, when: "accession missing or blank"}
-  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; mzLib#1350 is not merged): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx on the project lookup or on any directory listing, or a body cut off in transit"}
+  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx on the project lookup or on any directory listing, or a body cut off in transit"}
   - {kind: correctness, when: "no project has that accession, or it has no publication date to locate its directory (MzLibException; the bindings re-map it to their not-found error); a directory listing answering any other status; nesting deeper than 64 levels (MzLibException: the listing may be cyclic)"}
 
 caveats:

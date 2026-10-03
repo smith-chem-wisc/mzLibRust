@@ -40,8 +40,8 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! mzLib 1.0.592 recognises **36 file types** and this crate reads all of them;
-//! [`readers::formats`] lists them from the mzLib the bridge carries.
+//! This crate reads **every file type mzLib recognises**; [`readers::formats`] lists them from
+//! the mzLib the bridge carries.
 //! [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views; and
@@ -82,6 +82,10 @@
 //! per verb that all three bindings share. See `docs/reference-facts.md` in the repository.
 
 #![forbid(unsafe_code)]
+// The reference fragments (docs/reference/) are rendered once and included into modules with
+// different imports, so they link `crate::MzLibError::Usage` explicitly: the target is needed where
+// `MzLibError` is not in scope and redundant where it is. rustdoc 1.99 reports the second case.
+#![allow(rustdoc::redundant_explicit_links)]
 
 pub mod bridge;
 pub mod flashlfq;
