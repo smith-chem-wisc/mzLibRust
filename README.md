@@ -52,7 +52,7 @@ let proteins = median_polish_with("QuantifiedPeptides.tsv", &MedianPolishOptions
     ..Default::default()
 })?;
 
-// Readers — spectra as well as search output; identify any of mzLib's 36 types and read ALL of them.
+// Readers — spectra as well as search output; identify any type mzLib knows and read ALL of them.
 // mzML, Thermo .raw, Bruker .d, timsTOF .d, MGF and msalign all read through read_spectra.
 let scans = mzlib::readers::read_spectra("run.mzML")?;
 println!("{} scans", scans.scan_count);
@@ -60,7 +60,7 @@ println!("{} scans", scans.scan_count);
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 
-let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on all 36
+let table = mzlib::readers::read_records("toppic_prsm.tsv")?;   // works on every format
 let e_values = table.columns.floats("e_value")?;                // Vec<Option<f64>>
 
 // Hundreds of runs, one bridge process, one long table; each run's instrument in its report.
@@ -88,20 +88,20 @@ let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bov
 
 ### Reading: one universal function, four typed views
 
-What differs between mzLib 1.0.592's 36 formats is not *whether* you can read them but *what the
-columns mean*. The counts are the pin's; `mzlib::readers::formats()` gives the live ones.
+What differs between mzLib's formats is not *whether* you can read them but *what the columns
+mean*. The counts are the pinned bridge's; `mzlib::readers::formats()` gives the live ones.
 
 | function | reads | columns |
 |---|---|---|
-| `read_records` | **all 36** | **that format's own fields**, under mzLib's names |
+| `read_records` | **all of them** | **that format's own fields**, under mzLib's names |
 | `read_results` | 4 | uniform `quantifiable` view |
 | `read_features` | 2 | uniform `ms1_features` view |
 | `read_matches` | 6 | uniform `spectral_match` view |
 | `read_spectra` | 7 | scan headers; peaks opt-in |
 
-**17 of the 36 belong to no cross-format family at all** — TopPIC, Crux, MSFragger's peptide and
-protein tables, the FlashDeconv formats, SDRF, and the MetaMorpheus and FlashLFQ quantification
-tables. mzLib parses them into a format-specific shape and there is no uniform view to project them
+**About half of them belong to no cross-format family at all** — TopPIC, Crux, MSFragger's
+peptide and protein tables, the FlashDeconv formats, SDRF, and the MetaMorpheus and FlashLFQ
+quantification tables with their RNA counterparts. mzLib parses them into a format-specific shape and there is no uniform view to project them
 onto, so `read_records` is what reaches them; it is a necessity, not a convenience.
 
 **Many files are one call, not a loop.** Every reader has a `_many` twin that takes a list and
@@ -109,9 +109,11 @@ returns one long table whose first two columns name the file each row came from,
 per file (its instrument, its absent fields, why it failed under `OnError::Skip`). The list is read
 by one bridge process, `threads` files at a time; the answer is identical at any thread count.
 
-**Three quantification tables have functions of their own** (mzLib 1.0.592): MetaMorpheus protein
-groups (`read_protein_groups`), FlashLFQ peptides (`read_quantified_peptides`) and PTM site
-occupancy (`read_occupancy`), each as a long table, one row per record per sample. `read_records`
+**The quantification tables have functions of their own**: MetaMorpheus protein groups
+(`read_protein_groups`), FlashLFQ peptides (`read_quantified_peptides`) and PTM site occupancy
+(`read_occupancy`), each as a long table, one row per record per sample. An RNA search's transcript
+groups and oligos read through the same three, and so does a protein-group table MetaMorpheus wrote
+without quantifying (its `intensity` is in `absent_fields`). `read_records`
 reads those files too, but their per-sample values are dictionaries it names and cannot project.
 
 **SDRF is the exception: read it with the `sdrf` module, not `read_records`.** `read_records` joins

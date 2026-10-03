@@ -25,11 +25,11 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! mzLib 1.0.592 recognises **36 file types**: those instrument and deconvolution formats, plus
-//! the output of a dozen search tools — MetaMorpheus, MSFragger, TopPIC, TopFD, MsPathFinderT,
-//! Crux, Casanovo, FlashDeconv, Dinosaur, DIA-NN, FlashLFQ, Pytheas, and any mzIdentML writer — and
-//! maintains a parser for each. **Every one is readable here.** Ask [`formats`] rather than
-//! trusting that number: it is enumerated from the mzLib the bridge carries, so it cannot drift.
+//! mzLib recognises those instrument and deconvolution formats, plus the output of a dozen search
+//! tools — MetaMorpheus, MSFragger, TopPIC, TopFD, MsPathFinderT, Crux, Casanovo, FlashDeconv,
+//! Dinosaur, DIA-NN, FlashLFQ, Pytheas, and any mzIdentML writer — and maintains a parser for each.
+//! **Every one is readable here.** Ask [`formats`] how many there are rather than trusting a number
+//! written on a page: it is enumerated from the mzLib the bridge carries, so it cannot drift.
 //!
 //! ```
 //! # mzlib_replay::activate();
@@ -48,28 +48,29 @@
 //! ## Choosing a function
 //!
 //! What differs between formats is not *whether* you can read them but *what the columns mean*.
-//! The counts are mzLib 1.0.592's; [`formats`] gives the live ones.
+//! The counts are those of the mzLib in the pinned bridge; [`formats`] gives the live ones.
 //!
 //! | function | reads | columns |
 //! |---|---|---|
-//! | [`read_records`] | **all 36** | **that format's own fields**, under mzLib's names |
+//! | [`read_records`] | **all of them** | **that format's own fields**, under mzLib's names |
 //! | [`read_results`] | 4 | uniform `quantifiable` view: sequence, RT, charge, mass, protein groups |
 //! | [`read_features`] | 2 | uniform `ms1_features` view: m/z, charge, RT range, intensity |
 //! | [`read_matches`] | 6 | uniform `spectral_match` view: scan, sequences, accession, decoy flag, q-value, rank |
 //! | [`read_spectra`] | 7 | scan headers; peaks opt-in; the run's instrument and start time |
-//! | [`read_protein_groups`] | 1 | MetaMorpheus protein groups, **long**: one row per group per sample group |
-//! | [`read_quantified_peptides`] | 1 | FlashLFQ peptides, **long**: one row per peptide per sample |
-//! | [`read_occupancy`] | 1 | MetaMorpheus PTM site occupancy: one row per group, sample group, basis and site |
+//! | [`read_protein_groups`] | 2 | MetaMorpheus protein (or RNA transcript) groups, **long**: one row per group per sample group |
+//! | [`read_quantified_peptides`] | 2 | FlashLFQ peptides (or RNA oligos), **long**: one row per peptide per sample |
+//! | [`read_occupancy`] | 2 | MetaMorpheus PTM site occupancy: one row per group, sample group, basis and site |
 //!
 //! The rule of thumb: **a typed view when you need numbers that mean the same thing across files,
 //! and [`read_records`] when you need everything one file has.** A `.psmtsv` through
 //! [`read_results`] gives 10 comparable columns; the same file through [`read_records`] gives 73,
 //! including the q-values and scores the uniform view does not carry.
 //!
-//! An empty [`FileInfo::views`] is a real and common answer — **17 of the 36** have it, meaning
-//! mzLib parses the file into a shape that shares nothing with any other format. Those are exactly
-//! the files [`read_records`] exists for. Three of them — the MetaMorpheus and FlashLFQ
-//! quantification tables — also have functions of their own, because their per-sample values are
+//! An empty [`FileInfo::views`] is a real and common answer — about half the formats have it
+//! (the [`formats`] example counts them), meaning mzLib parses the file into a shape that shares
+//! nothing with any other format. Those are exactly the files [`read_records`] exists for. The
+//! MetaMorpheus and FlashLFQ quantification tables, and their RNA counterparts (mzLib #1388), also
+//! have functions of their own, because their per-sample values are
 //! dictionaries that [`read_records`] cannot project (mzLib #1347): it names them in
 //! [`NativeRecords::excluded_fields`] and points at the function that carries them.
 //!
@@ -425,7 +426,7 @@ pub struct Format {
     #[serde(default)]
     pub reader: Option<String>,
     /// The cross-format views this format offers, from `quantifiable`, `ms1_features`,
-    /// `spectra` and `spectral_match`. **Empty is a real answer**: 17 of 36 at mzLib 1.0.592
+    /// `spectra` and `spectral_match`. **Empty is a real answer**: about half of mzLib's formats
     /// offer none and are readable only through [`read_records`].
     #[serde(default)]
     pub views: Vec<String>,
@@ -997,10 +998,11 @@ pub struct ProteinGroupRecords {
     /// The absolute path that was read.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub path: String,
-    /// `"MetaMorpheusQuantifiedProteinGroups"`.
+    /// `"MetaMorpheusQuantifiedProteinGroups"`, or `"MetaMorpheusQuantifiedTranscriptGroups"` for an
+    /// RNA search.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_type: String,
-    /// `"ProteinGroupFromTsvFile"`.
+    /// `"ProteinGroupFromTsvFile"`, or `"TranscriptGroupFromTsvFile"` for an RNA search.
     #[serde(default)]
     pub reader: Option<String>,
     /// The file's sample-group labels, in header order, verbatim — e.g.
@@ -1071,10 +1073,10 @@ pub struct QuantifiedPeptideRecords {
     /// The absolute path that was read.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub path: String,
-    /// `"FlashLFQQuantifiedPeptide"`.
+    /// `"FlashLFQQuantifiedPeptide"`, or `"FlashLFQQuantifiedOligo"` for an RNA search.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_type: String,
-    /// `"QuantifiedPeptideFile"`.
+    /// `"QuantifiedPeptideFile"`, or `"QuantifiedOligoFile"` for an RNA search.
     #[serde(default)]
     pub reader: Option<String>,
     /// The file's sample labels, in header order, verbatim.
@@ -1142,10 +1144,11 @@ pub struct OccupancyRecords {
     /// The absolute path that was read.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub path: String,
-    /// `"MetaMorpheusQuantifiedProteinGroups"`.
+    /// `"MetaMorpheusQuantifiedProteinGroups"`, or `"MetaMorpheusQuantifiedTranscriptGroups"` for an
+    /// RNA search.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_type: String,
-    /// `"ProteinGroupFromTsvFile"`.
+    /// `"ProteinGroupFromTsvFile"`, or `"TranscriptGroupFromTsvFile"` for an RNA search.
     #[serde(default)]
     pub reader: Option<String>,
     /// The file's sample-group labels, in header order.
@@ -1752,7 +1755,8 @@ fn read_many<P: AsRef<Path>>(
 ///     .map(|f| f.file_type.as_str())
 ///     .collect();
 /// assert_eq!(quantifiable, ["psmtsv", "osmtsv", "MsFraggerPsm", "DiaNnReport"]);
-/// assert_eq!(formats.iter().filter(|f| f.views.is_empty()).count(), 17);
+/// assert_eq!(formats.len(), 38);
+/// assert_eq!(formats.iter().filter(|f| f.views.is_empty()).count(), 19);
 /// # Ok::<(), mzlib::MzLibError>(())
 /// ```
 #[doc = include_str!("../docs/reference/readers.formats.see-also.md")]
@@ -1947,9 +1951,10 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<NativeRecords> {
 /// Read **any** file mzLib recognises into a table of that format's own record fields, naming
 /// every field that could not become a column.
 ///
-/// The exhaustive verb: if [`identify`] succeeds on a path, this reads it — including the 17 file
+/// The exhaustive verb: if [`identify`] succeeds on a path, this reads it — including the file
 /// types that belong to no cross-format view at all (TopPIC, Crux, MSFragger's peptide and
-/// protein tables, the FlashDeconv formats, the MetaMorpheus and FlashLFQ quantification tables),
+/// protein tables, the FlashDeconv formats, the MetaMorpheus and FlashLFQ quantification tables
+/// and their RNA counterparts),
 /// which no other function in this module can touch. The columns are **not uniform**; see
 /// [`NativeRecords`].
 ///
@@ -2265,7 +2270,7 @@ pub fn read_spectra_many<P: AsRef<Path>>(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The quantification tables (mzLib 1.0.592, #1347)
+// The quantification tables (mzLib #1347; RNA tables #1388; unquantified groups #1365)
 // ---------------------------------------------------------------------------------------------
 
 /// Read a MetaMorpheus protein-group table with every default.
@@ -2282,7 +2287,15 @@ pub fn read_protein_groups(path: impl AsRef<Path>) -> Result<ProteinGroupRecords
 /// Read a MetaMorpheus `AllQuantifiedProteinGroups.tsv` as one row per protein group per sample
 /// group, with each sample group's spectral count and intensity as columns.
 ///
-/// mzLib 1.0.592 reads the per-sample columns into a dictionary (#1347) that [`read_records`]
+/// Any MetaMorpheus protein-group table reads ([`identify`] reports
+/// `MetaMorpheusQuantifiedProteinGroups`): `AllQuantifiedProteinGroups.tsv`, and also
+/// `AllProteinGroups.tsv` and each file's `<file>_ProteinGroups.tsv` from a search run without
+/// quantification (mzLib #1365). Those have spectral counts but no intensities, so `intensity` is
+/// in [`ProteinGroupRecords::absent_fields`]. An RNA search's `AllQuantifiedTranscriptGroups.tsv`
+/// reads too (mzLib #1388): mzLib parses it with a subclass of the protein-group reader, so the
+/// columns keep their protein names and `protein_group_name` is the transcript group.
+///
+/// mzLib reads the per-sample columns into a dictionary (#1347) that [`read_records`]
 /// cannot project; this is that dictionary as a **long** table beside the fields you filter on.
 /// The group's other fields — coverage, masses, member counts — are in [`read_records`], joined on
 /// `protein_group_name`; PTM site occupancy is [`read_occupancy`].
@@ -2356,6 +2369,10 @@ pub fn read_quantified_peptides(path: impl AsRef<Path>) -> Result<QuantifiedPept
 
 /// Read a FlashLFQ `QuantifiedPeptides.tsv` (or MetaMorpheus `AllQuantifiedPeptides.tsv`) as one
 /// row per peptide per sample, with the sample's intensity and detection type as columns.
+///
+/// An RNA search's `AllQuantifiedOligos.tsv` reads too (mzLib #1388), with the oligonucleotide in
+/// `sequence`: mzLib parses it with a subclass of the peptide reader, so the columns keep their
+/// peptide names.
 ///
 /// **An intensity of 0 is not a measured zero**: FlashLFQ writes 0 for a peptide it did not
 /// quantify in a sample. Filter on `detection_type` before a mean or a log.
@@ -2449,8 +2466,11 @@ pub fn read_occupancy(path: impl AsRef<Path>) -> Result<OccupancyRecords> {
 /// Read the PTM site occupancy of a MetaMorpheus `AllQuantifiedProteinGroups.tsv` as one row per
 /// group, sample group, basis and modified site.
 ///
+/// Any table [`read_protein_groups`] reads is accepted, including an RNA search's
+/// `AllQuantifiedTranscriptGroups.tsv` (mzLib #1388), whose sites name RNA modifications.
+///
 /// MetaMorpheus writes two occupancy cells per group per sample group — one from PSM counts, one
-/// from intensities — each a list of modified sites encoded as text. mzLib 1.0.592 parses them
+/// from intensities — each a list of modified sites encoded as text. mzLib parses them
 /// (`ModificationOccupancyCell`, #1347); this returns every site of every cell as a row, with
 /// `basis` saying which cell it came from. Check [`OccupancyRecords::truncated_cell_count`] and
 /// [`OccupancyRecords::failed_fields`]: a cut or malformed cell shortens the table.

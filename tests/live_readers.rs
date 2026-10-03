@@ -55,15 +55,18 @@ fn every_format_the_bridge_lists_is_one_this_crate_can_describe() {
 
     assert_eq!(
         formats.len(),
-        36,
-        "mzLib 1.0.592 recognises 36 file types; a change here means the crate's documented \
-         count is stale (the bridge's readers formats spec records the count per pin)"
+        38,
+        "mzLib 1.0.593 recognises 38 file types; a change here means the recorded formats \
+         fixture and the formats example are stale (the bridge's readers formats spec records \
+         the count per pin)"
     );
 
-    // 17 of 36 belong to no cross-format family, which is the fact that makes read_records
-    // necessary rather than a convenience.
+    // 19 of 38 belong to no cross-format family, which is the fact that makes read_records
+    // necessary rather than a convenience. 17 -> 19 with mzLib 1.0.593: #1388's RNA
+    // transcript-group and quantified-oligo tables subclass the protein-group and peptide readers
+    // and add no shared interface.
     let viewless = formats.iter().filter(|f| f.views.is_empty()).count();
-    assert_eq!(viewless, 17, "17 of 36 have no view at all");
+    assert_eq!(viewless, 19, "19 of 38 have no view at all");
 
     // Four, not three: mzLib 1.0.585 added DiaNnReport (mzLib #1120), which is how DIA data
     // reaches read_results and FlashLFQ at all.
@@ -515,4 +518,122 @@ fn the_quantification_tables_match_their_recordings() {
     let recorded = recording("readers_occupancy.json");
     assert_eq!(sites.row_count, recorded["row_count"].as_u64().unwrap());
     assert_eq!(sites.truncated_cell_count, 0);
+}
+
+// ---- tables mzLib 1.0.593 reads through the same three functions -----------------------------
+//
+// The values are mzLib's own TestTranscriptGroupFromTsv's, the same ones pyMzLib's live tests pin.
+
+const TRANSCRIPT_GROUPS: &str =
+    "FileReadingTests/ExternalFileTypes/MetaMorpheus_RNA_AllQuantifiedTranscriptGroups.tsv";
+const OLIGOS: &str = "FileReadingTests/ExternalFileTypes/MetaMorpheus_RNA_AllQuantifiedOligos.tsv";
+
+#[test]
+fn an_rna_transcript_group_table_reads_through_read_protein_groups() {
+    // mzLib #1388: TranscriptGroupFromTsvFile subclasses the protein-group reader.
+    let Some(()) = require_verb("readers read-protein-groups") else {
+        return;
+    };
+    let path = fixture_or_skip!(TRANSCRIPT_GROUPS);
+
+    let groups =
+        mzlib::readers::read_protein_groups(&path).expect("a transcript-group table reads");
+    assert_eq!(groups.record_count, 3);
+
+    let names = groups.columns.strings("protein_group_name").unwrap();
+    let labels = groups.columns.strings("sample_label").unwrap();
+    let counts = groups.columns.integers("spectral_count").unwrap();
+    let intensities = groups.columns.floats("intensity").unwrap();
+    let fluc: Vec<(Option<i64>, Option<f64>)> = (0..names.len())
+        .filter(|&i| names[i].as_deref() == Some("FLuc") && labels[i].as_deref() == Some("1:1_1"))
+        .map(|i| (counts[i], intensities[i]))
+        .collect();
+    assert_eq!(fluc, [(Some(355), Some(89_077_470.710_047_36))]);
+
+    let info = mzlib::readers::identify(&path).expect("identify answers");
+    assert_eq!(info.file_type, "MetaMorpheusQuantifiedTranscriptGroups");
+}
+
+#[test]
+fn an_rna_transcript_group_table_reads_its_rna_modification_occupancy() {
+    let Some(()) = require_verb("readers read-occupancy") else {
+        return;
+    };
+    let path = fixture_or_skip!(TRANSCRIPT_GROUPS);
+
+    let sites = mzlib::readers::read_occupancy(&path).expect("occupancy reads");
+    let modifications = sites.columns.strings("modification").unwrap();
+    assert!(modifications
+        .iter()
+        .any(|m| m.as_deref() == Some("2'-O-methyluridine on U")));
+}
+
+#[test]
+fn an_rna_oligo_table_reads_through_read_quantified_peptides() {
+    // mzLib #1388: QuantifiedOligoFile subclasses the quantified-peptide reader.
+    let Some(()) = require_verb("readers read-quantified-peptides") else {
+        return;
+    };
+    let path = fixture_or_skip!(OLIGOS);
+
+    let oligos = mzlib::readers::read_quantified_peptides_with(
+        &path,
+        &mzlib::readers::ReadOptions {
+            limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .expect("an oligo table reads");
+    assert_eq!(oligos.record_count, 492);
+    assert_eq!(
+        oligos.columns.strings("sequence").unwrap()[0].as_deref(),
+        Some("AAAAAAAAACUCG")
+    );
+
+    let info = mzlib::readers::identify(&path).expect("identify answers");
+    assert_eq!(info.file_type, "FlashLFQQuantifiedOligo");
+}
+
+#[test]
+fn a_protein_group_table_written_without_quantification_reads_with_no_intensity() {
+    // mzLib #1365: these names threw "Tsv file type not supported" before 1.0.593. MetaMorpheus
+    // writes Intensity_ columns only when it quantified, so the stand-in drops them.
+    let Some(()) = require_verb("readers read-protein-groups") else {
+        return;
+    };
+    let quantified = fixture_or_skip!(
+        "FileReadingTests/ExternalFileTypes/MetaMorpheus_1.1.11_AllQuantifiedProteinGroups.tsv"
+    );
+    let text = std::fs::read_to_string(&quantified).expect("the table reads as text");
+    let mut lines = text.lines();
+    let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    let keep: Vec<usize> = (0..header.len())
+        .filter(|&i| !header[i].starts_with("Intensity_"))
+        .collect();
+    let project = |line: &str| {
+        let cells: Vec<&str> = line.split('\t').collect();
+        keep.iter()
+            .map(|&i| cells.get(i).copied().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\t")
+    };
+    let mut unquantified = project(&header.join("\t"));
+    for line in lines {
+        unquantified.push('\n');
+        unquantified.push_str(&project(line));
+    }
+    unquantified.push('\n');
+
+    let scratch = std::env::temp_dir().join(format!("mzlib-live-1365-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    for name in ["AllProteinGroups.tsv", "Sample1_ProteinGroups.tsv"] {
+        let path = scratch.join(name);
+        std::fs::write(&path, &unquantified).unwrap();
+
+        let groups = mzlib::readers::read_protein_groups(&path)
+            .unwrap_or_else(|error| panic!("{name} should read: {error}"));
+        assert!(groups.record_count > 0, "{name}");
+        assert_eq!(groups.absent_fields, ["intensity"], "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
 }

@@ -15,6 +15,48 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365). They need a bridge built from
+  mzLib 1.0.593, which no published pyMzLib release carries yet, so the pinned bridge still reads
+  them as before.
+  - An RNA search's `AllQuantifiedTranscriptGroups.tsv` reads through `read_protein_groups` and
+    `read_occupancy`, and its `AllQuantifiedOligos.tsv` through `read_quantified_peptides`. mzLib
+    reads them with subclasses of the protein-group and peptide readers, so the columns keep their
+    protein names (`protein_group_name` is the transcript group, `sequence` the oligonucleotide),
+    and occupancy names RNA modifications. `formats()` lists two more types, neither with a view.
+  - MetaMorpheus protein-group tables written without quantification (`AllProteinGroups.tsv`,
+    `<file>_ProteinGroups.tsv`) now read through `read_protein_groups`, with `intensity` in
+    `absent_fields`; they failed with `Tsv file type not supported`.
+- **The specs at bridge `078d5f8`** in `docs/specs/`, with the recordings they name, byte for byte
+  from pyMzLib: the new verbs' specs (`proteins annotate-go`/`update-go`, `sdrf design`,
+  `isobaric kits`, `stats fit`/`adjust`/`meta`) arrive ahead of their functions, which the spec lint
+  skips until they exist.
+- **The replay bridge follows pyMzLib's rules again**: a recording with `written` answers only an
+  `out` call (and the reverse); an input file echoed as `<name>_file`, or under another name
+  (`--max-mods` as `max_modifications`, `--psms` as `psm_file`), must be the recording's file; a
+  filtered `proteins read` recording answers only a filtered call; a single-kit `isobaric kits`
+  recording answers only a call naming a kit; and `quant flashlfq` must send the recording's runs
+  on stdin.
+
+### Changed
+
+- **Four shipped modifications now write their Unimod accession in `pro_forma`** (mzLib #1328):
+  `GG (Ubiquitination Site)` as `[UNIMOD:121]`, both `Myristoylation` entries as `[UNIMOD:45]` and
+  `EQIGG` as `[UNIMOD:846]`, instead of by name, in `read_records` on a MetaMorpheus `.psmtsv` or
+  `.osmtsv`. Masses are unchanged.
+- **A read fault on an existing `.mzid` is `MzLibError::Bridge` of type `MzLibException` naming the
+  file** (mzLib #1362), where it was an `IOException`. A missing file is still a usage error.
+- **PRIDE download errors name the file and the host, never the URL** (mzLib #1350), so a reviewer
+  token in a query string cannot reach a log. They were, and still are, `ServiceUnavailable`.
+- **Counts and mzLib versions are gone from the readers prose**: the `formats()` example shows the
+  counts as executed output instead, so the next mzLib release cannot leave them stale.
+
+### Tested
+
+- **stdin is never inherited** (pyMzLib #73). The Python bridge call let a call with nothing to send
+  inherit the caller's stdin, so `median_polish(path)` hung in a terminal. This crate always pipes
+  stdin and closes it, so it never had the bug; a test now re-runs the test binary with a stdin
+  pipe that never closes and fails if a bridge call waits on it.
+
 - **The mzLib 1.0.592 batch** (pyMzLib #63, #64, #65), each verb against its spec in
   `docs/specs/`. It needs the bridge from pyMzLib 0.2.0 (mzLib 1.0.592): on the pinned 0.1.1
   bridge the new verbs and the many-file form are not dispatched, and the new fields read as empty

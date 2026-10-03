@@ -40,8 +40,8 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! mzLib 1.0.592 recognises **36 file types** and this crate reads all of them;
-//! [`readers::formats`] lists them from the mzLib the bridge carries.
+//! This crate reads **every file type mzLib recognises**; [`readers::formats`] lists them from
+//! the mzLib the bridge carries.
 //! [`readers::read_records`] reads any format into that format's own fields;
 //! [`readers::read_results`], [`readers::read_features`], [`readers::read_matches`] and
 //! [`readers::read_spectra`] project the four cross-format views; and
