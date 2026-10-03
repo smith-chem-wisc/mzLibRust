@@ -621,9 +621,18 @@ pub(crate) fn bridge_version_with(runner: &dyn Runner) -> Result<BridgeVersion> 
 /// `since.pymzlib` of their specs.
 ///
 /// Checked before `readers read-protein-groups`, `read-quantified-peptides` and `read-occupancy`,
-/// the same three pyMzLib checks. The sdrf and proteins verbs of the same release are not checked
-/// yet, in either binding: the recorded `version` payload both bindings replay predates them.
+/// the same three pyMzLib checks. The sdrf and proteins verbs of the same release are not checked,
+/// in either binding.
 pub(crate) const MZLIB_1_0_592_BRIDGE: &str = "0.2.0";
+
+/// The pyMzLib release whose bridge first dispatches the mzLib 1.0.593 verbs: the `since.pymzlib`
+/// pyMzLib's guard uses for them.
+///
+/// Checked before `proteins annotate-go`, `proteins update-go`, `stats fit`, `stats adjust` and
+/// `stats meta`, the same five pyMzLib checks. `sdrf design` and `isobaric kits` are not checked,
+/// in either binding.
+#[allow(dead_code)]
+pub(crate) const MZLIB_1_0_593_BRIDGE: &str = "0.3.0";
 
 /// The verbs each bridge reported, keyed by the executable's path, so the check below costs one
 /// `version` call per bridge per process rather than one per call.
