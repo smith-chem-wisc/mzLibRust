@@ -56,6 +56,9 @@
 //! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
 //! FlashLFQ, or every reason it cannot. The channels of the isobaric labelling kits mzLib can name
 //! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
+//! Differential abundance without R — limma's moderated t, Benjamini-Hochberg and
+//! DerSimonian-Laird meta-analysis, each held by mzLib to the R reference — is the [`stats`]
+//! module.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -125,6 +128,7 @@ pub mod pride;
 pub mod proteins;
 pub mod readers;
 pub mod sdrf;
+pub mod stats;
 
 pub use bridge::{
     bridge_path, bridge_version, BridgeVersion, MzLibError, OnError, Result, BRIDGE_ENV_VAR,

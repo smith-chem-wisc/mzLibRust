@@ -10,7 +10,7 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `stdin` (wire `--stdin`) | `string[]` | required | — | `>= 1 line; each in [0, 1], blank, NA or NaN` | One p-value per line. BLANK LINES ARE KEPT (as in sdrf parse-age) so output row i is line i; one trailing newline does not add a line. A blank, NA or NaN line is a feature that was not tested: it stays null and is not counted in m. A UTF-8 BOM is dropped. |
+| `p_values` (wire `--stdin`) | `string[]` | required | — | `>= 1 line; each in [0, 1], blank, NA or NaN` | One p-value per line. BLANK LINES ARE KEPT (as in sdrf parse-age) so output row i is line i; one trailing newline does not add a line. A blank, NA or NaN line is a feature that was not tested: it stays null and is not counted in m. A UTF-8 BOM is dropped. |
 
 # Returns
 

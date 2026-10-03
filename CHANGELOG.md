@@ -37,6 +37,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
   channel's label, theoretical reporter-ion m/z and matching window as an `IsobaricKits` table,
   grouped by `by_kit` and `kit`.
 
+- **`stats`, a new module: differential abundance with no R** (pyMzLib #71; specs
+  `stats.fit.yaml`, `stats.adjust.yaml`, `stats.meta.yaml`). `fit`/`fit_with` is limma's `lmFit`
+  then `eBayes(legacy = TRUE)` (`FitOptions { trend, spline_basis, threads, timeout }`, returning
+  `ModeratedFit` with its `VariancePrior` and typed `FitRow`s per coefficient); `adjust` is
+  Benjamini-Hochberg over `&[Option<f64>]`, `None` left out of the family; `meta`/`meta_with` pools
+  `Study` effect sizes per feature with DerSimonian-Laird (`MetaOptions { confidence, timeout }`).
+  Every number is mzLib's. Against limma's and metafor's own reference output, through this crate,
+  the worst relative difference is below 1e-10. Needs the bridge from pyMzLib 0.3.0: an older one is
+  refused before anything is read. The reference tables are pyMzLib's `tests/fixtures/stats/`, byte
+  for byte.
 - **The bridge pin moves to pyMzLib v0.3.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
   fetches it, verified against that release's `SHA256SUMS`.
 - **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365).

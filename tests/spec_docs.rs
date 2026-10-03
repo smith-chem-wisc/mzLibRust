@@ -59,7 +59,16 @@ const fn dev(
 
 /// Every deliberate difference between the specs and this crate, one list per module so that a
 /// change to one module's projection touches only its own list. Nothing else may be skipped.
-const DEVIATIONS: &[&[Deviation]] = &[COMMON, READERS, SDRF, PROTEINS, PRIDE, PEPTIDOFORM, QUANT];
+const DEVIATIONS: &[&[Deviation]] = &[
+    COMMON,
+    READERS,
+    SDRF,
+    PROTEINS,
+    PRIDE,
+    PEPTIDOFORM,
+    QUANT,
+    STATS,
+];
 
 /// Deviations: conventions that hold for every verb.
 const COMMON: &[Deviation] = &[
@@ -161,6 +170,28 @@ const SDRF: &[Deviation] = &[
         "param.searched-files-stdin",
         Some("searched_files"),
         "DesignOptions::searched_files is the list; giving it sets the flag and sends one per line",
+    ),
+];
+
+/// Deviations: stats.
+const STATS: &[Deviation] = &[
+    dev(
+        "stats fit",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_with's coefficients",
+    ),
+    dev(
+        "stats adjust",
+        "param.stdin",
+        Some("p_values"),
+        "one stdin line per element of adjust's p_values; None is the blank line",
+    ),
+    dev(
+        "stats meta",
+        "param.stdin",
+        Some("studies"),
+        "one tab-separated stdin line per Study in meta_with's studies",
     ),
 ];
 

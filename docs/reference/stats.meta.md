@@ -10,7 +10,7 @@
 
 | Parameter | Type | Default | Unit | Range | Meaning |
 |---|---|---|---|---|---|
-| `stdin` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | One study per line, tab-separated: feature, estimate, standard\_error. No header. A feature's lines need not be adjacent; features are reported in order of first appearance. The estimate must be finite and the standard error finite and positive. Blank lines are skipped. |
+| `studies` (wire `--stdin`) | `string[]` | required | — | `>= 1 line` | One study per line, tab-separated: feature, estimate, standard\_error. No header. A feature's lines need not be adjacent; features are reported in order of first appearance. The estimate must be finite and the standard error finite and positive. Blank lines are skipped. |
 | `confidence` (wire `--confidence`) | `float` | `0.95` | fraction (0 to 1) | `(0, 1)` | Coverage of the reported interval, as a fraction. |
 
 # Returns

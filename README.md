@@ -97,6 +97,9 @@ let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bov
 
 // Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
 let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
+// Differential abundance with no R — limma's moderated t, held by mzLib to limma itself.
+let fit = mzlib::stats::fit("log2_intensities.tsv", "design.tsv", &["treated"])?;
+let q = mzlib::stats::adjust(&[Some(0.0002), None, Some(0.031)])?;   // None: not in the family
 ```
 
 ### Reading: one universal function, four typed views
@@ -144,6 +147,12 @@ every reason at once; `out` writes MetaMorpheus's `ExperimentalDesign.tsv`.
 **Isobaric kits have their own module**, `isobaric`: `kits` lists every kit mzLib can name, each
 channel's label and theoretical reporter-ion m/z, and the window mzLib reads a reporter intensity
 in. Nothing in the table is typed in on this side.
+
+**Statistics have their own module**, `stats`: `fit` runs limma's `lmFit` and
+`eBayes(legacy = TRUE)` on a feature-by-sample table and a design, one moderated t per feature and
+coefficient with Benjamini-Hochberg; `adjust` adjusts p-values from anywhere else; `meta` pools
+effect sizes across studies with DerSimonian-Laird. mzLib holds each to the R reference (limma,
+metafor) to 1e-8, and the crate ships that reference so the check can be re-run.
 
 **Protein databases have their own module**, `proteins`: `read` gives one row per protein —
 organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;
