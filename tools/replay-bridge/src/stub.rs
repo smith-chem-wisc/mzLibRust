@@ -10,7 +10,14 @@
 //! * `--limit`/`--offset` must reproduce the recording's `returned_count` from its `record_count`
 //!   (or `row_count`), and a `--flag` with a `<flag>_included` key must match it;
 //! * a `--paths-stdin` call fits only a bulk recording (`files[]` whose entries carry a `path`, and
-//!   no top-level `path`, per BULK.md), and a one-path call only a one-document recording.
+//!   no top-level `path`, per BULK.md), and a one-path call only a one-document recording;
+//! * a recording with a `written` key fits an `--out` call only if `written` is set, and a call
+//!   without `--out` only if it is null;
+//! * an input-file option the bridge echoes as `<name>_file` (`--responses` -> `responses_file`), or
+//!   under another name (`ECHOED_AS`), must name the recording's file;
+//! * a `proteins read` recording made with an accession filter answers only a filtered call, and
+//!   the reverse; a recording for one isobaric `kit` answers only a call that names a kit;
+//! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs.
 //!
 //! No match, or more than one, is answered as a usage error naming the candidates, so the doctest
 //! fails and says why.
@@ -30,6 +37,8 @@ struct Recording {
     envelope: &'static str,
     fields: &'static [(&'static str, V)],
     bulk: bool,
+    /// The file names of the recording's `spectra_files[].full_path`, for `STDIN_ECHO` verbs.
+    runs: &'static [&'static str],
     /// (record_count or row_count, returned_count, offset) when the recording has a window.
     window: Option<(u64, u64, u64)>,
 }
@@ -81,6 +90,19 @@ fn parse(argv: &[String]) -> (String, Vec<(String, Option<String>)>) {
     (verb.join(" "), options)
 }
 
+/// Wire options a verb echoes under another name, so a recording made with one value cannot answer
+/// a call with another (`peptidoform fragments` echoes `--max-mods` as `max_modifications`).
+const ECHOED_AS: &[(&str, &str)] = &[
+    ("max-mods", "max_modifications"),
+    ("max-isoforms", "max_modification_isoforms"),
+    ("psms", "psm_file"),
+    ("peptides", "peptides_file"),
+];
+
+/// Verbs whose input travels on stdin and is echoed in the recording, so a recording answers only a
+/// call that sent the same input. stdin is read only for these.
+const STDIN_ECHO: &[&str] = &["quant flashlfq"];
+
 fn option<'a>(options: &'a [(String, Option<String>)], name: &str) -> Option<&'a Option<String>> {
     options.iter().find(|(n, _)| n == name).map(|(_, v)| v)
 }
@@ -88,7 +110,10 @@ fn option<'a>(options: &'a [(String, Option<String>)], name: &str) -> Option<&'a
 /// Why this recording cannot be the answer to these options, or `None` if it can.
 fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Option<String> {
     for (name, value) in options {
-        let key = name.replace('-', "_");
+        let key = ECHOED_AS
+            .iter()
+            .find(|(wire, _)| wire == name)
+            .map_or_else(|| name.replace('-', "_"), |(_, echoed)| (*echoed).to_owned());
         if matches!(name.as_str(), "limit" | "offset" | "out") {
             continue;
         }
@@ -107,6 +132,20 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
             }
             continue;
         };
+        // An input file option echoed back as <name>_file (--peptides -> peptides_file,
+        // --responses -> responses_file): hold the call's file to the recording's, by file name.
+        if recording.get(&key).is_none() {
+            if let Some(V::Text(file)) = recording.get(&format!("{key}_file")) {
+                if base(file) != base(value) {
+                    return Some(format!(
+                        "recorded from '{}', not '{}'",
+                        base(file),
+                        base(value)
+                    ));
+                }
+                continue;
+            }
+        }
         let recorded = match recording.get(&key) {
             None | Some(V::Compound) => continue,
             Some(recorded) => python_str(recorded),
@@ -130,6 +169,39 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
         } else {
             "a one-document recording".to_owned()
         });
+    }
+
+    // A recording that wrote a file answers only a call that asked for one, and the reverse: the
+    // payload's `written` block is the evidence, so an `out` example cannot print a recording that
+    // wrote nothing.
+    if let Some(written) = recording.get("written") {
+        let wrote = !matches!(written, V::Null);
+        if option(options, "out").is_some() != wrote {
+            return Some(if wrote {
+                "a recording that wrote out=".to_owned()
+            } else {
+                "a recording without out=".to_owned()
+            });
+        }
+    }
+
+    // proteins read: a filtered read (--accessions-stdin) and an unfiltered one never stand in for
+    // each other, or an example would print rows its filter did not select.
+    if let Some(filter) = recording.get("accession_filter_count") {
+        if option(options, "accessions-stdin").is_some() == matches!(filter, V::Null) {
+            return Some(
+                "a recording with the other accession filter (filtered vs unfiltered)".to_owned(),
+            );
+        }
+    }
+
+    if let Some(kit) = recording.get("kit") {
+        if !matches!(kit, V::Null) && option(options, "kit").is_none() {
+            return Some(format!(
+                "recorded for kit={}, but the call asks for every kit",
+                python_str(kit)
+            ));
+        }
     }
 
     if let Some(ms_order) = recording.get("ms_order") {
@@ -206,7 +278,23 @@ fn describe(options: &[(String, Option<String>)]) -> String {
         .join(" ")
 }
 
-fn answer(argv: &[String]) -> (bool, String) {
+/// For `STDIN_ECHO` verbs: the call's runs (the first tab-separated cell of each stdin line) must be
+/// the recording's runs, compared by file name.
+fn stdin_mismatch(recording: &Recording, stdin: &str) -> Option<String> {
+    let mut sent: Vec<&str> = stdin
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| base(line.split('\t').next().unwrap_or("").trim()))
+        .collect();
+    let mut recorded: Vec<&str> = recording.runs.to_vec();
+    sent.sort_unstable();
+    sent.dedup();
+    recorded.sort_unstable();
+    recorded.dedup();
+    (sent != recorded).then(|| format!("recorded for runs {recorded:?}, not {sent:?}"))
+}
+
+fn answer(argv: &[String], stdin: &str) -> (bool, String) {
     let (verb, options) = parse(argv);
     let Some((_, candidates)) = TABLE.iter().find(|(name, _)| *name == verb) else {
         return (
@@ -218,7 +306,14 @@ fn answer(argv: &[String]) -> (bool, String) {
     let mut fits = Vec::new();
     let mut reasons = Vec::new();
     for recording in *candidates {
-        match mismatch(recording, &options) {
+        let why = mismatch(recording, &options).or_else(|| {
+            if STDIN_ECHO.contains(&verb.as_str()) {
+                stdin_mismatch(recording, stdin)
+            } else {
+                None
+            }
+        });
+        match why {
             Some(why) => reasons.push(format!("{}: {why}", recording.fixture)),
             None => fits.push(recording),
         }
@@ -250,7 +345,13 @@ fn answer(argv: &[String]) -> (bool, String) {
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let (ok, envelope) = answer(&argv);
+    let (verb, _) = parse(&argv);
+    let mut stdin = String::new();
+    if STDIN_ECHO.contains(&verb.as_str()) {
+        use std::io::Read;
+        let _ = std::io::stdin().read_to_string(&mut stdin);
+    }
+    let (ok, envelope) = answer(&argv, &stdin);
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(envelope.as_bytes());
     let _ = stdout.flush();
