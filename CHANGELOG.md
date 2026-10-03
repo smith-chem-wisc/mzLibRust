@@ -15,9 +15,9 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
-- **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365). They need a bridge built from
-  mzLib 1.0.593, which no published pyMzLib release carries yet, so the pinned bridge still reads
-  them as before.
+- **The bridge pin moves to pyMzLib v0.3.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
+  fetches it, verified against that release's `SHA256SUMS`.
+- **The mzLib 1.0.593 tables** (pyMzLib #68, mzLib #1388, #1365).
   - An RNA search's `AllQuantifiedTranscriptGroups.tsv` reads through `read_protein_groups` and
     `read_occupancy`, and its `AllQuantifiedOligos.tsv` through `read_quantified_peptides`. mzLib
     reads them with subclasses of the protein-group and peptide readers, so the columns keep their
