@@ -25,6 +25,17 @@ A wire verb's first appearance here is the version its spec in the bridge record
   different file as a timestamped backup (`GoUpdate`). `string_list_maps` reads the
   `evidence_by_member` column. Both need the bridge from pyMzLib 0.3.0 and are refused, before
   anything is spawned, by an older one.
+- **`sdrf::design_with`, `sdrf::design`** (`sdrf design`, pyMzLib #69, mzLib #1363): the
+  label-free experimental design read out of an SDRF by mzLib's `SdrfLabelFreeDesign`, as an
+  `SdrfDesign` with `is_valid`, every refusal at once, and `notes` recording each renumbering.
+  `DesignOptions { condition_columns, searched_files, out, timeout }`. `SdrfDesign::files` gives
+  the 0-based `DesignedFile` rows; `spectra` and `run_design` hand them to `flashlfq::quantify_with`
+  and `median_polish_with`, and refuse a refused design. `out` writes MetaMorpheus's 1-based
+  `ExperimentalDesign.tsv` through mzLib's writer.
+- **The `isobaric` module** (`isobaric kits`, pyMzLib #69): `isobaric::kits(None)` lists every
+  kit mzLib can name and `kits(Some("TMT18"))` one, matched by mzLib's whole-name rule. Each
+  channel's label, theoretical reporter-ion m/z and matching window as an `IsobaricKits` table,
+  grouped by `by_kit` and `kit`.
 
 - **The bridge pin moves to pyMzLib v0.3.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
   fetches it, verified against that release's `SHA256SUMS`.

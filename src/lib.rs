@@ -53,6 +53,9 @@
 //! SDRF experimental-design files have their own module, [`sdrf`], because `read_records`
 //! cannot carry them without loss. Protein databases — what an accession is, which Ensembl gene
 //! it resolves to, and whether a peptide is unique — are the [`proteins`] module.
+//! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
+//! FlashLFQ, or every reason it cannot. The channels of the isobaric labelling kits mzLib can name
+//! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -116,6 +119,7 @@
 pub mod bridge;
 pub mod flashlfq;
 pub mod install;
+pub mod isobaric;
 pub mod peptidoform;
 pub mod pride;
 pub mod proteins;

@@ -80,6 +80,16 @@ let findings = mzlib::sdrf::validate("PXD000070.sdrf.tsv")?;
 let verdicts = mzlib::sdrf::assess_many(&corpus, &Default::default())?;   // Informative / Partial / Skeleton
 let ages = mzlib::sdrf::parse_ages(&["58Y", "40Y-85Y", ">=90Y", "63"])?;   // years, or why not
 
+// The label-free design FlashLFQ needs, read out of the SDRF — or every reason it cannot be.
+let design = mzlib::sdrf::design_with("PXD067622.sdrf.tsv", &mzlib::sdrf::DesignOptions {
+    condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
+    ..Default::default()
+})?;
+let spectra = design.spectra()?;          // Vec<SpectraFile>, 0-based, for flashlfq::quantify_with
+
+// Isobaric kits — every TMT, TMTpro, iTRAQ and DiLeu channel with its reporter-ion m/z, from mzLib.
+let tmtpro = mzlib::isobaric::kits(Some("TMT18"))?;
+
 // Protein databases — what an accession is, which gene it is, whether a peptide is unique.
 let db = mzlib::proteins::read(&["human.xml"])?;
 println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
@@ -127,7 +137,13 @@ module asks mzLib's three questions about a document — `validate` (is it well-
 `lint_labelled` (do several files write the same thing the same way?) and `assess` (does it
 describe its samples at all?) — which are blind in different places, which is why there are three.
 `samples` lifts each sample's characteristics, and `parse_ages` reads `characteristics[age]` into
-years, refusing any cell that would need a guess.
+years, refusing any cell that would need a guess. `design_with` reads the label-free experimental
+design out of an SDRF in MetaMorpheus's terms, 0-based and ready for FlashLFQ, or refuses and lists
+every reason at once; `out` writes MetaMorpheus's `ExperimentalDesign.tsv`.
+
+**Isobaric kits have their own module**, `isobaric`: `kits` lists every kit mzLib can name, each
+channel's label and theoretical reporter-ion m/z, and the window mzLib reads a reporter intensity
+in. Nothing in the table is typed in on this side.
 
 **Protein databases have their own module**, `proteins`: `read` gives one row per protein —
 organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;
