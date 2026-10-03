@@ -213,3 +213,140 @@ fn samples_and_ages_still_match_their_recordings() {
     let want: sdrf::ParsedAges = recorded(include_str!("fixtures/sdrf_parse_age.json"));
     assert_eq!(live.ages().unwrap(), want.ages().unwrap());
 }
+
+// ---- sdrf design ----------------------------------------------------------------------------
+//
+// The SDRFs are mzLib's own design fixtures, copied byte for byte from pyMzLib into
+// tests/fixtures, so these need only the bridge.
+
+fn crate_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
+fn both_factors() -> sdrf::DesignOptions {
+    sdrf::DesignOptions {
+        condition_columns: vec![
+            "factor value[genotype]".to_owned(),
+            "factor value[treatment]".to_owned(),
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn each_design_recording_still_matches_the_live_bridge() {
+    let Some(()) = support::require_verb("sdrf design") else {
+        return;
+    };
+    for (sdrf_file, recording) in [
+        ("PXD067622.sdrf.tsv", "sdrf_design_PXD067622.json"),
+        ("PXD049018.sdrf.tsv", "sdrf_design_PXD049018.json"),
+        ("PXD067622_studywide.sdrf.tsv", "sdrf_design_studywide.json"),
+    ] {
+        let live = sdrf::design_with(crate_fixture(sdrf_file), &both_factors())
+            .unwrap_or_else(|error| panic!("{sdrf_file}: {error}"));
+        let text = std::fs::read_to_string(crate_fixture(recording)).unwrap();
+        let recorded: sdrf::SdrfDesign = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(live.is_valid, recorded.is_valid, "{sdrf_file}");
+        assert_eq!(live.file_count, recorded.file_count, "{sdrf_file}");
+        assert_eq!(live.columns, recorded.columns, "{sdrf_file}");
+        assert_eq!(live.refusals, recorded.refusals, "{sdrf_file}");
+        assert_eq!(live.notes, recorded.notes, "{sdrf_file}");
+        assert_eq!(live.caveats, recorded.caveats, "{sdrf_file}");
+    }
+}
+
+#[test]
+fn a_valid_design_writes_a_one_based_experimental_design_and_a_refused_one_writes_nothing() {
+    let Some(()) = support::require_verb("sdrf design") else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("mzlib-live-design-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let out = scratch.join("ExperimentalDesign.tsv");
+
+    let d = sdrf::design_with(
+        crate_fixture("PXD067622.sdrf.tsv"),
+        &sdrf::DesignOptions {
+            out: Some(out.clone()),
+            ..both_factors()
+        },
+    )
+    .expect("a valid design writes");
+    let written = d.written.as_ref().expect("written is reported");
+    assert_eq!(written.file_count, 24);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("FileName\tCondition\tBiorep\tFraction\tTechrep")
+    );
+    let first: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    // mzLib adds the one when it writes, and nowhere else.
+    assert_eq!(
+        first[2].parse::<u32>().unwrap(),
+        d.files().unwrap()[0].biological_replicate + 1
+    );
+
+    let refused_out = scratch.join("refused.tsv");
+    let refused = sdrf::design_with(
+        crate_fixture("PXD049018.sdrf.tsv"),
+        &sdrf::DesignOptions {
+            out: Some(refused_out.clone()),
+            ..both_factors()
+        },
+    )
+    .expect("a refusal is an answer");
+    assert!(!refused.is_valid);
+    assert_eq!(refused.written, None);
+    assert!(!refused_out.exists());
+
+    let error = sdrf::design_with(
+        crate_fixture("PXD067622.sdrf.tsv"),
+        &sdrf::DesignOptions {
+            out: Some(scratch.join("design.txt")),
+            ..both_factors()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, mzlib::MzLibError::Usage(ref m) if m.contains(".tsv")),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn searched_files_restrict_the_design_and_replace_the_paths() {
+    let Some(()) = support::require_verb("sdrf design") else {
+        return;
+    };
+    let full = sdrf::design_with(crate_fixture("PXD067622.sdrf.tsv"), &both_factors()).unwrap();
+    let files = full.files().unwrap();
+    let searched: Vec<PathBuf> = files
+        .iter()
+        .map(|f| PathBuf::from("/data/runs").join(&f.full_path))
+        .collect();
+
+    let d = sdrf::design_with(
+        crate_fixture("PXD067622.sdrf.tsv"),
+        &sdrf::DesignOptions {
+            searched_files: Some(searched.clone()),
+            ..both_factors()
+        },
+    )
+    .expect("every row's file is searched");
+    assert!(d.searched_files_given);
+    assert_eq!(d.file_count, 24);
+    assert!(d.files().unwrap()[0].full_path.starts_with("/data/runs"));
+
+    let undeclared = sdrf::design(crate_fixture("PXD067622.sdrf.tsv")).unwrap();
+    assert!(
+        !undeclared.is_valid,
+        "two factor columns and none declared is a refusal"
+    );
+}

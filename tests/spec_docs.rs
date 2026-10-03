@@ -156,6 +156,12 @@ const SDRF: &[Deviation] = &[
         Some("cells"),
         "one stdin line per element of parse_ages' cells",
     ),
+    dev(
+        "sdrf design",
+        "param.searched-files-stdin",
+        Some("searched_files"),
+        "DesignOptions::searched_files is the list; giving it sets the flag and sends one per line",
+    ),
 ];
 
 /// Deviations: proteins and genes.
