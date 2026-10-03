@@ -582,7 +582,7 @@ impl BridgeVersion {
 /// # mzlib_replay::activate();
 /// let info = mzlib::bridge_version()?;
 /// assert_eq!(info.protocol, mzlib::PROTOCOL_VERSION);
-/// assert_eq!(info.mzlib.as_deref(), Some("1.0.0+23c2490e10d3ccce71c941bca31610725826ba83"));
+/// assert_eq!(info.mzlib.as_deref(), Some("1.0.0+0a808fec346e6e8f334e455490faab463ea65457"));
 /// # Ok::<(), mzlib::MzLibError>(())
 /// ```
 #[doc = include_str!("../docs/reference/version.see-also.md")]
@@ -1327,5 +1327,69 @@ mod tests {
         .unwrap();
         let seen = runner.seen.lock().unwrap().clone().unwrap();
         assert_eq!(seen.1.as_deref(), Some("run_1.mzML\tcondition\n"));
+    }
+
+    // ---------------------------------------------------------- stdin is never inherited
+
+    /// A program that reads stdin to end of file and then exits, standing in for a verb that reads
+    /// stdin unconditionally, as `quant median-polish` does for its optional design.
+    fn reads_stdin_to_eof() -> PathBuf {
+        if cfg!(windows) {
+            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+            PathBuf::from(root).join("System32").join("sort.exe")
+        } else {
+            PathBuf::from("cat")
+        }
+    }
+
+    /// Run in a child process by the test below, never on its own: it only means something when
+    /// this process's own stdin is a pipe that never closes.
+    #[test]
+    #[ignore = "run by a_caller_whose_own_stdin_never_closes_still_gets_an_answer"]
+    fn stdin_probe_child() {
+        let output = ProcessRunner
+            .run(
+                &reads_stdin_to_eof(),
+                &[],
+                None,
+                Some(Duration::from_secs(20)),
+            )
+            .expect("a call with nothing to send must give the child an empty, closed stdin");
+        assert_eq!(output.code, Some(0));
+    }
+
+    /// pyMzLib #73: the Python bridge call inherited the caller's stdin when it had nothing to
+    /// send, so `median_polish(path)` with no design waited for ever in a terminal or a REPL. This
+    /// crate always pipes stdin and closes it, so it never had the bug; this pins that. The caller
+    /// here is this test binary, re-run with a stdin pipe the test never closes.
+    #[test]
+    fn a_caller_whose_own_stdin_never_closes_still_gets_an_answer() {
+        let mut caller = Command::new(std::env::current_exe().unwrap())
+            .args(["bridge::tests::stdin_probe_child", "--exact", "--ignored"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let held_open = caller.stdin.take();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = caller.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = caller.kill();
+                panic!("the bridge call waited on the caller's stdin");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        drop(held_open);
+        let mut report = String::new();
+        let _ = caller.stdout.take().unwrap().read_to_string(&mut report);
+        assert!(status.success(), "{report}");
+        assert!(
+            report.contains("1 passed"),
+            "the probe did not run: {report}"
+        );
     }
 }
