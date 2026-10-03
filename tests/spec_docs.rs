@@ -664,7 +664,22 @@ fn prose(value: Option<String>) -> String {
     let Some(value) = value.filter(|v| !v.is_empty()) else {
         return DASH.to_owned();
     };
-    let joined = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut words = Vec::new();
+    for word in value.split_whitespace() {
+        // A bare URL becomes an autolink, which rustdoc renders as a link and which Markdown does
+        // not parse for emphasis, so it is not escaped; trailing punctuation stays outside it.
+        if word.starts_with("https://") || word.starts_with("http://") {
+            let url = word.trim_end_matches(|c: char| ",.;:)".contains(c));
+            words.push(format!("<{url}>{}", &word[url.len()..]));
+        } else {
+            words.push(escape_prose(word));
+        }
+    }
+    words.join(" ")
+}
+
+/// Escape one word of spec prose for a rustdoc Markdown table cell; see [`prose`].
+fn escape_prose(joined: &str) -> String {
     let mut out = String::with_capacity(joined.len());
     for c in joined.chars() {
         match c {
