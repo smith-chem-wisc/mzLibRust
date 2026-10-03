@@ -33,8 +33,10 @@ params:
     range: null
     default: null
     doc: >-
-      Directory to write into; created if absent. Blank is a usage error (it never falls back to
-      the working directory).
+      Directory to write into; created if absent, but only when a file is actually fetched (mzLib
+      creates it after the no-overwrite skip). With zero matches, or every file skipped, no
+      directory is created, yet destination_directory is still reported. Blank is a usage error
+      (it never falls back to the working directory).
   - name: category
     type: string
     required: false
@@ -84,7 +86,9 @@ params:
     default: null
     doc: >-
       Read only with names-from-stdin: the file names to fetch, one per line. Every name must be
-      in the project's REST manifest (pride files).
+      in the project's REST manifest (pride files). A UTF-8 BOM on the first line is stripped
+      (ReadStdinLines) from pyMzLib #67 on; the 0.2.0 bridge keeps it, so that first name fails
+      as not in the project.
 
 result:
   envelope_fields:
@@ -97,7 +101,7 @@ result:
 errors:
   - {kind: usage, when: "accession or dest missing or blank; category given but blank; ext given but naming no extension; names-from-stdin together with category or ext; names-from-stdin with no non-blank line on stdin"}
   - {kind: usage, when: "names-from-stdin naming a file the project's manifest does not contain (the message lists up to five). Raised AFTER the matching files have been downloaded: they are on disk when the error arrives."}
-  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; mzLib#1350 is not merged): a timeout, a socket or TLS failure, an HTTP 408, 429 or 5xx on the manifest or a file, a body that delivered nothing for mzLib's BodyStallTimeout (2 min), or a body cut off in transit (the IOException transport shapes only)"}
+  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout, a socket or TLS failure, an HTTP 408, 429 or 5xx on the manifest or a file, a body that delivered nothing for mzLib's BodyStallTimeout (2 min), or a body cut off in transit"}
   - {kind: correctness, when: "a selected file has no HTTPS location (NotSupportedException; Aspera-only); a manifest file name that is not a bare leaf name (ArgumentException: refusing to write outside dest); any other HTTP status; a local disk failure while writing (a bare IOException, e.g. a full disk, is deliberately NOT treated as an outage)"}
 
 caveats:

@@ -27,9 +27,12 @@ params:
     range: null
     default: null
     doc: >-
-      A quantifiable PSM result file mzLib can read: a MetaMorpheus .psmtsv/.osmtsv or an MSFragger
-      psm.tsv (retention time converted to minutes by the reader since mzLib#1116). Every run it
-      names must have an mzML on stdin, matched by base file name.
+      A quantifiable PSM result file mzLib can read: a MetaMorpheus .psmtsv/.osmtsv, an MSFragger
+      psm.tsv (retention time converted to minutes by the reader since mzLib#1116), or a DIA-NN
+      report.tsv (FileReader.ReadQuantifiableResultFile at the pin). MSFragger combined results
+      (MsFraggerCombinedResults) implement IQuantifiableResultFile but are not reachable: the path
+      must be a file, and GetResultFileType never maps to that class. Every run the file names
+      must have an mzML on stdin, matched by base file name.
   - name: stdin
     type: "string[]"
     required: true
@@ -50,7 +53,7 @@ params:
   - {name: mbr-q, type: float, required: false, unit: q-value, range: "0 to 1", default: 0.05, doc: "q-value below which an MBR transfer is accepted (MbrQValueThreshold)."}
   - {name: shared-peptides, type: flag, required: false, unit: null, range: null, default: false, doc: "Let peptides shared between protein groups contribute to protein quant (UseSharedPeptidesForProteinQuant)."}
   - {name: bayesian, type: flag, required: false, unit: null, range: null, default: false, doc: "Also run FlashLFQ's Bayesian protein fold-change engine (BayesianProteinQuant). Its results are not on the wire; they reach only out's BayesianProteinQuant.tsv."}
-  - {name: use-pep-q, type: flag, required: false, unit: null, range: null, default: false, doc: "Filter identifications on PEP q-value instead of q-value when building them (MakeIdentifications usePepQValue)."}
+  - {name: use-pep-q, type: flag, required: false, unit: null, range: null, default: false, doc: "Store each identification's PEP q-value as its q-value instead of its q-value (MakeIdentifications usePepQValue). It filters nothing here: it changes the value FlashLFQ's own q-value thresholds (e.g. MBR donor selection) later read. For a DIA-NN report the stored value is the raw PEP, not a q-value."}
   - name: threads
     type: int
     required: false
@@ -67,7 +70,7 @@ params:
 result:
   envelope_fields:
     - {wire: psm_file, type: string, unit: null, nullable: false, null_means: null, doc: "Absolute path of the PSM file."}
-    - {wire: identification_count, type: int, unit: identifications, nullable: false, null_means: null, doc: "Identifications FlashLFQ was given (after the q-value filter mzLib's converter applies)."}
+    - {wire: identification_count, type: int, unit: identifications, nullable: false, null_means: null, doc: "Identifications FlashLFQ was given: every record in the PSM file, unfiltered. MakeIdentifications applies no q-value filter; it skips only records whose run was not supplied, which the bridge rejects up front. Decoys are included (with useForProteinQuant false)."}
     - {wire: parameters, type: object, unit: null, nullable: false, null_means: null, doc: "The FlashLFQ parameters used, by mzLib name: normalize, ppm_tolerance (ppm), isotope_ppm_tolerance (ppm), integrate, match_between_runs, mbr_ppm_tolerance (ppm), mbr_q_value_threshold (q-value), use_shared_peptides_for_protein_quant, bayesian_protein_quant, max_threads (the resolved thread count)."}
     - {wire: spectra_files, type: "object[]", unit: null, nullable: false, null_means: null, doc: "One per stdin line, in stdin order; fields under result.tables.spectra_files."}
     - {wire: peptide_count, type: int, unit: peptides, nullable: false, null_means: null, doc: "Entries in peptides: distinct modified sequences quantified."}
@@ -136,7 +139,7 @@ examples:
     r: "result <- flashlfq_quantify('AllPSMs.psmtsv', c('run_3.mzML', 'run_4.mzML'), match_between_runs = TRUE, max_threads = 1)"
 
 open_questions:
-  - "Re-measure the K562 MBR pair at threads -1 on the 23c2490e bridge (G-flashlfq-stale-caveats) before any binding deletes its #1111 warning; the caveat above states what mzLib#1155 claims, not a bridge measurement."
+  - "Re-measure the K562 MBR pair at threads -1 on the 23c2490e bridge (G-flashlfq-stale-caveats) before any binding deletes its #1111 warning; the caveat above states what mzLib#1155 claims, not a bridge measurement. pyMzLib main already dropped its warning (#67, unreleased) ahead of the re-measure."
   - "Default divergence: the wire and pyMzLib and mzLibRust default threads to -1, mzLibR defaults max_threads to 1 and warns on anything else. The spec states the wire default; whether the bindings should agree is a cross-binding decision."
   - "flashlfq_small.json is hand-shaped (paths '/abs/...', 4 identifications), not recorded from a live bridge; a live recording would make the example executable against real files."
   - "ppm tolerances and mbr-q are not range-checked by the bridge (a negative or zero tolerance reaches FlashLFQ); the ranges above are FlashLFQ's meaningful ones, not enforced ones. An option given with no value is silently defaulted by the Arguments parser."

@@ -8,7 +8,7 @@ module: pride
 summary: >-
   Find PRIDE Archive projects by keyword, with every page fetched and no accession repeated: the
   discovery step that produces the accessions every other pride verb takes.
-since: {protocol: 1, pymzlib: "0.1.0", mzlibrust: null, mzlibr: null}
+since: {protocol: 1, pymzlib: "0.1.0", mzlibrust: "0.1.0", mzlibr: "0.1.0"}
 wraps:
   - {symbol: PrideArchiveClient.SearchProjectsAsync, path: mzLib/UsefulProteomicsDatabases/PrideArchiveClient.cs, pin: 23c2490e}
   - {symbol: PrideArchiveClient.MaxKeywordLength, path: mzLib/UsefulProteomicsDatabases/PrideArchiveClient.cs, pin: 23c2490e}
@@ -84,7 +84,7 @@ result:
 
 errors:
   - {kind: usage, when: "keyword missing or blank; keyword longer than 1000 characters; page-size not an integer or <= 0 (both checked by the bridge before mzLib)"}
-  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; mzLib#1350 is not merged): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx, or a body cut off in transit"}
+  - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx, or a body cut off in transit"}
   - {kind: correctness, when: "any other HTTP status; a paging contract violation (MzLibException: an identical page while total_records says more remain); the page limit (mzLib MaxPages) exceeded"}
 
 caveats:
@@ -95,8 +95,8 @@ caveats:
 
 bindings:
   py: {name: pymzlib.pride.search}
-  rust: {name: "mzlib::pride::search_with", options: SearchOptions}
-  r: {name: pride_search}
+  rust: {name: "mzlib::pride::search_with", options: SearchOptions, note: "Returns Vec<PrideProjectSearchResult>: no keyword or result_count."}
+  r: {name: pride_search, note: "Returns the hits data.frame itself: no keyword or result_count element."}
 
 examples:
   - fixture: pride_search_plasmodium.json
@@ -105,6 +105,6 @@ examples:
     r: "hits <- pride_search('plasmodium falciparum schizont')"
 
 open_questions:
-  - "Not yet in mzLibRust or mzLibR. The names are intended, mirroring each binding's pride conventions: Rust mzlib::pride::search (defaults) and search_with + SearchOptions {page_size, timeout} like list_files_with + ListOptions; R pride_search(keyword, page_size = 100, timeout = 300) like pride_list_files. The checker cannot verify them."
+  - "Shape difference: mzlib::pride::search / search_with return Vec<PrideProjectSearchResult> and R pride_search() returns the hits data.frame, so neither carries the envelope's keyword or result_count (the caller has the keyword; the count is len() / nrow()). pyMzLib returns the hits list likewise. Declare it as a deviation or drop the two fields from the wire?"
   - "The bindings also refuse a keyword beginning with '-' (it would be parsed as an option); the bridge cannot, since a value starting with '--' reaches it as a flag and the keyword then reads as missing."
   - "The ranking order of results is PRIDE's and is not promised stable across calls."
