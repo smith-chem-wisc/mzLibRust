@@ -1586,7 +1586,8 @@ pub struct ReadOptions {
     pub offset: u64,
     /// Write the selected window here as a **tab-separated** table (header = the column names)
     /// and return only a summary. Must differ from the input; parent directories are created. The
-    /// intended path for large files, not an escape hatch.
+    /// intended path for large files, not an escape hatch. The path must end in `.tsv` (any case);
+    /// any other is a [`MzLibError::Usage`] from the bridge before anything is read.
     pub out: Option<String>,
     /// Time to allow. `None` waits indefinitely, which a large file legitimately needs.
     pub timeout: Option<Duration>,
@@ -1642,7 +1643,9 @@ pub struct BulkOptions {
     /// Write the long table here as **tab-separated** text and return only a summary
     /// ([`ReadBatch::output`]). Files are written one at a time, in order, so memory holds at most
     /// `threads` files however long the list is — the way to read hundreds. A batch that stops on
-    /// an error removes its partial table. Must differ from every input.
+    /// an error removes its partial table. Must differ from every input. The path must end in
+    /// `.tsv` (any case); any other is a [`MzLibError::Usage`] from the bridge before anything is
+    /// read.
     pub out: Option<String>,
     /// Time to allow for the whole batch. `None` (the default) waits indefinitely.
     pub timeout: Option<Duration>,

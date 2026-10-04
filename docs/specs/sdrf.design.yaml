@@ -8,7 +8,7 @@ module: sdrf
 summary: >-
   Read a label-free experimental design out of an SDRF, in MetaMorpheus's terms, or every reason it
   was refused.
-since: {protocol: 1, pymzlib: null, mzlibrust: null, mzlibr: null}
+since: {protocol: 1, pymzlib: "0.3.0", mzlibrust: null, mzlibr: null}
 wraps:
   - {symbol: SdrfLabelFreeDesign.Read, path: mzLib/Readers/Sdrf/SdrfLabelFreeDesign.cs, pin: 0a808fec}
   - {symbol: SdrfLabelFreeDesign.WriteExperimentalDesignTsv, path: mzLib/Readers/Sdrf/SdrfLabelFreeDesign.cs, pin: 0a808fec}
@@ -50,7 +50,7 @@ params:
     type: path
     required: false
     unit: null
-    range: null
+    range: ".tsv only, any case (PYB-1)"
     default: null
     doc: >-
       Also write MetaMorpheus's ExperimentalDesign.tsv (1-based) here, through mzLib's writer. Must

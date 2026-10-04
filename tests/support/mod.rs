@@ -49,17 +49,20 @@ pub fn require_bridge() -> Option<()> {
 
 /// Ensure the staged bridge dispatches `verb`, or skip.
 ///
-/// The verbs of mzLib 1.0.592 need the bridge from pyMzLib 0.2.0. A live suite run against an
-/// older bridge — the scheduled job fetches the newest release, and the crate's pin may lag it —
-/// has nothing to check them against, which is a staging fact, not a regression.
+/// A verb newer than the staged bridge has nothing to be checked against: the mzLib 1.0.592 verbs
+/// need pyMzLib 0.2.0's bridge, the 1.0.593 ones 0.3.0's, and `peptidoform convert` 0.4.0's (each
+/// spec's `since.pymzlib`). A live suite run against an older bridge — CI stages the pinned
+/// release, and a verb can land here before the release that carries it — is a staging fact, not
+/// a regression.
 pub fn require_verb(verb: &str) -> Option<()> {
     require_bridge()?;
     match mzlib::bridge_version() {
         Ok(info) if info.has_verb(verb) => Some(()),
         Ok(_) => {
             skip(&format!(
-                "the staged bridge does not dispatch '{verb}'; it needs the bridge from pyMzLib \
-                 0.2.0 (mzLib 1.0.592) or later."
+                "the staged bridge does not dispatch '{verb}'; it needs a newer bridge (the \
+                 pyMzLib release its spec gives as since.pymzlib). Point {} at one to run this.",
+                mzlib::BRIDGE_ENV_VAR
             ));
             None
         }

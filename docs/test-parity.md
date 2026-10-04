@@ -26,6 +26,9 @@ the reason it is not portable. Nothing was silently dropped.
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
 | transport live | — | `tests/live_bridge.rs` 2 | new: the M0 end-to-end proof |
+| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `` is refused beside `
+` |
+| peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
 
 ## Tests eliminated by Rust's type system
 
@@ -38,6 +41,7 @@ accounted for, not quietly missing.
 | `test_unusable_timeouts_are_rejected_before_spawning_anything` | `Duration` cannot be negative, `inf`, `nan`, a string, or a bool. Only zero remains reachable, and `a_zero_timeout_is_rejected_before_spawning_anything` covers it. |
 | `test_non_string_accession_gives_a_usage_error_not_an_attribute_error` | `&str` parameters cannot receive `123`, `None`, a list, or bytes. |
 | `test_a_bare_string_of_extensions_is_refused` | `&[String]` is not `&str`; the confusion the test defends against cannot be expressed. |
+| `test_bad_arguments_are_refused_before_the_bridge`: one string, a non-string sequence, `mode=None`, `threads=True` | `convert` takes `&[S: AsRef<str>]`, so neither a bare `&str` nor a number can reach it; `ConvertOptions::mode` is a `ConversionMode` and `threads` an `i32`. An unknown mode name is refused by `ConversionMode::from_str`. |
 | `test_spectra_must_be_a_list_not_a_string` | Same: `&[SpectraFile]` is not a string. |
 | `test_download_files_rejects_things_that_are_not_pride_files` | `&[PrideFile]` is typed. |
 | `test_bad_page_sizes_are_usage_errors` (partial) | `u32` excludes `"100"`, `None`, `2.5`; the two reachable cases (0, over `i32::MAX`) each have a test. |

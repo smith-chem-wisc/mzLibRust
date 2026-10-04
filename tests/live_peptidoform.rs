@@ -1,7 +1,10 @@
-//! Live canaries against the real UniProt, through the real bridge.
+//! Live canaries against the real UniProt, through the real bridge, and the sequence conversion
+//! checked against the live bridge.
 //!
 //! These are the tests that would catch mzLib or UniProt changing under us. They **skip** rather
-//! than fail when UniProt is unavailable.
+//! than fail when UniProt is unavailable. The `convert` tests need no network, only a bridge that
+//! dispatches `peptidoform convert` (pyMzLib 0.4.0's, the pinned one, or later), and **skip** with
+//! an older one.
 //!
 //! Run with `cargo test --features live`. The two histone tests are genuinely slow (modification
 //! isoforms are enumerated combinatorially) and are marked `#[ignore]`; run them with
@@ -11,8 +14,11 @@
 
 mod support;
 
-use mzlib::peptidoform::{fragments, fragments_with, FragmentOptions};
-use support::{external_service, require_bridge};
+use mzlib::peptidoform::{
+    convert, convert_with, fragments, fragments_with, ConversionMode, ConvertOptions,
+    FragmentOptions, SequenceConversions,
+};
+use support::{external_service, require_bridge, require_verb};
 
 /// Human serum albumin: large, heavily annotated, and mostly annotated with glycosylation sites,
 /// which mzLib excludes on feature type — which is what makes it the right protein for the census.
@@ -306,4 +312,177 @@ fn an_unknown_protease_names_the_alternatives() {
         Err(other) => panic!("expected a usage error, got {other:?}"),
         Ok(_) => panic!("an unknown protease was accepted"),
     }
+}
+
+// ------------------------------------------------------------------ convert
+
+/// The four probe sequences pyMzLib's tests and the bridge's C# tests assert.
+const PROBE: [&str; 4] = [
+    "[UniProt:N-acetylserine on S]SEQK",
+    "PEPK[UniProt:N6,N6-dimethyllysine on K]R",
+    "PEPM[Common Variable:Oxidation on M]K",
+    "PEPK[Made Up:Not a modification on K]R",
+];
+
+fn recorded_conversion(name: &str) -> SequenceConversions {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name);
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// Everything a recording asserts that the live bridge must still say: the envelope and every row.
+fn assert_same_conversion(live: &SequenceConversions, recorded: &SequenceConversions) {
+    assert_eq!(live.source_format, recorded.source_format);
+    assert_eq!(live.target_format, recorded.target_format);
+    assert_eq!(live.mode, recorded.mode);
+    assert_eq!(live.source_formats, recorded.source_formats);
+    assert_eq!(live.target_formats, recorded.target_formats);
+    assert_eq!(
+        (
+            live.record_count,
+            live.converted_count,
+            live.warned_count,
+            live.failed_count
+        ),
+        (
+            recorded.record_count,
+            recorded.converted_count,
+            recorded.warned_count,
+            recorded.failed_count
+        )
+    );
+    assert_eq!(live.columns, recorded.columns);
+    assert_eq!(live.caveats, recorded.caveats);
+}
+
+#[test]
+fn the_conversion_recordings_still_match_the_live_bridge() {
+    let Some(()) = require_verb("peptidoform convert") else {
+        return;
+    };
+    let probe = recorded_conversion("peptidoform_convert_unimod.json");
+    assert_same_conversion(&convert(&PROBE).expect("the probe converts"), &probe);
+
+    let psmtsv = recorded_conversion("peptidoform_convert_psmtsv.json");
+    let inputs: Vec<String> = psmtsv
+        .sequences()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.input)
+        .collect();
+    assert_same_conversion(&convert(&inputs).unwrap(), &psmtsv);
+
+    let proforma = ConvertOptions {
+        target: "ProForma".into(),
+        ..Default::default()
+    };
+    assert_same_conversion(
+        &convert_with(&inputs, &proforma).unwrap(),
+        &recorded_conversion("peptidoform_convert_psmtsv_proforma.json"),
+    );
+}
+
+#[test]
+fn an_incompatible_modification_is_dropped_with_a_warning_when_asked() {
+    let Some(()) = require_verb("peptidoform convert") else {
+        return;
+    };
+    for mode in [
+        ConversionMode::RemoveIncompatibleElements,
+        ConversionMode::UsePrimarySequence,
+    ] {
+        let options = ConvertOptions {
+            mode,
+            ..Default::default()
+        };
+        let result = convert_with(&PROBE[3..], &options).unwrap();
+        assert_eq!(result.mode, mode.as_str());
+        let row = &result.sequences().unwrap()[0];
+        assert_eq!(row.status, "converted_with_warnings", "{mode}");
+        assert_eq!(row.output.as_deref(), Some("PEPKR"), "{mode}");
+        assert_eq!(
+            row.incompatible_items,
+            ["Made Up:Not a modification on K @3(K)"],
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn throw_exception_fails_the_call_naming_the_first_input_it_could_not_convert() {
+    let Some(()) = require_verb("peptidoform convert") else {
+        return;
+    };
+    let options = ConvertOptions {
+        mode: ConversionMode::ThrowException,
+        ..Default::default()
+    };
+    match convert_with(&PROBE, &options) {
+        Err(mzlib::MzLibError::Usage(message)) => {
+            assert!(
+                message.contains("Made Up:Not a modification on K"),
+                "{message}"
+            );
+        }
+        other => panic!("expected a usage error, got {other:?}"),
+    }
+    // Nothing to throw on: the same rows as ReturnNull.
+    let clean = convert_with(&PROBE[..3], &options).unwrap();
+    assert_eq!(clean.converted_count, 3);
+}
+
+#[test]
+fn an_unregistered_format_is_a_usage_error_listing_the_registered_ones() {
+    let Some(()) = require_verb("peptidoform convert") else {
+        return;
+    };
+    let options = ConvertOptions {
+        target: "Mascot".into(),
+        ..Default::default()
+    };
+    match convert_with(&PROBE, &options) {
+        Err(mzlib::MzLibError::Usage(message)) => {
+            assert!(
+                message.contains("Unimod") && message.contains("ProForma"),
+                "{message}"
+            );
+        }
+        other => panic!("expected a usage error, got {other:?}"),
+    }
+    // Format names match case-insensitively, and the envelope spells them as mzLib registered them.
+    let options = ConvertOptions {
+        source: "MZLIB".into(),
+        target: "unimod".into(),
+        ..Default::default()
+    };
+    let result = convert_with(&PROBE[..1], &options).unwrap();
+    assert_eq!(
+        (result.source_format.as_str(), result.target_format.as_str()),
+        ("mzLib", "Unimod")
+    );
+}
+
+#[test]
+fn the_rows_are_the_same_in_input_order_at_any_thread_count() {
+    let Some(()) = require_verb("peptidoform convert") else {
+        return;
+    };
+    let mut many: Vec<&str> = Vec::new();
+    for _ in 0..50 {
+        many.extend(PROBE);
+    }
+    let one = convert(&many).unwrap();
+    let every_core = convert_with(
+        &many,
+        &ConvertOptions {
+            threads: -1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(one.columns, every_core.columns);
+    assert_eq!(one.record_count, 200);
+    assert_eq!(one.failed_count, 50);
 }
