@@ -28,7 +28,7 @@ the reason it is not portable. Nothing was silently dropped.
 | transport live | — | `tests/live_bridge.rs` 2 | new: the M0 end-to-end proof |
 | peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `` is refused beside `
 ` |
-| peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb, which is the pinned one until pyMzLib 0.4.0 |
+| peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
 
 ## Tests eliminated by Rust's type system
 

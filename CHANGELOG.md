@@ -25,13 +25,17 @@ A wire verb's first appearance here is the version its spec in the bridge record
   has registered, and every result lists them; `mode` is mzLib's `SequenceConversionHandlingMode`
   (`ConversionMode`). **The ProForma target does not resolve UniProt modifications** in this mzLib
   build and writes them back by name; convert to Unimod for those. The verb needs the bridge from
-  pyMzLib 0.4.0, which is unreleased: this crate still pins 0.3.0's, whose bridge does not dispatch
-  it, so the call is refused before anything is spawned and the live tests skip until the pin
-  moves. The replay bridge holds a `peptidoform convert` call to the recording made from the same
+  pyMzLib 0.4.0, which this crate now pins; an older bridge is refused before anything is spawned,
+  and the live tests skip on one. The replay bridge holds a `peptidoform convert` call to the recording made from the same
   sequences, as pyMzLib's does.
-- **Specs re-vendored at bridge `c0cc923`**: adds `peptidoform.convert.yaml`, and records pyMzLib
-  0.3.0 as the first release of four verbs, a corrected isobaric citation note, and mzLibR #29 as
-  where the R stats functions are.
+- **The bridge pin moves to pyMzLib v0.4.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
+  fetches it, verified against that release's `SHA256SUMS`. Its bridge dispatches
+  `peptidoform convert`, and its `--out` accepts only `.tsv` (pyMzLib #76); `read_records` on an
+  SDRF leaves the `header` and `cells` lists out (in `excluded_fields`).
+- **Specs re-vendored at bridge `e761578`**: adds `peptidoform.convert.yaml`; records pyMzLib 0.3.0
+  as the first release of four verbs, the isobaric citation note and mzLibR #29; and documents the
+  0.4.0 bridge's `.tsv`-only `out` (PYB-1) and its too-large-answer usage error (PYB-3 part 1) on
+  the reader verbs and `sdrf design`.
 
 - **Every guide opens with a question table, runs on real data, and says what to cite** (pyMzLib
   #72). A module's `//!` documentation is its guide; `tests/docs_lint.rs` holds each one to a

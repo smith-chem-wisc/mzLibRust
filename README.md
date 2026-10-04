@@ -153,8 +153,8 @@ full sequences to mzLib's `SequenceConversionService` and returns one row per in
 verdict (`converted`, `converted_with_warnings` or `failed`), the modifications it could not write,
 and its warnings. Unimod is the default target. mzLib's ProForma target does not yet resolve
 UniProt modifications and writes them back by name, so convert to Unimod for those. It needs the
-bridge from pyMzLib 0.4.0, which this crate does not pin yet; an older bridge is refused before
-anything is spawned.
+bridge from pyMzLib 0.4.0, the one this crate pins; an older bridge is refused before anything is
+spawned.
 
 **Isobaric kits have their own module**, `isobaric`: `kits` lists every kit mzLib can name, each
 channel's label and theoretical reporter-ion m/z, and the window mzLib reads a reporter intensity

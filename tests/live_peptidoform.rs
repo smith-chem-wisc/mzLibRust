@@ -3,8 +3,8 @@
 //!
 //! These are the tests that would catch mzLib or UniProt changing under us. They **skip** rather
 //! than fail when UniProt is unavailable. The `convert` tests need no network, only a bridge that
-//! dispatches `peptidoform convert` (pyMzLib 0.4.0's or later), and **skip** with an older one —
-//! which includes the pinned pyMzLib 0.3.0 bridge CI stages until the pin moves.
+//! dispatches `peptidoform convert` (pyMzLib 0.4.0's, the pinned one, or later), and **skip** with
+//! an older one.
 //!
 //! Run with `cargo test --features live`. The two histone tests are genuinely slow (modification
 //! isoforms are enumerated combinatorially) and are marked `#[ignore]`; run them with
