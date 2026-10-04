@@ -30,7 +30,7 @@ A wire verb's first appearance here is the version its spec in the bridge record
   sequences, as pyMzLib's does.
 - **The bridge pin moves to pyMzLib v0.4.0** (mzLib 1.0.593, `0a808fec`): `install_bridge()`
   fetches it, verified against that release's `SHA256SUMS`. Its bridge dispatches
-  `peptidoform convert`, and its `--out` accepts only `.tsv` (pyMzLib #76); `read_records` on an
+  `peptidoform convert`, and its `--out` accepts only `.tsv` (pyMzLib #76; `ReadOptions::out` and `BulkOptions::out` say so); `read_records` on an
   SDRF leaves the `header` and `cells` lists out (in `excluded_fields`).
 - **Specs re-vendored at bridge `e761578`**: adds `peptidoform.convert.yaml`; records pyMzLib 0.3.0
   as the first release of four verbs, the isobaric citation note and mzLibR #29; and documents the
