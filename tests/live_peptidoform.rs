@@ -32,9 +32,17 @@ const HYDROGEN_MASS: f64 = 1.007_825_032;
 
 fn bare(max_modifications: u32, min_length: u32) -> FragmentOptions {
     FragmentOptions {
-        max_modifications,
-        min_length,
+        max_modifications: Some(max_modifications),
+        min_length: Some(min_length),
         ..Default::default()
+    }
+}
+
+/// As [`bare`], fragmented by ETD, which must be asked for by name: the default is HCD.
+fn bare_etd(max_modifications: u32, min_length: u32) -> FragmentOptions {
+    FragmentOptions {
+        dissociation: Some("ETD".to_owned()),
+        ..bare(max_modifications, min_length)
     }
 }
 
@@ -50,6 +58,14 @@ fn the_workflow_still_answers_end_to_end() {
     assert_eq!(digest.sequence_length, 609, "albumin's length changed");
     assert!(!digest.peptides.is_empty());
     assert!(digest.fragment_count() > 0);
+    // Nothing was sent but the accession, so these are mzLib's DigestionParams defaults and the
+    // bridge's HCD stop-gap (smith-chem-wisc/mzLib#1488), echoed.
+    assert_eq!(
+        (digest.protease.as_str(), digest.dissociation.as_str()),
+        ("trypsin", "HCD")
+    );
+    assert_eq!(digest.terminus, "Both");
+    assert_eq!((digest.max_modifications, digest.max_isoforms), (2, 1024));
 }
 
 #[test]
@@ -57,19 +73,21 @@ fn the_documented_ground_truth_digest_counts_reproduce() {
     // Pins the bake-off ground truth (design/bakeoff/DESIGN.md, Task 2) against the live bridge so a
     // documented count cannot quietly rot again — the exact failure smith-chem-wisc/mzLibRust#1
     // caught, where the table read 254/269 while the real digest yields 243/257. Distinct base
-    // sequences, ETD, both termini, 2 missed cleavages, up to 2 modifications applied — the defaults.
+    // sequences, every other option left to mzLib's defaults. No protease means mzLib's default,
+    // plain "trypsin", which is why the first row and the "trypsin" row agree.
     let Some(()) = require_bridge() else { return };
 
     // (protease, min_length, expected distinct base sequences)
     let cases = [
-        ("trypsin|P", 7, 195),
-        ("trypsin|P", 1, 243),
-        ("trypsin", 7, 202),
-        ("trypsin", 1, 257),
+        (None, None, 202),
+        (Some("trypsin|P"), Some(7), 195),
+        (Some("trypsin|P"), Some(1), 243),
+        (Some("trypsin"), Some(7), 202),
+        (Some("trypsin"), Some(1), 257),
     ];
     for (protease, min_length, expected) in cases {
         let options = FragmentOptions {
-            protease: protease.to_owned(),
+            protease: protease.map(str::to_owned),
             min_length,
             ..Default::default()
         };
@@ -79,23 +97,25 @@ fn the_documented_ground_truth_digest_counts_reproduce() {
         assert_eq!(
             digest.distinct_base_sequences(),
             expected,
-            "{protease} min_length={min_length}: albumin ground truth is {expected} distinct base \
-             sequences"
+            "{protease:?} min_length={min_length:?}: albumin ground truth is {expected} distinct \
+             base sequences"
         );
     }
 }
 
 #[test]
-fn etd_produces_c_and_z_ions() {
+fn etd_produces_c_and_z_ions_not_b_and_y() {
     // The dissociation type must reach mzLib, or the caller silently gets the wrong chemistry.
-    // ETD used to emit y ions as well (smith-chem-wisc/mzLib#1109, fixed by #1114); the offline
-    // etd_produces_c_and_zdot_but_no_y_ions pins their absence. This canary asserts only what ETD
-    // genuinely should produce.
+    // ETD used to emit y ions as well (smith-chem-wisc/mzLib#1109, fixed by #1114): radical N–Cα
+    // cleavage yields c/z• only, while b/y come from amide cleavage under vibrational activation.
+    // The offline recordings are HCD now, so this canary is what pins the post-#1114 product set.
     let Some(()) = require_bridge() else { return };
 
-    let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare(0, 20))) else {
+    let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare_etd(0, 20)))
+    else {
         return;
     };
+    assert_eq!(digest.dissociation, "ETD");
 
     let kinds: std::collections::HashSet<String> = digest
         .peptides
@@ -112,6 +132,10 @@ fn etd_produces_c_and_z_ions() {
         kinds.iter().any(|k| k.to_lowercase().starts_with('z')),
         "expected z ions from ETD, got {kinds:?}"
     );
+    assert!(
+        !kinds.contains("b") && !kinds.contains("y"),
+        "b or y from ETD would mean amide cleavage, or mzLib below #1114: {kinds:?}"
+    );
 }
 
 #[test]
@@ -123,7 +147,8 @@ fn fragment_series_close_on_the_precursor_mass() {
     // fragment table with sensible spacings and monotonic series that is nonetheless wrong.
     let Some(()) = require_bridge() else { return };
 
-    let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare(0, 15))) else {
+    let Some(digest) = external_service("UniProt", fragments_with(ALBUMIN, &bare_etd(0, 15)))
+    else {
         return;
     };
 
@@ -234,19 +259,18 @@ fn modification_isoforms_are_enumerated_combinatorially() {
 #[test]
 #[ignore = "slow: raising the isoform cap on a histone enumerates tens of thousands of forms"]
 fn the_isoform_cap_truncates_and_says_so() {
-    // mzLib's default of 1024 isoforms per peptide truncates silently. It must not be silent here:
-    // a truncated peptidoform list is indistinguishable from a short one.
+    // mzLib's default isoform cap truncates silently. It must not be silent here: a truncated
+    // peptidoform list is indistinguishable from a short one.
     let Some(()) = require_bridge() else { return };
 
     let capped_options = FragmentOptions {
-        max_modifications: 4,
-        max_isoforms: 1024,
+        max_modifications: Some(4),
         timeout: None,
         ..Default::default()
     };
     let raised_options = FragmentOptions {
-        max_modifications: 4,
-        max_isoforms: 100_000,
+        max_modifications: Some(4),
+        max_isoforms: Some(100_000),
         timeout: None,
         ..Default::default()
     };
@@ -258,6 +282,7 @@ fn the_isoform_cap_truncates_and_says_so() {
         return;
     };
 
+    assert_eq!(capped.max_isoforms, 1024, "mzLib's default cap, echoed");
     assert!(
         capped.truncated(),
         "the default cap binds on a histone at four modifications"
@@ -297,7 +322,7 @@ fn an_unknown_protease_names_the_alternatives() {
     let Some(()) = require_bridge() else { return };
 
     let options = FragmentOptions {
-        protease: "definitely-not-a-protease".to_owned(),
+        protease: Some("definitely-not-a-protease".to_owned()),
         ..Default::default()
     };
 

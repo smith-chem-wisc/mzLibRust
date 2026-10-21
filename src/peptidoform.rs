@@ -20,10 +20,11 @@
 //! let digest = mzlib::peptidoform::fragments("P02768")?;
 //! assert_eq!((digest.full_name.as_str(), digest.organism.as_str()), ("Albumin", "Homo sapiens"));
 //! assert_eq!(digest.sequence_length, 609);                 // residues
-//! assert_eq!((digest.peptides.len(), digest.modified_peptides().len()), (303, 108));
+//! assert_eq!((digest.peptides.len(), digest.modified_peptides().len()), (310, 108));
 //!
-//! // The result echoes the settings it ran with, so a saved digest says how it was made.
-//! assert_eq!((digest.protease.as_str(), digest.dissociation.as_str()), ("trypsin|P", "ETD"));
+//! // The result echoes the settings it ran with, mzLib's defaults included, so a saved digest
+//! // says how it was made.
+//! assert_eq!((digest.protease.as_str(), digest.dissociation.as_str()), ("trypsin", "HCD"));
 //! assert_eq!((digest.max_modifications, digest.max_isoforms), (2, 1024));
 //! assert!(!digest.truncated());                            // complete at the defaults
 //!
@@ -35,7 +36,7 @@
 //!
 //! // Each fragment carries a neutral mass in Da, not an m/z.
 //! let f = &p.fragments[0];
-//! assert_eq!((f.product_type.as_str(), f.fragment_number), ("c", 1));
+//! assert_eq!((f.product_type.as_str(), f.fragment_number), ("b", 1));
 //!
 //! // What UniProt annotated against what mzLib could apply.
 //! let census = &digest.modification_census;
@@ -51,18 +52,19 @@
 //! # mzlib_replay::activate();
 //! use mzlib::peptidoform::{fragments_with, FragmentOptions};
 //!
-//! let digest = fragments_with("P02768", &FragmentOptions { max_modifications: 1, ..Default::default() })?;
+//! let options = FragmentOptions { max_modifications: Some(1), ..Default::default() };
+//! let digest = fragments_with("P02768", &options)?;
 //! assert_eq!(digest.name, "ALBU_HUMAN");
 //! println!("{}", digest.modification_census.explain());
 //! assert!(digest.modification_census.explain().starts_with("14 of 38 annotated modifications"));
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! The defaults are opinions, not placeholders. Tryptic with the proline rule, two missed
-//! cleavages, ETD, both termini, UniProt's annotated modifications applied. They are the choices
-//! this lab makes when it does not have a reason to choose otherwise, so the common question needs
-//! no parameters — and every one of them is reachable, because the point is to open the doors, not
-//! to hide them.
+//! The defaults are mzLib's, not this crate's. A digestion option you leave `None` is not sent, so
+//! mzLib's own default (its `DigestionParams`) applies, and UniProt's annotated modifications are
+//! applied. mzLib names no default dissociation type, so the bridge uses HCD until it does
+//! ([smith-chem-wisc/mzLib#1488](https://github.com/smith-chem-wisc/mzLib/issues/1488)). The common
+//! question needs no parameters, and every one of them can be changed.
 //!
 //! ## Converting full sequences to Unimod or ProForma
 //!
@@ -118,44 +120,40 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! ### ProForma does not resolve UniProt modifications yet
+//! ### ProForma gives the same accessions
 //!
-//! Ask for ProForma and the same file gives a different answer. Carbamidomethyl and oxidation
-//! become UNIMOD accessions. The UniProt modification is written back under its mzLib name, and
-//! the row still says `converted`:
+//! Ask for ProForma and this file gives the same accessions. The UniProt modification is
+//! `UNIMOD:34` here too:
 //!
 //! ```
 //! # mzlib_replay::activate();
 //! # let psms = mzlib::readers::read_results("BottomUpExample.psmtsv")?;
 //! # let full_sequences: Vec<String> =
 //! #     psms.columns.strings("full_sequence")?.into_iter().flatten().collect();
-//! use mzlib::peptidoform::{convert_with, ConvertOptions};
+//! use mzlib::peptidoform::{convert, convert_with, ConvertOptions};
 //!
 //! let proforma = convert_with(
 //!     &full_sequences,
 //!     &ConvertOptions { target: "ProForma".into(), ..Default::default() },
 //! )?;
 //! let outputs = proforma.outputs()?;
-//! assert_eq!(
-//!     outputs[0].as_deref(),
-//!     Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDMEK")
-//! );
-//! assert_eq!(
-//!     outputs[4].as_deref(),
-//!     Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDM[UNIMOD:35]EK")
-//! );
-//! assert_eq!(proforma.sequences()?[0].status, "converted");
+//! assert_eq!(outputs[0].as_deref(), Some("YPIEH[UNIMOD:34]GIVTNWDDMEK"));
+//! assert_eq!(outputs, convert(&full_sequences)?.outputs()?);
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! The cause is in mzLib, not in this crate. mzLib's ProForma serializer looks modifications up
-//! only in MetaMorpheus's own list, which has no UniProt entries. The Unimod serializer looks them
-//! up in every list mzLib loads. Until mzLib fixes this, **convert to Unimod when your sequences
-//! carry UniProt modifications**. In ProForma output, treat any bracket that is not a `UNIMOD:`
-//! term as unresolved. This crate does not patch around the gap: a patch here would leave the same
-//! gap in pyMzLib, mzLibR and MetaMorpheus. The `pro_forma` column that
-//! [`crate::readers::read_records`] gives a `.psmtsv` comes from the same serializer, so it has the
-//! same gap.
+//! That is new with [mzLib#1403](https://github.com/smith-chem-wisc/mzLib/pull/1403). Before it,
+//! mzLib's ProForma serializer looked modifications up only in MetaMorpheus's own list, which has
+//! no UniProt entries, so it wrote `[UniProt:Tele-methylhistidine on H]` back by name. It now falls
+//! back to every list mzLib loads, as the Unimod serializer does. This crate never patched around
+//! the gap, so the fix reached it, pyMzLib, mzLibR and MetaMorpheus at once. The `pro_forma` column
+//! that [`crate::readers::read_records`] computes for a `.psmtsv` written without one comes from
+//! the same serializer, so it gained the accessions too.
+//!
+//! The two targets still differ on a modification that no list mzLib loads knows. ProForma writes
+//! it back under its own name and the row says `converted`; Unimod fails the row, or drops the
+//! modification, depending on `mode`. In ProForma output, treat any bracket that is not a
+//! `UNIMOD:` term as unresolved.
 //!
 //! ### When mzLib cannot convert a sequence
 //!
@@ -516,17 +514,18 @@ pub struct Digest {
     pub organism: String,
     /// The protein's length in residues.
     pub sequence_length: u32,
-    /// The protease used, in mzLib's naming.
+    /// The protease used, in mzLib's naming: the one passed, or mzLib's default.
     pub protease: String,
-    /// The dissociation type used.
+    /// The dissociation type used, which decides the fragment series: the one passed, or `"HCD"`.
     pub dissociation: String,
-    /// Which terminus (or both) was fragmented.
+    /// Which terminus (or both) was fragmented: the one passed, or mzLib's default.
     pub terminus: String,
     /// Whether UniProt's annotated modifications were applied.
     pub modifications_applied: bool,
-    /// The maximum modifications considered per peptide.
+    /// The maximum modifications considered per peptide: the value passed, or mzLib's default.
     pub max_modifications: u32,
-    /// The maximum modification isoforms (peptidoforms) allowed per peptide position.
+    /// The maximum modification isoforms (peptidoforms) allowed per peptide position: the value
+    /// passed, or mzLib's default.
     pub max_isoforms: u32,
     /// How many peptide positions hit that isoform cap: each a peptide position whose peptidoforms
     /// were cut off, so a non-zero value means the list is incomplete.
@@ -557,7 +556,7 @@ impl Digest {
     ///
     /// [`Self::peptides`] holds *peptidoforms* — one entry per sequence-and-modification-placement
     /// — so `peptides.len()` is much the larger number whenever modifications are applied. On
-    /// albumin at two modifications it is 303 peptidoforms over 195 distinct sequences. Both are
+    /// albumin at the defaults it is 310 peptidoforms over 202 distinct sequences. Both are
     /// legitimate answers to "how many peptides"; they are not interchangeable, and quoting one for
     /// the other is a very large error rather than a rounding one.
     #[must_use]
@@ -594,76 +593,86 @@ impl Digest {
     }
 }
 
-/// How a protein is digested and fragmented. Every default is the lab's opinion, and reachable.
+/// How a protein is digested and fragmented.
+///
+/// Every digestion option left `None` is not sent, so mzLib's own default (its `DigestionParams`)
+/// applies. The `peptidoform fragments` table in the reference on [`fragments_with`] gives each
+/// value at the pinned mzLib, and the [`Digest`] echoes the protease, dissociation type, terminus
+/// and caps that were used.
 #[derive(Debug, Clone)]
 pub struct FragmentOptions {
-    /// **Read this if you are coming from MaxQuant or Mascot.**
+    /// A protease name, as mzLib names it. `None` means mzLib's default protease.
     ///
-    /// mzLib's `"trypsin|P"` applies the classic Keil rule — cleave after K/R *except* before
-    /// proline — and is the default here because it is what a mass spectrometrist usually means.
-    /// mzLib's plain `"trypsin"` cleaves before proline too. That is the **reverse** of the MaxQuant
-    /// and Mascot convention, where `Trypsin/P` denotes *ignoring* the proline rule. On serum
-    /// albumin the two differ by 7 peptides out of about 200 (195 vs 202, tryptic, 2 missed
-    /// cleavages, min length 7) — a small count hiding a large semantic difference, since which
-    /// peptides you get changes wherever a K/R precedes a proline.
-    pub protease: String,
-    /// `"HCD"`/`"CID"` (b and y ions), `"ETD"`, and the rest of mzLib's dissociation types.
+    /// **Read this if you are coming from MaxQuant or Mascot.** The names and what each one cuts
+    /// are mzLib's. mzLib's `"trypsin"` cuts after K and R even before proline, and `"trypsin|P"`
+    /// does not cut before proline: the `P` names a residue that prevents the cut. That is the
+    /// **reverse** of MaxQuant's and Mascot's `Trypsin/P`, which ignores the proline rule. On serum
+    /// albumin the two give 202 and 195 distinct peptides, a small count hiding a large
+    /// difference: which peptides you get changes wherever K or R precedes a proline.
+    pub protease: Option<String>,
+    /// `"HCD"`/`"CID"` (b and y ions), `"ETD"`, and the rest of mzLib's dissociation types. `None`
+    /// means `"HCD"`. mzLib names no default here, so HCD is the bridge's choice until mzLib names
+    /// one ([smith-chem-wisc/mzLib#1488](https://github.com/smith-chem-wisc/mzLib/issues/1488)).
     ///
     /// `"ETD"` returns the `c` and `zDot` series (radical N–Cα cleavage yields c/z•, not the b/y of
     /// vibrational activation). mzLib #1114 removed the spurious `y` series ETD used to emit.
-    pub dissociation: String,
+    pub dissociation: Option<String>,
     /// Apply UniProt's annotated modifications.
     ///
     /// `false` gives the bare sequences — a clean control, since the digest's distinct backbones
     /// are unchanged and only the modified variants of them go away. The peptidoform count drops a
-    /// long way; on albumin from 303 to 195.
+    /// long way; on albumin from 310 to 202.
     ///
     /// This once carried a caveat saying `false` was *not* a clean control, because it discarded
     /// UniProt's whole feature table and with it the signal-peptide and propeptide boundaries mzLib
     /// digests at — costing albumin `MKWVTFISLLFLFSSAYS` (1–18) and `WVTFISLLFLFSSAYS` (3–18) and
     /// so changing the peptide list, not just the modifications on it
     /// ([smith-chem-wisc/pyMzLib#8](https://github.com/smith-chem-wisc/pyMzLib/issues/8), since
-    /// fixed). Verified against the published bridge: both peptides are present either way, and
-    /// albumin gives 195 distinct base sequences with modifications on or off.
+    /// fixed). That was true and is no longer: both peptides are present either way, and albumin
+    /// gives 202 distinct base sequences with modifications on or off.
     pub modifications: bool,
-    /// Maximum missed cleavage sites per peptide.
-    pub missed_cleavages: u32,
-    /// Shortest peptide to keep, in residues.
-    ///
-    /// The default of 7 silently discards shorter peptides — roughly a third of a histone digest —
-    /// so pass 1 when you mean *every* peptide.
-    pub min_length: u32,
-    /// Longest peptide to keep, in residues. `None` means unbounded.
+    /// Maximum missed cleavage sites per peptide. `None` means mzLib's default.
+    pub missed_cleavages: Option<u32>,
+    /// Shortest peptide to keep, in residues. `None` means mzLib's default, which silently
+    /// discards shorter peptides: histone H3.1 keeps 49 of the 96 peptides it gives at a minimum
+    /// of 1. Pass `Some(1)` when you mean *every* peptide.
+    pub min_length: Option<u32>,
+    /// Longest peptide to keep, in residues. `None` means mzLib's default, which is unbounded;
+    /// `Some(0)` asks for unbounded explicitly.
     pub max_length: Option<u32>,
-    /// Maximum modifications considered per peptide.
+    /// Maximum modifications considered per peptide. `None` means mzLib's default.
     ///
-    /// Modification isoforms are enumerated combinatorially: histone H3.1 yields 49 bare tryptic
-    /// peptides, 2,563 at two modifications and 7,040 at three.
-    pub max_modifications: u32,
-    /// Maximum modification isoforms (peptidoforms) per peptide position.
+    /// Modification isoforms are enumerated combinatorially: histone H3.1's 49 peptides give 2,419
+    /// peptidoforms at two modifications and 6,580 at three.
+    pub max_modifications: Option<u32>,
+    /// Maximum modification isoforms (peptidoforms) per peptide position. `None` means mzLib's
+    /// default.
     ///
-    /// mzLib's default of 1024 **truncates silently** when it binds — on H3.1 at four modifications
-    /// it discards about 30% of the peptidoforms. [`Digest::peptides_at_cap`] reports how many
-    /// peptides hit it, so a truncated answer is visible rather than merely short.
-    pub max_isoforms: u32,
-    /// `"Both"`, `"N"` or `"C"`.
-    pub terminus: String,
+    /// mzLib **truncates silently** when the cap binds: on H3.1 at four modifications the default
+    /// keeps 8,644 of 12,808 peptidoforms, losing about a third. [`Digest::peptides_at_cap`]
+    /// reports how many peptides hit it, so a truncated answer is visible rather than merely
+    /// short.
+    pub max_isoforms: Option<u32>,
+    /// `"Both"`, `"N"` or `"C"`. `None` means mzLib's default.
+    pub terminus: Option<String>,
     /// Seconds to allow. Large proteins with many modification isoforms take longer.
     pub timeout: Option<Duration>,
 }
 
 impl Default for FragmentOptions {
+    /// Nothing chosen: every digestion option is `None`, so mzLib's defaults apply, and UniProt's
+    /// modifications are applied. Five minutes to answer.
     fn default() -> Self {
         Self {
-            protease: "trypsin|P".to_owned(),
-            dissociation: "ETD".to_owned(),
+            protease: None,
+            dissociation: None,
             modifications: true,
-            missed_cleavages: 2,
-            min_length: 7,
+            missed_cleavages: None,
+            min_length: None,
             max_length: None,
-            max_modifications: 2,
-            max_isoforms: 1024,
-            terminus: "Both".to_owned(),
+            max_modifications: None,
+            max_isoforms: None,
+            terminus: None,
             timeout: Some(Duration::from_secs(300)),
         }
     }
@@ -737,35 +746,35 @@ fn normalise_accession(accession: &str) -> Result<String> {
 fn build_args(accession: &str, options: &FragmentOptions) -> Result<Vec<String>> {
     let canonical = normalise_accession(accession)?;
 
-    if options.max_isoforms < 1 {
-        return Err(MzLibError::Usage(format!(
-            "max_isoforms must be at least 1; got {}.",
-            options.max_isoforms
-        )));
+    if options.max_isoforms == Some(0) {
+        return Err(MzLibError::Usage(
+            "max_isoforms must be at least 1; got 0.".to_owned(),
+        ));
     }
 
+    // Only what the caller chose goes on the wire. Anything left out is mzLib's to decide.
     let mut args = vec![
         "peptidoform".to_owned(),
         "fragments".to_owned(),
         "--accession".to_owned(),
         canonical,
-        "--protease".to_owned(),
-        options.protease.clone(),
-        "--dissociation".to_owned(),
-        options.dissociation.clone(),
-        "--terminus".to_owned(),
-        options.terminus.clone(),
-        "--missed-cleavages".to_owned(),
-        options.missed_cleavages.to_string(),
-        "--min-length".to_owned(),
-        options.min_length.to_string(),
-        "--max-length".to_owned(),
-        options.max_length.unwrap_or(0).to_string(),
-        "--max-mods".to_owned(),
-        options.max_modifications.to_string(),
-        "--max-isoforms".to_owned(),
-        options.max_isoforms.to_string(),
     ];
+    let numbers = |value: Option<u32>| value.map(|n| n.to_string());
+    for (option, value) in [
+        ("--protease", options.protease.clone()),
+        ("--dissociation", options.dissociation.clone()),
+        ("--terminus", options.terminus.clone()),
+        ("--missed-cleavages", numbers(options.missed_cleavages)),
+        ("--min-length", numbers(options.min_length)),
+        ("--max-length", numbers(options.max_length)),
+        ("--max-mods", numbers(options.max_modifications)),
+        ("--max-isoforms", numbers(options.max_isoforms)),
+    ] {
+        if let Some(value) = value {
+            args.push(option.to_owned());
+            args.push(value);
+        }
+    }
 
     if !options.modifications {
         args.push("--no-modifications".to_owned());
@@ -849,9 +858,10 @@ fn parse(data: serde_json::Value) -> Result<Digest> {
 
 // ------------------------------------------------------------------ the public surface
 
-/// Fetch a UniProt entry, digest it, and fragment every peptide, with the lab's defaults.
+/// Fetch a UniProt entry, digest it, and fragment every peptide, with mzLib's defaults.
 ///
-/// See [`fragments_with`] for the reference.
+/// Nothing but the accession is sent, so mzLib's `DigestionParams` defaults apply, and HCD until
+/// mzLib names a default dissociation type. See [`fragments_with`] for the reference.
 ///
 /// # Errors
 ///
@@ -863,9 +873,10 @@ pub fn fragments(accession: &str) -> Result<Digest> {
 /// Fetch a UniProt entry, digest it, and fragment every peptide, with the digestion and
 /// fragmentation stated explicitly.
 ///
-/// Check [`Digest::modification_census`] before trusting a modification count — it reports what was
-/// annotated as well as what was applied — and [`Digest::truncated`] before treating the peptide
-/// list as exhaustive. A malformed UniProt accession is refused before anything is spawned.
+/// Only the options set in [`FragmentOptions`] are sent; each one left `None` takes mzLib's own
+/// default. Check [`Digest::modification_census`] before trusting a modification count — it reports
+/// what was annotated as well as what was applied — and [`Digest::truncated`] before treating the
+/// peptide list as exhaustive. A malformed UniProt accession is refused before anything is spawned.
 #[doc = include_str!("../docs/reference/peptidoform.fragments.md")]
 ///
 /// # Examples
@@ -874,8 +885,9 @@ pub fn fragments(accession: &str) -> Result<Digest> {
 /// # mzlib_replay::activate();
 /// use mzlib::peptidoform::{fragments_with, FragmentOptions};
 ///
-/// let digest = fragments_with("P02768", &FragmentOptions { max_modifications: 1, ..Default::default() })?;
-/// assert_eq!((digest.dissociation.as_str(), digest.sequence_length), ("ETD", 609));
+/// let options = FragmentOptions { max_modifications: Some(1), ..Default::default() };
+/// let digest = fragments_with("P02768", &options)?;
+/// assert_eq!((digest.dissociation.as_str(), digest.sequence_length), ("HCD", 609));
 /// assert!(!digest.truncated());                     // no peptide hit the isoform cap
 /// let census = &digest.modification_census;
 /// assert_eq!((census.applied, census.annotated), (14, 38));
@@ -967,7 +979,8 @@ pub struct ConvertOptions {
     pub source: String,
     /// The notation to write: one of mzLib's registered target formats
     /// ([`SequenceConversions::target_formats`]), matched case-insensitively. Default `"Unimod"`.
-    /// Prefer it to `"ProForma"` for UniProt-sourced modifications; see the module guide.
+    /// `"ProForma"` writes a modification no list mzLib loads knows back under its own name; see
+    /// the module guide.
     pub target: String,
     /// What a sequence the target cannot write does to its row: mzLib's
     /// `SequenceConversionHandlingMode`. Default [`ConversionMode::ReturnNull`].
@@ -1241,9 +1254,10 @@ pub fn convert<S: AsRef<str>>(sequences: &[S]) -> Result<SequenceConversions> {
 /// becomes `[UNIMOD:1]SEQK`. Nothing is converted in Rust or in the bridge; every output and every
 /// status is mzLib's.
 ///
-/// **Choose Unimod, not ProForma, for UniProt-sourced modifications.** mzLib's ProForma target
-/// does not resolve them and writes them back under their mzLib name, status `"converted"`. See the
-/// caveats.
+/// Both targets name UniProt-sourced modifications by their UNIMOD accession (the ProForma one
+/// since mzLib #1403). They differ on a modification no list mzLib loads knows: ProForma writes it
+/// back under its own name, status `"converted"`, where Unimod fails the row or drops it,
+/// depending on `mode`. See the caveats.
 ///
 /// `sequences` are full sequences, one result row each, in order, duplicates included, sent to
 /// mzLib exactly as given. Split an ambiguous MetaMorpheus full sequence (`|`-joined candidates)
@@ -1344,14 +1358,13 @@ mod tests {
     }
 
     #[test]
-    fn etd_produces_c_and_zdot_but_no_y_ions() {
-        // The dissociation type actually reached the engine, and mzLib #1114 removed y from the
-        // ETD/ECD product sets: radical N–Cα cleavage yields c/z• only, while b/y come from amide
-        // cleavage under vibrational activation (mzLib's EThcD row is where y belongs). This pins
-        // the post-#1114 contract — c and zDot, never y — so a fixture or bridge that regressed
-        // below f6b0f0d1 fails here instead of resurrecting the retired "spurious ETD y" note.
+    fn hcd_produces_b_and_y_but_no_c_or_zdot_ions() {
+        // The recording was made with no dissociation type named, so it is the bridge's HCD
+        // stop-gap (mzLib#1488): amide cleavage under vibrational activation, b and y only. The
+        // ETD product set (c and z•, and no y since mzLib #1114) is pinned by the live canary
+        // etd_produces_c_and_z_ions_not_b_and_y, which asks for ETD by name.
         let digest = recorded_digest();
-        assert_eq!(digest.dissociation, "ETD");
+        assert_eq!(digest.dissociation, "HCD");
         let series: std::collections::HashSet<&str> = digest
             .peptides
             .iter()
@@ -1360,21 +1373,16 @@ mod tests {
             .collect();
 
         assert!(
-            series.contains("c"),
-            "ETD should produce c ions: {series:?}"
+            series.contains("b"),
+            "HCD should produce b ions: {series:?}"
         );
         assert!(
-            series.contains("zDot"),
-            "ETD should produce z• ions: {series:?}"
+            series.contains("y"),
+            "HCD should produce y ions: {series:?}"
         );
         assert!(
-            !series.contains("b"),
-            "b ions would mean amide cleavage: {series:?}"
-        );
-        assert!(
-            !series.contains("y"),
-            "mzLib #1114 removed y from ETD; its return means the fixture or bridge regressed \
-             below f6b0f0d1: {series:?}"
+            !series.contains("c") && !series.contains("zDot"),
+            "c or z• ions would mean N–Cα cleavage, not HCD: {series:?}"
         );
     }
 
@@ -1632,37 +1640,47 @@ mod tests {
     // ---------------------------------------------------------- the call itself
 
     #[test]
-    fn defaults_are_the_labs_opinion_and_reach_the_bridge() {
-        let assembled = args(&FragmentOptions::default());
+    fn the_defaults_are_mzlibs_so_nothing_is_sent_for_them() {
+        // A caller who chooses nothing sends nothing: the bridge applies mzLib's DigestionParams
+        // defaults, and HCD until mzLib names a dissociation default (smith-chem-wisc/mzLib#1488).
+        // This crate once sent "trypsin|P" and ETD of its own, and copies of mzLib's numbers.
         assert_eq!(
-            assembled[0..2],
-            ["peptidoform".to_owned(), "fragments".to_owned()]
+            args(&FragmentOptions::default()),
+            ["peptidoform", "fragments", "--accession", "P02768"]
         );
-        assert_eq!(value_after(&assembled, "--accession"), "P02768");
-        assert_eq!(value_after(&assembled, "--protease"), "trypsin|P");
-        assert_eq!(value_after(&assembled, "--dissociation"), "ETD");
-        assert_eq!(value_after(&assembled, "--terminus"), "Both");
-        assert_eq!(value_after(&assembled, "--missed-cleavages"), "2");
-        assert_eq!(value_after(&assembled, "--min-length"), "7");
-        assert_eq!(value_after(&assembled, "--max-length"), "0");
-        assert_eq!(value_after(&assembled, "--max-mods"), "2");
-        assert_eq!(value_after(&assembled, "--max-isoforms"), "1024");
-        assert!(!assembled.contains(&"--no-modifications".to_owned()));
+    }
+
+    #[test]
+    fn each_option_is_sent_only_when_it_is_set() {
+        let assembled = args(&FragmentOptions {
+            max_modifications: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(
+            assembled,
+            [
+                "peptidoform",
+                "fragments",
+                "--accession",
+                "P02768",
+                "--max-mods",
+                "1"
+            ]
+        );
     }
 
     #[test]
     fn every_default_is_reachable() {
-        // The point is to open the doors, not to hide them.
         let options = FragmentOptions {
-            protease: "chymotrypsin (don't cleave before proline)".to_owned(),
-            dissociation: "HCD".to_owned(),
+            protease: Some("chymotrypsin (don't cleave before proline)".to_owned()),
+            dissociation: Some("ETD".to_owned()),
             modifications: false,
-            missed_cleavages: 0,
-            min_length: 1,
+            missed_cleavages: Some(0),
+            min_length: Some(1),
             max_length: Some(30),
-            max_modifications: 4,
-            max_isoforms: 65536,
-            terminus: "N".to_owned(),
+            max_modifications: Some(4),
+            max_isoforms: Some(65536),
+            terminus: Some("N".to_owned()),
             timeout: None,
         };
         let assembled = args(&options);
@@ -1670,7 +1688,7 @@ mod tests {
             value_after(&assembled, "--protease"),
             "chymotrypsin (don't cleave before proline)"
         );
-        assert_eq!(value_after(&assembled, "--dissociation"), "HCD");
+        assert_eq!(value_after(&assembled, "--dissociation"), "ETD");
         assert_eq!(value_after(&assembled, "--terminus"), "N");
         assert_eq!(value_after(&assembled, "--missed-cleavages"), "0");
         assert_eq!(value_after(&assembled, "--min-length"), "1");
@@ -1681,13 +1699,29 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_max_length_is_sent_as_zero() {
-        // The bridge reads 0 as int.MaxValue; None must not become the string "None".
+    fn the_old_defaults_are_one_option_each_away() {
+        // The answer this crate gave before mzLib's defaults applied: Keil-rule trypsin and ETD.
         let assembled = args(&FragmentOptions {
-            max_length: None,
+            protease: Some("trypsin|P".to_owned()),
+            dissociation: Some("ETD".to_owned()),
             ..Default::default()
         });
-        assert_eq!(value_after(&assembled, "--max-length"), "0");
+        assert_eq!(value_after(&assembled, "--protease"), "trypsin|P");
+        assert_eq!(value_after(&assembled, "--dissociation"), "ETD");
+        assert_eq!(assembled.len(), 8, "{assembled:?}");
+    }
+
+    #[test]
+    fn an_absent_max_length_is_not_sent_and_zero_is_unbounded() {
+        // mzLib's own default is unbounded, so None sends nothing; the bridge reads an explicit 0
+        // as unbounded too. None must never become the string "None".
+        let absent = args(&FragmentOptions::default());
+        assert!(!absent.contains(&"--max-length".to_owned()), "{absent:?}");
+        let zero = args(&FragmentOptions {
+            max_length: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(value_after(&zero, "--max-length"), "0");
     }
 
     #[test]
@@ -1731,7 +1765,7 @@ mod tests {
         let error = build_args(
             "P02768",
             &FragmentOptions {
-                max_isoforms: 0,
+                max_isoforms: Some(0),
                 ..Default::default()
             },
         )
@@ -1910,11 +1944,11 @@ mod tests {
                 "errors"
             ]
         );
-        assert_eq!(result.caveats.len(), 6);
-        assert!(result
-            .caveats
-            .iter()
-            .any(|c| c.contains("ProForma") && c.contains("UniProt")));
+        // Six until the pin carrying mzLib #1403, which retired "ProForma does not resolve
+        // UniProt-sourced modifications": the ProForma serializer now falls back to the lookup the
+        // Unimod one uses.
+        assert_eq!(result.caveats.len(), 5);
+        assert!(!result.caveats.iter().any(|c| c.contains("UniProt")));
     }
 
     #[test]
@@ -1938,8 +1972,11 @@ mod tests {
     }
 
     #[test]
-    fn proforma_leaves_uniprot_modifications_unresolved() {
-        // The mzLib gap the caveats describe, pinned so a fix upstream is noticed when re-recorded.
+    fn proforma_resolves_uniprot_modifications_as_unimod_does() {
+        // Was proforma_leaves_uniprot_modifications_unresolved, pinning the gap mzLib #1403
+        // closed. Re-recorded at the pin that carries #1403: tele-methylhistidine, written back by
+        // name before, is UNIMOD:34 in ProForma too, so on this file the two targets agree row for
+        // row.
         let options = ConvertOptions {
             target: "ProForma".into(),
             ..Default::default()
@@ -1951,15 +1988,17 @@ mod tests {
             "../tests/fixtures/peptidoform_convert_psmtsv_proforma.json"
         ));
         let outputs = result.outputs().unwrap();
-        assert_eq!(
-            outputs[0].as_deref(),
-            Some("YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDMEK")
-        );
+        assert_eq!(outputs[0].as_deref(), Some("YPIEH[UNIMOD:34]GIVTNWDDMEK"));
         assert_eq!(
             outputs[2].as_deref(),
             Some("AYHEQLSVAEITNAC[UNIMOD:4]FEPANQMVK")
         );
         assert_eq!(result.sequences().unwrap()[0].status, "converted");
+        assert!(outputs.iter().flatten().all(|o| !o.contains("UniProt:")));
+        let unimod = conversions(include_str!(
+            "../tests/fixtures/peptidoform_convert_psmtsv.json"
+        ));
+        assert_eq!(outputs, unimod.outputs().unwrap());
     }
 
     #[test]

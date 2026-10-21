@@ -46,7 +46,8 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
     // The identify bulk shape is not a spec example: check_verbs.py has no table-less bulk verb.
     ("readers identify", &["readers_many_identify.json"]),
     ("version", &["bridge_version.json"]),
-    // The PRIDE guide: PRIDE's empty answer for an unknown accession, and the complete FTP listing.
+    // The PRIDE guide: PRIDE's empty answer for an unknown accession. The complete FTP listing it
+    // also reads is the `pride ftp-files` spec's example.
     (
         "pride files",
         &[
@@ -54,7 +55,6 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
             "pride_PXD999999999_files.json",
         ],
     ),
-    ("pride ftp-files", &["pride_PXD000001_ftp_files.json"]),
     // The peptidoforms guide: MetaMorpheus's BottomUpExample.psmtsv (mzLib's test data), whose
     // full sequences it converts to Unimod and ProForma.
     ("readers read-results", &["readers_results_psmtsv.json"]),

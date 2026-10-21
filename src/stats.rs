@@ -396,9 +396,10 @@ pub struct FitOptions {
     /// Let the prior variance follow average response (limma's `trend = TRUE`), for data whose
     /// low-abundance features are noisier.
     pub trend: bool,
-    /// Basis functions of the trend spline, intercept included (the bridge's default is 4). Only
-    /// with `trend`; mzLib may use fewer, and [`VariancePrior::spline_basis_count`] reports what
-    /// it used.
+    /// Basis functions of the trend spline, intercept included. Only with `trend`. Leave it `None`
+    /// to let mzLib choose, as limma does, for the number of features: nothing is sent for it.
+    /// mzLib may also use fewer than you ask for. Either way
+    /// [`VariancePrior::spline_basis_count`] reports what it used.
     pub spline_basis: Option<u32>,
     /// Features fitted at once, in threads, or `-1` for every core. The answer is identical at any
     /// value.
@@ -854,6 +855,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args.last().map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn a_trend_fit_without_a_spline_basis_sends_none_so_mzlib_chooses() {
+        // mzLib then follows limma's fitFDist rule for the number of features (mzLib #1398); the
+        // crate makes up no basis count of its own.
+        let (args, _) = fit_request(
+            Path::new("r.tsv"),
+            Path::new("d.tsv"),
+            &["a"],
+            &FitOptions {
+                trend: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "stats",
+                "fit",
+                "--responses",
+                "r.tsv",
+                "--design",
+                "d.tsv",
+                "--threads",
+                "1",
+                "--trend"
+            ]
+        );
     }
 
     #[test]

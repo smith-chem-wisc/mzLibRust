@@ -55,23 +55,23 @@ fn every_format_the_bridge_lists_is_one_this_crate_can_describe() {
 
     assert_eq!(
         formats.len(),
-        38,
-        "mzLib 1.0.593 recognises 38 file types; a change here means the recorded formats \
+        39,
+        "mzLib 1.0.595 recognises 39 file types; a change here means the recorded formats \
          fixture and the formats example are stale (the bridge's readers formats spec records \
          the count per pin)"
     );
 
-    // 19 of 38 belong to no cross-format family, which is the fact that makes read_records
+    // 19 of 39 belong to no cross-format family, which is the fact that makes read_records
     // necessary rather than a convenience. 17 -> 19 with mzLib 1.0.593: #1388's RNA
     // transcript-group and quantified-oligo tables subclass the protein-group and peptide readers
     // and add no shared interface.
     let viewless = formats.iter().filter(|f| f.views.is_empty()).count();
-    assert_eq!(viewless, 19, "19 of 38 have no view at all");
+    assert_eq!(viewless, 19, "19 of 39 have no view at all");
 
-    // Four, not three: mzLib 1.0.585 added DiaNnReport (mzLib #1120), which is how DIA data
-    // reaches read_results and FlashLFQ at all.
+    // Five: mzLib 1.0.585 added DiaNnReport (mzLib #1120), which is how DIA data reaches
+    // read_results and FlashLFQ at all, and 1.0.595 added DIA-NN 2.x's DiaNnReportParquet (#1384).
     let quantifiable = formats.iter().filter(|f| f.is_quantifiable()).count();
-    assert_eq!(quantifiable, 4, "exactly 4 offer the quantifiable view");
+    assert_eq!(quantifiable, 5, "exactly 5 offer the quantifiable view");
 }
 
 #[test]

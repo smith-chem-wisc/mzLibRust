@@ -10,7 +10,51 @@ Each entry names the mzLib pull request it comes from, so you can read the chang
 `mzlib::bridge_version()?.mzlib`. pyMzLib keeps the same page, entry for entry, because both
 bindings drive the same bridge.
 
-## Next bridge (built from mzLib 1.0.593)
+## The pyMzLib 0.5.0 bridge (built from mzLib 1.0.595)
+
+This bridge moves mzLib from 1.0.593 to 1.0.595, so it carries 1.0.594's changes too. Two of the
+changes below are this crate's own: it stopped choosing defaults that are mzLib's to set.
+
+### Files that used to be refused now read
+
+- **DIA-NN 2.x `report.parquet`** ([mzLib#1384](https://github.com/smith-chem-wisc/mzLib/pull/1384)).
+  A `.parquet` was `MzLibError::Usage` (`File type not supported`). One whose columns include
+  `Precursor.Id`, `Stripped.Sequence` and `Run` now reads as `DiaNnReportParquet`, a `quantifiable`
+  type like the DIA-NN `report.tsv`, with retention time in minutes. Any other `.parquet` is still
+  `MzLibError::Usage`, now `Parquet file type not supported`. `readers::formats()` lists one more
+  entry, and one more of them offers `quantifiable`: code that asserts either count needs updating.
+
+### Same file, different value
+
+- **ProForma names UniProt modifications by their UNIMOD accession**
+  ([mzLib#1403](https://github.com/smith-chem-wisc/mzLib/pull/1403)). `peptidoform::convert_with`
+  with `target: "ProForma"` turns `YPIEH[UniProt:Tele-methylhistidine on H]GIVTNWDDMEK` into
+  `YPIEH[UNIMOD:34]GIVTNWDDMEK`, where it wrote the UniProt name back. The `pro_forma` column of
+  `read_records` on a `.psmtsv` written without a ProForma column changes the same way. A string
+  comparison of ProForma across the upgrade will see these peptides as different.
+  `SequenceConversions::caveats` holds five caveats instead of six, because the one describing
+  this gap is gone.
+- **`peptidoform::fragments`, and `fragments_with` without `protease` or `dissociation`**
+  (pyMzLib #83). Every digestion option in `FragmentOptions` is now an `Option`, `None` by default,
+  and an option left `None` is not sent, so it takes mzLib's default. Two of those differ from what
+  this crate chose before:
+  - the protease is mzLib's `"trypsin"`, which also cuts before proline, where the crate sent
+    `"trypsin|P"`, which does not;
+  - the fragments are HCD's b and y ions, where the crate sent ETD for c and z• ions. mzLib names no
+    default dissociation type, so the bridge uses HCD until it does
+    ([mzLib#1488](https://github.com/smith-chem-wisc/mzLib/issues/1488)).
+
+  Serum albumin's default digest goes from 303 to 310 peptidoforms. For the old answer, pass
+  `FragmentOptions { protease: Some("trypsin|P".into()), dissociation: Some("ETD".into()), ..Default::default() }`.
+  The other defaults have the same values as before, now set by mzLib.
+- **`stats::fit_with` with `trend: true` on fewer than 30 features**
+  ([mzLib#1398](https://github.com/smith-chem-wisc/mzLib/pull/1398), pyMzLib #82). Without
+  `spline_basis`, the trend spline now has limma's number of basis functions,
+  1 + (n ≥ 3) + (n ≥ 6) + (n ≥ 30) for n features, where the bridge always asked for 4. A small
+  trend fit's prior and moderated statistics change to limma's. Thirty or more features give the
+  same answer, and `spline_basis: Some(4)` gives the old answer at any size.
+
+## The pyMzLib 0.3.0 and 0.4.0 bridges (built from mzLib 1.0.593)
 
 ### Files that used to be refused now read
 

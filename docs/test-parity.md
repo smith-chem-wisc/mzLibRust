@@ -21,7 +21,7 @@ the reason it is not portable. Nothing was silently dropped.
 |---|---|---|---|
 | transport | `test_bridge.py` 20 | `src/bridge.rs` 23 | +3: service-unavailable variant, version-verb assertion, stdin passthrough |
 | PRIDE | `test_pride.py` 38 | `src/pride.rs` 38 | 1:1 |
-| peptidoform | `test_peptidoform.py` 25 | `src/peptidoform.rs` 29 | +4: ETD product set after mzLib#1114 (c and z•, no y), unbounded max-length, modification mass/charge |
+| peptidoform | `test_peptidoform.py` 25 | `src/peptidoform.rs` 29 | +4: the default recording's HCD product set (b and y, no c or z•), an absent max-length is not sent while 0 is unbounded, modification mass/charge |
 | FlashLFQ | `test_flashlfq.py` 24 | `src/flashlfq.rs` 28 | +4: null peptide intensity, None/zero typing, every-flag-reachable, invariant formatting |
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
@@ -44,7 +44,7 @@ accounted for, not quietly missing.
 | `test_bad_arguments_are_refused_before_the_bridge`: one string, a non-string sequence, `mode=None`, `threads=True` | `convert` takes `&[S: AsRef<str>]`, so neither a bare `&str` nor a number can reach it; `ConvertOptions::mode` is a `ConversionMode` and `threads` an `i32`. An unknown mode name is refused by `ConversionMode::from_str`. |
 | `test_spectra_must_be_a_list_not_a_string` | Same: `&[SpectraFile]` is not a string. |
 | `test_download_files_rejects_things_that_are_not_pride_files` | `&[PrideFile]` is typed. |
-| `test_bad_page_sizes_are_usage_errors` (partial) | `u32` excludes `"100"`, `None`, `2.5`; the two reachable cases (0, over `i32::MAX`) each have a test. |
+| `test_bad_page_sizes_are_usage_errors` (partial) | `Option<u32>` excludes `"100"` and `2.5`; `None` is not a bad size but mzLib's default, as in pyMzLib since #85. The two reachable cases (`Some(0)`, over `i32::MAX`) each have a test. |
 | `test_negative_replicate_raises` | design fields are `u32`. `a_negative_replicate_is_impossible_by_construction` documents it. |
 | `test_boolean_max_threads_raises` | `i32` is not `bool`. |
 | `test_non_integer_max_length_is_refused` | `Option<u32>`. |
@@ -66,9 +66,11 @@ accounted for, not quietly missing.
   as "0.0 when missing, never None" but stores the wire value verbatim — and its own
   `flashlfq_small.json` fixture contains `"run_4": null`, so `intensity("run_4")` returns `None`
   there. No Python test covers it. See [findings.md](findings.md).
-- **`etd_produces_c_and_zdot_but_no_y_ions`** replaced the two tests that pinned
+- **`etd_produces_c_and_z_ions_not_b_and_y`** (live) replaced the two tests that pinned
   smith-chem-wisc/mzLib#1109 while it was open; #1114 fixed it, and the test now fails if the y
-  ions ever come back.
+  ions ever come back. It was an offline test on the albumin recording until that recording was
+  re-made at mzLib's defaults (pyMzLib #83), which fragment by HCD; the offline
+  `hcd_produces_b_and_y_but_no_c_or_zdot_ions` now pins that series instead.
 
 ## Running them
 

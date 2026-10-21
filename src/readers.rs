@@ -469,8 +469,8 @@ pub struct Format {
     /// `"QuantifiedProteinGroups.tsv"`.
     ///
     /// **Not unique across file types.** `BrukerD` and `BrukerTimsTof` are both `.d`, told apart
-    /// by which analysis file the directory holds, and several formats share `.tsv`; `DiaNnReport`
-    /// and `PytheasResult` dispatch on content. `None` only for a broken mzLib build with no
+    /// by which analysis file the directory holds, and several formats share `.tsv`; `DiaNnReport`,
+    /// `DiaNnReportParquet` and `PytheasResult` dispatch on content. `None` only for a broken mzLib build with no
     /// extension mapping for the member — the listing reports it rather than failing.
     #[serde(default)]
     pub extension: Option<String>,
@@ -1810,8 +1810,11 @@ fn read_many<P: AsRef<Path>>(
 ///     .filter(|f| f.is_quantifiable())
 ///     .map(|f| f.file_type.as_str())
 ///     .collect();
-/// assert_eq!(quantifiable, ["psmtsv", "osmtsv", "MsFraggerPsm", "DiaNnReport"]);
-/// assert_eq!(formats.len(), 38);
+/// assert_eq!(
+///     quantifiable,
+///     ["psmtsv", "osmtsv", "MsFraggerPsm", "DiaNnReport", "DiaNnReportParquet"]
+/// );
+/// assert_eq!(formats.len(), 39);
 /// assert_eq!(formats.iter().filter(|f| f.views.is_empty()).count(), 19);
 /// # Ok::<(), mzlib::MzLibError>(())
 /// ```
@@ -1933,9 +1936,9 @@ pub fn read_results(path: impl AsRef<Path>) -> Result<ResultRecords> {
 /// retention time, charge, theoretical mass, decoy flag, protein groups — for every format that
 /// offers it.
 ///
-/// Four file types offer the view: MetaMorpheus `.psmtsv`/`.osmtsv`, MSFragger `psm.tsv` and
-/// DIA-NN `report.tsv`. Use [`read_records`] for any other format, and [`read_results_many`] for a
-/// list.
+/// Five file types offer the view: MetaMorpheus `.psmtsv`/`.osmtsv`, MSFragger `psm.tsv`, and
+/// DIA-NN's `report.tsv` and 2.x `report.parquet`. Use [`read_records`] for any other format, and
+/// [`read_results_many`] for a list.
 #[doc = include_str!("../docs/reference/readers.read-results.md")]
 ///
 /// # Examples

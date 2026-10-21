@@ -80,7 +80,7 @@ errors:
   - {kind: usage, when: "with on-error fail, an input that is missing or not this view: the usage error of that input, prefixed 'Input <i> (<path>)'"}
   - {kind: correctness, when: "with on-error fail, mzLib failing to parse an input: that input's own error type, message prefixed 'Input <i> (<path>)'"}
   - {kind: usage, when: "out (with path or paths-stdin) whose extension is not .tsv, any case, including none (PYB-1); checked before any input is opened"}
-  - {kind: usage, when: "the answer is too large to return as one JSON document (PYB-3 part 1; measured: past the ~1.07 G-character .NET string ceiling, not RAM). Message: 'this read (N records) is too large to return as one document; use --limit/--offset or --out', N the parsed record_count"}
+  - {kind: usage, when: "the answer is too large to return as one JSON document (PYB-3 part 1; measured: past the ~1.07 G-character .NET string ceiling, not RAM). Message: 'this read (N records) is too large to return as one document; use --limit/--offset or --out', N the records this answer holds (its returned_count, or record_count where the envelope has none)"}
   - {kind: service_unavailable, when: never}
 
 caveats:
@@ -103,4 +103,4 @@ examples:
 open_questions:
   - "quant median-polish still parses QuantifiedPeptides.tsv with a private reader (Quantification.cs); switching it to mzLib's QuantifiedPeptideFile is out of this verb's scope."
   - "No IsoTracker fixture exists, so retention_time and peak_order have only been seen absent."
-  - "PYB-3 part 2: refusing a too-large answer BEFORE serialising, when the parsed record count already predicts it, is not built. It needs a characters-per-record threshold measured per format (dataRepo's ~805 per record is one file type); part 1 catches the failure after serialising."
+  - "PYB-3 part 2: refusing a too-large answer BEFORE serialising is not built (pyMzLib main b18f013, Program.cs SuccessJson); part 1 catches the failure after serialising. A threshold per record will not work: dataRepo's re-run on 0.4.0 (dataRepo to pyMzLib 018, 2026-10-04) measured 725 and 805 characters per record in two psmtsv files from one producer. It proposed source size instead, 0.63 to 0.71 output characters per source byte, which puts the limit at about 1.51 to 1.70 GB of source text. That is two files of one format, and no threshold has been agreed."
