@@ -84,6 +84,54 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
+//! Each file streams to a temporary `.partial` name and moves into place only once complete, so a
+//! cancelled or crashed download leaves no truncated file under its real name for a later run to
+//! mistake for a good one. A transfer that fails after mzLib's retries leaves `<name>.partial` and
+//! `<name>.partial.validator` in the folder on purpose: the next call for that file resumes from
+//! them instead of starting again (mzLib#1412). Leave them in place, or delete both to start over.
+//!
+//! **Check large files yourself.** mzLib can check a download against PRIDE's checksums, and it
+//! also catches an EBI error page served at the right size (mzLib#1427, #1449). That check is not
+//! yet on the path [`download`] and [`download_files`] use, so a file can be reported as
+//! downloaded when its bytes are wrong. For files that matter, compare their sizes with
+//! [`list_files`] and their checksums with PRIDE's before you search them.
+//!
+//! ## Retries and timeouts
+//!
+//! **mzLib retries for you.** A request that fails in a way that can pass (no answer, an HTTP 408,
+//! 429 or 5xx, or a 403 from EBI's FTP host, its rate limit) is retried three times, after 5, 20
+//! and 60 seconds, and that request alone (mzLib#1412). A paged manifest retries only the page
+//! that failed, and a download resumes where it stopped.
+//!
+//! **This crate adds no timeout of its own by default**, on any PRIDE function. Each attempt is
+//! already limited to 100 seconds, so an outage that hangs is reported as
+//! [`MzLibError::ServiceUnavailable`] after about 8 minutes per request. Set a timeout
+//! ([`ListOptions::timeout`], [`SearchOptions::timeout`], [`DownloadOptions::timeout`], or the
+//! argument of [`list_ftp_files_with`]) to cut a call off sooner; it then fails with
+//! [`MzLibError::Timeout`], which is not `ServiceUnavailable`.
+//!
+//! By the time `ServiceUnavailable` reaches you, mzLib has already retried, so retrying again at
+//! once rarely helps. Wait minutes, not seconds. Two failures arrive as [`MzLibError::Bridge`]
+//! with `error_type` `"HttpRequestException"` although they are EBI's: an FTP listing that came
+//! back empty, and a 403 from EBI's FTP host, each still failing after mzLib's retries. Treat
+//! those as an outage too.
+//!
+//! Not run: shows how to handle a PRIDE outage, which a recording cannot produce.
+//!
+//! ```no_run
+//! use std::time::Duration;
+//!
+//! let files = match mzlib::pride::list_files("PXD000001") {
+//!     Err(mzlib::MzLibError::ServiceUnavailable { .. }) => {
+//!         // mzLib retried already; give EBI ten minutes.
+//!         std::thread::sleep(Duration::from_secs(600));
+//!         mzlib::pride::list_files("PXD000001")?
+//!     }
+//!     other => other?,
+//! };
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
 //! ## Cite
 //!
 //! Cite mzLib, this crate, and the archive:
@@ -224,24 +272,21 @@ impl PrideFtpFile {
     }
 }
 
-/// How a manifest is fetched. By default the page size is mzLib's and the fetch may take 300 s.
-#[derive(Debug, Clone)]
+/// How a manifest is fetched. By default the page size is mzLib's, and so is the time limit.
+#[derive(Debug, Clone, Default)]
 pub struct ListOptions {
     /// How many files to request per underlying API call. Only affects how the manifest is
     /// fetched, never what you get back. `None` sends none, so mzLib's default applies; a value
     /// must be at least 1.
     pub page_size: Option<u32>,
-    /// Seconds to allow for the whole fetch.
+    /// Time to allow for the whole fetch.
+    ///
+    /// `None` (the default) adds no limit of this crate's own, because mzLib already bounds every
+    /// request: it retries a transient failure three times, after 5, 20 and 60 s, and each attempt
+    /// can take up to 100 s (mzLib#1412). An outage that hangs is therefore reported as
+    /// [`MzLibError::ServiceUnavailable`] after about 8 minutes per request. A value cuts the whole
+    /// call off after that long with [`MzLibError::Timeout`].
     pub timeout: Option<Duration>,
-}
-
-impl Default for ListOptions {
-    fn default() -> Self {
-        Self {
-            page_size: None,
-            timeout: Some(Duration::from_secs(300)),
-        }
-    }
 }
 
 /// How a download is filtered and how long it may take.
@@ -741,25 +786,38 @@ pub fn list_files_with(accession: &str, options: &ListOptions) -> Result<Vec<Pri
 /// manifest, so a file that appears *only* here — the whole point of this function — is fetched
 /// directly from its [`PrideFtpFile::url`] with an ordinary HTTPS client.
 ///
+/// It adds no time limit of this crate's own, because mzLib already bounds every request (see
+/// [`ListOptions::timeout`]); [`list_ftp_files_with`] takes one.
+///
 /// # Errors
 ///
 /// [`MzLibError::Usage`] if the accession is malformed; [`MzLibError::ProjectNotFound`] if no
 /// project has that accession (or it lacks the publication date that locates its FTP directory), or
-/// the directory listed no files; [`MzLibError::ServiceUnavailable`] if EBI was unreachable.
+/// the walk found no files; [`MzLibError::ServiceUnavailable`] if EBI was unreachable.
+///
+/// An FTP listing that comes back empty used to reach this crate as no files, and so as
+/// `ProjectNotFound`. mzLib now retries it and then fails (mzLib#1412), so it arrives as
+/// [`MzLibError::Bridge`] with `error_type` `"HttpRequestException"`, as does a 403 from EBI's FTP
+/// host that outlasts the retries. Both are EBI's failures: treat them as an outage.
 pub fn list_ftp_files(accession: &str) -> Result<Vec<PrideFtpFile>> {
-    list_ftp_files_with(accession, Some(Duration::from_secs(300)))
+    list_ftp_files_with(accession, None)
 }
 
 /// Return the COMPLETE file list of a PRIDE project from its FTP directory tree, with the timeout
 /// stated explicitly.
 ///
-/// See [`list_ftp_files`] for when to prefer this to [`list_files`].
+/// See [`list_ftp_files`] for when to prefer this to [`list_files`]. `timeout` is the time to allow
+/// for the whole walk, which spans one request per directory. `None` adds no limit of this crate's
+/// own, because mzLib already bounds every request: it retries a transient failure three times,
+/// after 5, 20 and 60 s, and each attempt can take up to 100 s (mzLib#1412). An outage that hangs
+/// is therefore reported as [`MzLibError::ServiceUnavailable`] after about 8 minutes per request. A
+/// value cuts the whole walk off after that long with [`MzLibError::Timeout`].
 #[doc = include_str!("../docs/reference/pride.ftp-files.md")]
 ///
 /// # Errors this crate adds
 ///
 /// [`MzLibError::ProjectNotFound`] if no project has that accession (or it lacks the publication
-/// date that locates its FTP directory), or the directory listed no files.
+/// date that locates its FTP directory), or the walk found no files.
 ///
 /// # Examples
 ///
@@ -767,7 +825,8 @@ pub fn list_ftp_files(accession: &str) -> Result<Vec<PrideFtpFile>> {
 /// # mzlib_replay::activate();
 /// use std::time::Duration;
 ///
-/// let files = mzlib::pride::list_ftp_files_with("PXD000001", Some(Duration::from_secs(300)))?;
+/// // Give up after a minute, with MzLibError::Timeout, rather than wait out mzLib's retries.
+/// let files = mzlib::pride::list_ftp_files_with("PXD000001", Some(Duration::from_secs(60)))?;
 /// assert_eq!(files.len(), 14);
 /// assert_eq!(files[0].relative_path, "F063721.dat");
 /// assert!(files[0].url.starts_with("https://ftp.pride.ebi.ac.uk/"));
@@ -814,8 +873,9 @@ pub fn list_ftp_files_with(
 /// Download a project's files, optionally filtered, and return where they landed.
 ///
 /// Files are streamed to a temporary name and moved into place only once complete, so an
-/// interrupted download never leaves a truncated file behind. To fetch a selection you made
-/// yourself, use [`download_files`].
+/// interrupted download never leaves a truncated file under its real name; one that fails after
+/// mzLib's retries leaves a `.partial` pair the next call resumes from (see the
+/// [module guide](crate::pride)). To fetch a selection you made yourself, use [`download_files`].
 #[doc = include_str!("../docs/reference/pride.download.md")]
 ///
 /// # Errors this crate adds
@@ -1077,24 +1137,21 @@ impl PrideProjectSearchResult {
     }
 }
 
-/// How a search is fetched. By default the page size is mzLib's and the fetch may take 300 s.
-#[derive(Debug, Clone)]
+/// How a search is fetched. By default the page size is mzLib's, and so is the time limit.
+#[derive(Debug, Clone, Default)]
 pub struct SearchOptions {
     /// How many projects to request per underlying API call. Changes how many requests the fetch
     /// takes, never what comes back. `None` sends none, so mzLib's default applies; a value must
     /// be at least 1.
     pub page_size: Option<u32>,
     /// Time to allow for the whole fetch, every page included.
+    ///
+    /// `None` (the default) adds no limit of this crate's own, because mzLib already bounds every
+    /// request: it retries a transient failure three times, after 5, 20 and 60 s, and each attempt
+    /// can take up to 100 s (mzLib#1412). An outage that hangs is therefore reported as
+    /// [`MzLibError::ServiceUnavailable`] after about 8 minutes per request. A value cuts the whole
+    /// call off after that long with [`MzLibError::Timeout`].
     pub timeout: Option<Duration>,
-}
-
-impl Default for SearchOptions {
-    fn default() -> Self {
-        Self {
-            page_size: None,
-            timeout: Some(Duration::from_secs(300)),
-        }
-    }
 }
 
 /// A bare calendar date from the bridge, treating anything unreadable as absent.
@@ -1427,7 +1484,84 @@ mod tests {
     fn list_defaults_match_pymzlib() {
         let defaults = ListOptions::default();
         assert_eq!(defaults.page_size, None);
-        assert_eq!(defaults.timeout, Some(Duration::from_secs(300)));
+        assert_eq!(defaults.timeout, None);
+    }
+
+    #[test]
+    fn search_defaults_match_pymzlib() {
+        let defaults = SearchOptions::default();
+        assert_eq!(defaults.page_size, None);
+        assert_eq!(defaults.timeout, None);
+    }
+
+    // ---------------------------------------------------------- timeouts
+
+    /// A PRIDE call reduced to whether it succeeded, so several fit in one table.
+    type PrideCall = fn() -> Result<usize>;
+
+    /// The time limit a caller sets for itself in these tests.
+    const OWN_LIMIT: Option<Duration> = Some(Duration::from_secs(60));
+
+    #[test]
+    fn pride_metadata_calls_add_no_timeout_of_their_own() {
+        // mzLib bounds each PRIDE request itself (#1412: retries after 5, 20 and 60 s, up to 100 s
+        // per attempt). The 300 s limit this crate used to add turned a hanging outage into
+        // MzLibError::Timeout instead of ServiceUnavailable, as pyMzLib's did (pyMzLib #87).
+        let calls: [(&str, PrideCall); 5] = [
+            ("list_files", || list_files("PXD000001").map(|f| f.len())),
+            ("list_files_with", || {
+                list_files_with("PXD000001", &ListOptions::default()).map(|f| f.len())
+            }),
+            ("list_ftp_files", || {
+                list_ftp_files("PXD000001").map(|f| f.len())
+            }),
+            ("search", || search("phospho").map(|h| h.len())),
+            ("search_with", || {
+                search_with("phospho", &SearchOptions::default()).map(|h| h.len())
+            }),
+        ];
+        for (name, call) in calls {
+            let mut outcome = None;
+            let seen = bridge::intercept::timeouts(|| outcome = Some(call()));
+            assert_eq!(seen, [None], "{name} should leave the time limit to mzLib");
+            assert!(
+                matches!(outcome, Some(Err(MzLibError::ServiceUnavailable { .. }))),
+                "{name}: an outage should stay an outage, got {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_callers_own_pride_timeout_still_reaches_the_bridge() {
+        let calls: [(&str, PrideCall); 3] = [
+            ("list_files_with", || {
+                let options = ListOptions {
+                    timeout: OWN_LIMIT,
+                    ..Default::default()
+                };
+                list_files_with("PXD000001", &options).map(|f| f.len())
+            }),
+            ("list_ftp_files_with", || {
+                list_ftp_files_with("PXD000001", OWN_LIMIT).map(|f| f.len())
+            }),
+            ("search_with", || {
+                let options = SearchOptions {
+                    timeout: OWN_LIMIT,
+                    ..Default::default()
+                };
+                search_with("phospho", &options).map(|h| h.len())
+            }),
+        ];
+        for (name, call) in calls {
+            let seen = bridge::intercept::timeouts(|| {
+                let _ = call();
+            });
+            assert_eq!(
+                seen,
+                [OWN_LIMIT],
+                "{name} should pass the caller's timeout on"
+            );
+        }
     }
 
     // ---------------------------------------------------------- download, argument assembly

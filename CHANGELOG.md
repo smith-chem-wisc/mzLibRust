@@ -194,6 +194,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Changed
 
+- **PRIDE's metadata calls add no timeout of their own** (pyMzLib #87). `pride::list_files` and
+  `pride::search` defaulted, through `ListOptions::default()` and `SearchOptions::default()`, to a
+  300 s timeout, and `pride::list_ftp_files` passed one, which turned a PRIDE outage that hangs into
+  `MzLibError::Timeout`. mzLib already bounds each request (#1412: three retries after 5, 20 and
+  60 s, each attempt up to 100 s), so they now default to `None` and a hang is reported as
+  `MzLibError::ServiceUnavailable`, after about 8 minutes per request. A timeout you set is still
+  sent: `Some(Duration::from_secs(300))` keeps the old limit. `ListOptions` and `SearchOptions`
+  now derive `Default`. The `pride` guide gains *Retries and timeouts*: mzLib retries, how long an
+  outage takes to report, why to wait minutes rather than seconds before trying again, and the two
+  EBI failures that arrive as `MzLibError::Bridge`.
 - **`peptidoform::fragments` takes its defaults from mzLib, so a call that names no protease or
   dissociation type gives different peptides and ions** (pyMzLib #83). Every digestion option of
   `FragmentOptions` is now an `Option` (`protease`, `dissociation`, `terminus`: `Option<String>`;
@@ -280,6 +290,23 @@ A wire verb's first appearance here is the version its spec in the bridge record
   modules.
 - The CI job for the minimum supported Rust version resolves dependencies that support Rust 1.74
   rather than failing on the newest `thiserror`, which needs 1.77.
+
+### Documentation
+
+- **Every result mzLib 1.0.594 and 1.0.595 changed is now documented** (as pyMzLib #87 does), in
+  `docs/upgrading.md`'s pyMzLib 0.5.0 bridge section and on the reference pages: ProForma input
+  refusals (#1462), SUMO and TMTpro names (#1432, #1419), the Lactylation mass (#1417), entrapment
+  flags and `entrapment_fraction` (#1371), FlashLFQ normalization and gapped designs (#1422,
+  #1424), `|P` proteases at sequence ends (#1320), `stats::fit` below 3 features (#1398), and
+  PRIDE's retries, resumable `.partial` files and missing download checks (#1412, #1427, #1449).
+  The specs are re-vendored at bridge `f85fef7` and the reference pages re-rendered. The `pride`
+  guide says a failed transfer's `.partial` pair resumes and to check large files yourself, and
+  `list_ftp_files` says an empty FTP listing now arrives as `MzLibError::Bridge`, not
+  `ProjectNotFound`.
+- **`VariancePrior::scale` says what it means below 3 features.** mzLib fits no prior there
+  (#1398), so `VariancePrior::df` is 0 and each feature keeps its own variance, in
+  `FitRow::prior_variance`. The pinned pyMzLib 0.5.0 bridge still reports the first feature's own
+  variance as `scale`; bridges from pyMzLib 0.5.1 report `None`, as the spec now says.
 
 ### Tested
 
