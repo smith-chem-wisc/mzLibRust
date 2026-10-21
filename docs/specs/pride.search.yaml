@@ -33,16 +33,17 @@ params:
     required: false
     unit: projects
     range: ">= 1"
-    default: 100
+    default: null
     doc: >-
       Hits requested per underlying API call. Changes how many requests the fetch takes, never
-      what comes back.
+      what comes back. Absent, the bridge sends none and SearchProjectsAsync's default applies
+      (100 at d10017ce).
 
 result:
   envelope_fields:
     - {wire: keyword, type: string, unit: null, nullable: false, null_means: null, doc: "The keyword, echoed."}
     - {wire: result_count, type: int, unit: projects, nullable: false, null_means: null, doc: "Entries in results. 0 is a real answer (no hits), not an error."}
-    - {wire: results, type: "object[]", unit: null, nullable: false, null_means: null, doc: "One entry per matching project, deduplicated by accession, in PRIDE's ranking order; fields under result.columns."}
+    - {wire: results, type: "object[]", unit: null, nullable: false, null_means: null, doc: "One entry per matching project, deduplicated by accession, in PRIDE's ranking order, which is not promised stable across calls; fields under result.columns."}
   # Fields of each entry in `results` (a list of records, not a column dict). PRIDE omits nothing as
   # null: an absent string is "", an absent list is [], an absent count is 0. The only nulls are dates.
   columns:
@@ -83,7 +84,7 @@ result:
     - {wire: organic_count, type: int, unit: downloads, nullable: false, null_means: null, doc: "Downloads attributed to ordinary human traffic. 0 means not reported."}
 
 errors:
-  - {kind: usage, when: "keyword missing or blank; keyword longer than 1000 characters; page-size not an integer or <= 0 (both checked by the bridge before mzLib)"}
+  - {kind: usage, when: "keyword missing or blank; keyword longer than 1000 characters; page-size not an integer, given without a value, or <= 0 (all checked by the bridge before mzLib)"}
   - {kind: service_unavailable, when: "the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx, or a body cut off in transit"}
   - {kind: correctness, when: "any other HTTP status; a paging contract violation (MzLibException: an identical page while total_records says more remain); the page limit (mzLib MaxPages) exceeded"}
 
@@ -94,7 +95,7 @@ caveats:
   - "PRIDE pages a live index with no stable cursor: a project published mid-fetch is deduplicated, but one removed mid-fetch can fall between two pages and be missed. A result set that fits on one page cannot be affected."
 
 bindings:
-  py: {name: pymzlib.pride.search}
+  py: {name: pymzlib.pride.search, note: "Returns the hits list itself: no keyword or result_count."}
   rust: {name: "mzlib::pride::search_with", options: SearchOptions, note: "Returns Vec<PrideProjectSearchResult>: no keyword or result_count."}
   r: {name: pride_search, note: "Returns the hits data.frame itself: no keyword or result_count element."}
 
@@ -105,6 +106,4 @@ examples:
     r: "hits <- pride_search('plasmodium falciparum schizont')"
 
 open_questions:
-  - "Shape difference: mzlib::pride::search / search_with return Vec<PrideProjectSearchResult> and R pride_search() returns the hits data.frame, so neither carries the envelope's keyword or result_count (the caller has the keyword; the count is len() / nrow()). pyMzLib returns the hits list likewise. Declare it as a deviation or drop the two fields from the wire?"
-  - "The bindings also refuse a keyword beginning with '-' (it would be parsed as an option); the bridge cannot, since a value starting with '--' reaches it as a flag and the keyword then reads as missing."
-  - "The ranking order of results is PRIDE's and is not promised stable across calls."
+  - "The bindings refuse a keyword beginning with '-', but the bridge misreads only one beginning with '--': its parser takes the next argument as the value unless that starts with '--'. So '-x' reaches PRIDE as given, while '--x' turns --keyword into a flag and the call fails as 'Missing required option --keyword.' Whether the bindings should narrow their check to '--' is undecided."

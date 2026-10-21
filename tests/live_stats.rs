@@ -245,6 +245,56 @@ fn a_trend_fit_runs_and_reports_its_basis() {
 }
 
 #[test]
+fn a_small_trend_fit_sizes_its_spline_as_limma_does() {
+    // Without spline_basis nothing is sent, and mzLib follows limma's fitFDist rule (mzLib #1398):
+    // 1 + (n >= 3) + (n >= 6) + (n >= 30) basis functions for n fitted features. Ten features
+    // therefore get 3, where the bridge used to ask for 4 on every trend fit.
+    let Some(()) = require_verb("stats fit") else {
+        return;
+    };
+    let text = std::fs::read_to_string(stats_file("limma_reference_responses.tsv")).unwrap();
+    let mut lines = text.lines().filter(|l| !l.is_empty());
+    let header = lines.next().unwrap();
+    let complete: Vec<&str> = lines
+        .filter(|line| {
+            !line
+                .split('\t')
+                .skip(1)
+                .any(|cell| cell == "NaN" || cell.is_empty())
+        })
+        .take(10)
+        .collect();
+    assert_eq!(
+        complete.len(),
+        10,
+        "the reference table has ten complete features"
+    );
+
+    let dir = std::env::temp_dir().join(format!("mzlib-live-spline-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let responses = dir.join("ten_features.tsv");
+    std::fs::write(&responses, format!("{header}\n{}\n", complete.join("\n"))).unwrap();
+
+    let fit = fit_with(
+        &responses,
+        stats_file("limma_reference_design.tsv"),
+        &["age_decades"],
+        &FitOptions {
+            trend: true,
+            ..Default::default()
+        },
+    )
+    .expect("a small trended fit runs");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(fit.feature_count, 10);
+    assert_eq!(
+        fit.prior.spline_basis_count, 3,
+        "limma's rule gives 3 basis functions for 6 to 29 features"
+    );
+}
+
+#[test]
 fn bad_input_is_a_usage_error_from_the_bridge() {
     let Some(()) = require_verb("stats fit") else {
         return;

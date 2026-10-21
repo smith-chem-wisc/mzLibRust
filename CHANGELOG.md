@@ -15,6 +15,31 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
+  as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
+  `docs/upgrading.md` lists every answer that differs from the same call.
+- **DIA-NN 2.x `report.parquet` reads** (mzLib #1384, file type `DiaNnReportParquet`), through the
+  same `read_results`, `read_records` and `flashlfq` calls as the 1.8/1.9 `report.tsv`, with
+  retention time in minutes. **`readers::formats()` lists 39 types, up from 38, and 5 offer the
+  `quantifiable` view, up from 4**; 19 still offer none. It is recognised by its columns
+  (`Precursor.Id`, `Stripped.Sequence`, `Run`), not its name, and any other `.parquet` is
+  `MzLibError::Usage`.
+- **Specs re-vendored at bridge `98ee566`** (pyMzLib #82 to #85): each fragments digestion option,
+  the trend's spline size and both PRIDE page sizes have no bridge default and name the mzLib
+  symbol that owns it; the ProForma caveat is retired; `pride ftp-files` has a recorded example,
+  so the replay bridge reads it from the spec; and the bridge's re-check of its 93 open questions
+  (37 answered and folded into the docs, 25 reworded) is carried in. The reference pages are
+  re-rendered. The bridge's `modifications resolve`
+  spec is left out (`not_vendored` in `docs/specs/SOURCE`): no binding has built that verb, and a
+  vendored spec would list it on the front page. `scripts/sync-specs.ps1 -OnlyVendored` does
+  that, as pyMzLib's `sync_specs.py --only-vendored` does.
+- The seven pyMzLib recordings that changed since 0.4.0 are re-vendored byte for byte: both
+  albumin digests (`peptidoform_P02768.json`, `peptidoform_P02768_small.json`, now trypsin and
+  HCD), the three `peptidoform convert` recordings, `readers_formats.json` and
+  `readers_results_psmtsv.json`. The replay bridge learns pyMzLib's `RECORDED_WITH`: a call that
+  sends nothing cannot be told from one that sent `--max-mods 1` by the echo alone, so the trimmed
+  albumin recording answers only a call that sends it.
+
 - **`peptidoform::convert_with`, `peptidoform::convert`: rewrite full sequences in another notation
   with mzLib** (`peptidoform convert`, pyMzLib #75; spec `peptidoform.convert.yaml`). The main use
   is MetaMorpheus full sequences to Unimod accessions: `[UniProt:N-acetylserine on S]SEQK` becomes
@@ -168,6 +193,49 @@ A wire verb's first appearance here is the version its spec in the bridge record
 - This changelog.
 
 ### Changed
+
+- **`peptidoform::fragments` takes its defaults from mzLib, so a call that names no protease or
+  dissociation type gives different peptides and ions** (pyMzLib #83). Every digestion option of
+  `FragmentOptions` is now an `Option` (`protease`, `dissociation`, `terminus`: `Option<String>`;
+  `missed_cleavages`, `min_length`, `max_modifications`, `max_isoforms`: `Option<u32>`), `None` by
+  default, and only the ones set are sent; an option left `None` takes mzLib's `DigestionParams`
+  default. `fragments("P02768")` now sends nothing but the accession. Two of the old defaults
+  were this crate's own and change:
+  - **protease:** mzLib's default is `"trypsin"`, which also cuts before proline. The old default
+    was `"trypsin|P"`, which does not. Albumin's default digest goes from 303 to 310 peptidoforms,
+    and from 195 to 202 distinct peptides.
+  - **dissociation:** mzLib names no default, so the bridge uses HCD (b and y ions) until it does
+    (smith-chem-wisc/mzLib#1488). The old default was ETD (c and z• ions).
+
+  The other defaults (missed cleavages, length window, modification and isoform caps, terminus)
+  have the same values as before, now set by mzLib. `max_length: None` is no longer sent as `0`;
+  `Some(0)` still asks for unbounded. **To keep the old results, pass
+  `FragmentOptions { protease: Some("trypsin|P".into()), dissociation: Some("ETD".into()),
+  ..Default::default() }`.** The docs' histone counts are re-measured at `d10017ce`; UniProt's
+  annotations had moved them even under the old protease. Code that set a field must wrap it in
+  `Some`: `FragmentOptions { max_modifications: Some(1), .. }`.
+- **`pride::ListOptions::page_size` and `pride::SearchOptions::page_size` are `Option<u32>`, `None`
+  by default, and leave the page size to mzLib** (pyMzLib #85). `None` sends no `--page-size`, so
+  mzLib's `GetProjectFilesAsync` and `SearchProjectsAsync` defaults apply (100 today, as before).
+  The results never depended on it. `Some(0)` and a size over `i32::MAX` are still refused before
+  anything is spawned.
+- **`stats::fit_with` with `trend: true` on fewer than 30 features sizes its trend as limma does**
+  (mzLib 1.0.594, #1398; pyMzLib #82). This crate already sent `--spline-basis` only when
+  `spline_basis` was set, but the bridge then asked mzLib for 4 basis functions every time. It now
+  asks for none, and mzLib follows limma's `fitFDist` rule, so a small trend fit's prior and
+  moderated statistics change to limma's. `VariancePrior::spline_basis_count` says what was used.
+  A table of 30 or more features is unchanged, and so is any call that sets `spline_basis`.
+  `FitOptions::spline_basis` no longer says the bridge's default is 4.
+- **`peptidoform::convert_with` with `target: "ProForma"` names UniProt modifications by UNIMOD
+  accession** (mzLib 1.0.594, #1403). `[UniProt:N-acetylserine on S]SEQK` becomes
+  `[UNIMOD:1]-SEQK`, where it was written back by name; the caveat that said so is retired, so a
+  result carries five caveats, not six. The guide's "ProForma does not resolve UniProt
+  modifications yet" section now says what still differs: a modification no list mzLib loads knows
+  is written back by name in ProForma. The `pro_forma` column `read_records` computes for a
+  `.psmtsv` written without one gains the same accessions.
+- PXD000001's file counts in the `pride` docs are dated: on 2026-10-21 PRIDE's REST manifest listed
+  9 of the 14 files in the FTP tree, omitting five including the two largest; the recording the
+  examples replay (2026-10-03) lists 8. The docs said 8 of 13.
 
 - **`QuantifyOptions::use_pep_q_value` says what it does**: it filters nothing, and changes the
   q-value FlashLFQ carries, which match-between-runs reads. `bayesian_protein_quant`'s results are

@@ -32,14 +32,24 @@
     the bridge is shared by several sessions at once, and a spec someone is still writing is not a
     fact yet.
 
+.PARAMETER OnlyVendored
+    Refresh only the specs already in docs/specs/ and add none. SOURCE then names the bridge specs
+    left out (not_vendored:), so the gap stays visible until a change brings their pages in. Use it
+    when the bridge has specced a verb no binding has built yet: a vendored spec puts the verb on
+    the generated pages. pyMzLib's sync_specs.py --only-vendored.
+
 .EXAMPLE
     .\scripts\sync-specs.ps1 -From E:\CodeReview\bridge\design\verbs
+
+.EXAMPLE
+    .\scripts\sync-specs.ps1 -From E:\CodeReview\bridge\design\verbs -OnlyVendored
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$From,
-    [switch]$WorkingTree
+    [switch]$WorkingTree,
+    [switch]$OnlyVendored
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,6 +81,16 @@ if ($useHead) {
 }
 if ($specs.Count -eq 0) {
     Write-Error "No *.yaml specs in $source; is that the bridge's design/verbs?"
+}
+
+$leftOut = @()
+if ($OnlyVendored) {
+    $vendored = @{}
+    if (Test-Path -LiteralPath $dest) {
+        foreach ($existing in @(Get-ChildItem -LiteralPath $dest -Filter '*.yaml' -File)) { $vendored[$existing.Name] = $true }
+    }
+    $leftOut = @($specs | Where-Object { -not $vendored.ContainsKey($_.Name) } | ForEach-Object { $_.Name } | Sort-Object)
+    $specs = @($specs | Where-Object { $vendored.ContainsKey($_.Name) })
 }
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -124,6 +144,7 @@ $lines = @(
     "synced: $(Get-Date -Format 'yyyy-MM-dd')"
     "specs: $($specs.Count)"
 )
+if ($leftOut.Count -gt 0) { $lines += "not_vendored: $($leftOut -join ', ')" }
 [System.IO.File]::WriteAllText((Join-Path $dest 'SOURCE'), (($lines -join "`n") + "`n"), $utf8)
 
 Write-Host "$($specs.Count) specs from $($commit.Substring(0, [Math]::Min(12, $commit.Length)))$(if ($dirty) { ' (with uncommitted changes)' })"

@@ -42,8 +42,10 @@ ions, so they can inflate matched-ion counts and scores.
 
 **Handling here:** two tests pinned the defect so the fix would show up rather than look like a
 regression. When #1114 landed they were replaced by `etd_produces_c_and_zdot_but_no_y_ions`, which
-asserts the post-fix contract — c and z•, never y — so a fixture or bridge older than `f6b0f0d1`
-fails instead of quietly bringing the y ions back.
+asserted the post-fix contract — c and z•, never y — so a fixture or bridge older than `f6b0f0d1`
+failed instead of quietly bringing the y ions back. Since the albumin recordings were re-made at
+mzLib's defaults (HCD, pyMzLib #83), the live canary `etd_produces_c_and_z_ions_not_b_and_y` asks
+for ETD by name and holds the same contract.
 
 ---
 

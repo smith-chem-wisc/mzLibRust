@@ -20,7 +20,8 @@
 //! # mzlib_replay::activate();
 //! let files = mzlib::pride::list_files("PXD000001")?;
 //! assert_eq!(files.len(), 8);
-//! // 0.51 GB is PRIDE's REST manifest, which omits five files; see list_files.
+//! // 0.51 GB is PRIDE's REST manifest, which omits files, the two largest among them; see
+//! // list_files.
 //! assert_eq!(mzlib::pride::total_size_bytes(&files), 514_278_049);
 //!
 //! // Filter however you like — the full expressiveness of Rust — then fetch exactly that.
@@ -183,10 +184,10 @@ impl PrideFile {
 
 /// One file found by walking a PRIDE project's FTP directory tree — the COMPLETE listing.
 ///
-/// PRIDE's REST manifest ([`list_files`]) is knowingly incomplete: for PXD000001 it returns 8
-/// files while the FTP tree holds 13, omitting the two largest. When completeness or a true project
-/// size matters, [`list_ftp_files`] walks the directory (subdirectories included) and returns
-/// everything (mzLib #1121). The trade-off is the size: [`PrideFtpFile::approximate_size_bytes`]
+/// PRIDE's REST manifest ([`list_files`]) is knowingly incomplete: for PXD000001 on 2026-10-21 it
+/// listed 9 of the 14 files in the FTP tree, omitting five including the two largest. When
+/// completeness or a true project size matters, [`list_ftp_files`] walks the directory
+/// (subdirectories included) and returns everything (mzLib #1121). The trade-off is the size: [`PrideFtpFile::approximate_size_bytes`]
 /// is PRIDE's rounded index value, not the exact transfer size.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PrideFtpFile {
@@ -223,12 +224,13 @@ impl PrideFtpFile {
     }
 }
 
-/// How a manifest is fetched. Defaults match pyMzLib's: 100 files per API call, 300 s.
+/// How a manifest is fetched. By default the page size is mzLib's and the fetch may take 300 s.
 #[derive(Debug, Clone)]
 pub struct ListOptions {
     /// How many files to request per underlying API call. Only affects how the manifest is
-    /// fetched, never what you get back. Must be at least 1.
-    pub page_size: u32,
+    /// fetched, never what you get back. `None` sends none, so mzLib's default applies; a value
+    /// must be at least 1.
+    pub page_size: Option<u32>,
     /// Seconds to allow for the whole fetch.
     pub timeout: Option<Duration>,
 }
@@ -236,7 +238,7 @@ pub struct ListOptions {
 impl Default for ListOptions {
     fn default() -> Self {
         Self {
-            page_size: 100,
+            page_size: None,
             timeout: Some(Duration::from_secs(300)),
         }
     }
@@ -401,9 +403,11 @@ fn parse_timestamp(value: &str) -> Option<DateTime<FixedOffset>> {
 
 // ------------------------------------------------------------------ argument assembly
 
-/// The argv for `pride files`.
-fn build_list_args(accession: &str, page_size: u32) -> Result<Vec<String>> {
-    let canonical = normalise_accession(accession)?;
+/// The wire's `--page-size` pair, or nothing for `None` so mzLib's own default applies.
+fn page_size_args(page_size: Option<u32>) -> Result<Vec<String>> {
+    let Some(page_size) = page_size else {
+        return Ok(Vec::new());
+    };
     if page_size == 0 {
         return Err(MzLibError::Usage(format!(
             "page_size must be positive; got {page_size}."
@@ -414,15 +418,22 @@ fn build_list_args(accession: &str, page_size: u32) -> Result<Vec<String>> {
             "page_size is larger than the API allows; got {page_size}."
         )));
     }
+    Ok(vec!["--page-size".to_owned(), page_size.to_string()])
+}
 
-    Ok(vec![
+/// The argv for `pride files`.
+fn build_list_args(accession: &str, page_size: Option<u32>) -> Result<Vec<String>> {
+    let canonical = normalise_accession(accession)?;
+    let paging = page_size_args(page_size)?;
+
+    let mut args = vec![
         "pride".to_owned(),
         "files".to_owned(),
         "--accession".to_owned(),
         canonical,
-        "--page-size".to_owned(),
-        page_size.to_string(),
-    ])
+    ];
+    args.extend(paging);
+    Ok(args)
 }
 
 /// The argv for `pride download`.
@@ -651,14 +662,15 @@ fn check_filter_matched(
 
 // ------------------------------------------------------------------ the public surface
 
-/// The file manifest of a PRIDE Archive project, with pyMzLib's default paging.
+/// The file manifest of a PRIDE Archive project, with mzLib's default paging.
 ///
 /// Paging is handled for you: however many pages the project spans, you get one list.
 ///
 /// **This is what PRIDE's REST API publishes, which is not always everything in the project.**
-/// For PXD000001 the API returns **8** files while the FTP tree holds **13** — and the five it
-/// omits include the two largest, `…60min_01-20141210.mzML` (450 MB) and the matching `.mzXML`
-/// (472 MB), which are exactly the modern open-format conversions most people want. The omission is
+/// On 2026-10-21, for PXD000001, the API listed **9** of the **14** files in the FTP tree, and the
+/// five it omits include the two largest: `…60min_01-20141210.mzML` (450 MB) and the matching
+/// `.mzXML` (472 MB), which are exactly the modern open-format conversions most people want. The
+/// recording this crate's examples replay is from 2026-10-03, when the API listed 8. The omission is
 /// PRIDE's, not mzLib's: mzLib faithfully reports the v3 API, and the API simply does not list
 /// them.
 ///
@@ -685,8 +697,9 @@ pub fn list_files(accession: &str) -> Result<Vec<PrideFile>> {
 /// stated explicitly.
 ///
 /// The manifest is knowingly incomplete for some projects; see [`list_files`] and
-/// [`list_ftp_files`]. A malformed accession, or a `page_size` of zero or larger than the API
-/// allows, is refused before anything is spawned.
+/// [`list_ftp_files`]. [`ListOptions::page_size`] is sent only when set; otherwise mzLib's own
+/// default applies. A malformed accession, or a `page_size` of zero or larger than the API allows,
+/// is refused before anything is spawned.
 #[doc = include_str!("../docs/reference/pride.files.md")]
 ///
 /// # Errors this crate adds
@@ -718,7 +731,8 @@ pub fn list_files_with(accession: &str, options: &ListOptions) -> Result<Vec<Pri
 /// Return the COMPLETE file list of a PRIDE project, read from its FTP directory tree.
 ///
 /// The authoritative counterpart to [`list_files`]: where that returns PRIDE's REST manifest —
-/// incomplete for some projects, omitting for PXD000001 the two largest of 13 files — this walks
+/// incomplete for some projects, omitting for PXD000001 five of the project's 14 files on
+/// 2026-10-21, including the two largest — this walks
 /// the FTP directory (subdirectories included) and returns everything the project holds (mzLib
 /// #1121). Sizes are PRIDE's rounded index sizes, so [`approximate_total_size_bytes`] is an
 /// estimate over the *whole* project, unlike [`total_size_bytes`].
@@ -880,9 +894,9 @@ pub fn download_files(
 /// Use this to answer "how much data is in this project", and treat it as an upper bound on
 /// transfer time. If you need the real figure for a compressed file, only the download knows.
 ///
-/// **It is also a sum over an incomplete manifest.** For PXD000001 this returns 0.51 GB; the
-/// project on disk is **1.44 GB**, because PRIDE's API omits five files including the two largest
-/// (see [`list_files`]). The two errors happen to run in opposite directions and do **not** cancel:
+/// **It is also a sum over an incomplete manifest.** For PXD000001's recorded manifest (8 files,
+/// 2026-10-03) this returns 0.51 GB; the project on disk is **1.44 GB**, because PRIDE's API omits
+/// files including the two largest (see [`list_files`]). The two errors happen to run in opposite directions and do **not** cancel:
 /// compressed sizes are over-reported, whole files are missing entirely.
 #[must_use]
 pub fn total_size_bytes(files: &[PrideFile]) -> u64 {
@@ -1063,12 +1077,13 @@ impl PrideProjectSearchResult {
     }
 }
 
-/// How a search is fetched. Defaults match pyMzLib's: 100 hits per API call, 300 s.
+/// How a search is fetched. By default the page size is mzLib's and the fetch may take 300 s.
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     /// How many projects to request per underlying API call. Changes how many requests the fetch
-    /// takes, never what comes back. Must be at least 1.
-    pub page_size: u32,
+    /// takes, never what comes back. `None` sends none, so mzLib's default applies; a value must
+    /// be at least 1.
+    pub page_size: Option<u32>,
     /// Time to allow for the whole fetch, every page included.
     pub timeout: Option<Duration>,
 }
@@ -1076,7 +1091,7 @@ pub struct SearchOptions {
 impl Default for SearchOptions {
     fn default() -> Self {
         Self {
-            page_size: 100,
+            page_size: None,
             timeout: Some(Duration::from_secs(300)),
         }
     }
@@ -1100,7 +1115,7 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
 }
 
 /// The argv for `pride search`, validated before anything is spawned.
-fn build_search_args(keyword: &str, page_size: u32) -> Result<Vec<String>> {
+fn build_search_args(keyword: &str, page_size: Option<u32>) -> Result<Vec<String>> {
     let keyword = keyword.trim();
     if keyword.is_empty() {
         return Err(MzLibError::Usage(
@@ -1115,24 +1130,15 @@ fn build_search_args(keyword: &str, page_size: u32) -> Result<Vec<String>> {
              longer keyword with HTTP 500, which cannot be told apart from the service being down."
         )));
     }
-    if page_size == 0 {
-        return Err(MzLibError::Usage(format!(
-            "page_size must be positive; got {page_size}."
-        )));
-    }
-    if page_size > i32::MAX as u32 {
-        return Err(MzLibError::Usage(format!(
-            "page_size is larger than the API allows; got {page_size}."
-        )));
-    }
-    Ok(vec![
+    let paging = page_size_args(page_size)?;
+    let mut args = vec![
         "pride".to_owned(),
         "search".to_owned(),
         "--keyword".to_owned(),
         keyword,
-        "--page-size".to_owned(),
-        page_size.to_string(),
-    ])
+    ];
+    args.extend(paging);
+    Ok(args)
 }
 
 fn parse_search(data: serde_json::Value) -> Result<Vec<PrideProjectSearchResult>> {
@@ -1147,7 +1153,7 @@ fn parse_search(data: serde_json::Value) -> Result<Vec<PrideProjectSearchResult>
     Ok(payload.results)
 }
 
-/// Find PRIDE projects by keyword, with PRIDE's own defaults.
+/// Find PRIDE projects by keyword, with mzLib's default paging.
 ///
 /// **The discovery entry point**: every other function here takes an accession you already have,
 /// and this is the one that produces them. See [`search_with`] for the reference.
@@ -1176,9 +1182,10 @@ pub fn search(keyword: &str) -> Result<Vec<PrideProjectSearchResult>> {
 /// Paging is handled for you: however many pages the result set spans, you get one list, in
 /// PRIDE's ranking order. **An empty list is a real answer** — PRIDE reports no hits as an empty
 /// result rather than an error, and unlike [`list_files`] there is no accession here that could
-/// have been a typo, so it is not [`MzLibError::ProjectNotFound`]. A blank keyword, one longer
-/// than [`MAX_KEYWORD_LENGTH`] characters or beginning with `-`, and a `page_size` of zero or
-/// larger than the API allows are refused before anything is spawned.
+/// have been a typo, so it is not [`MzLibError::ProjectNotFound`]. [`SearchOptions::page_size`]
+/// is sent only when set; otherwise mzLib's own default applies. A blank keyword, one longer than
+/// [`MAX_KEYWORD_LENGTH`] characters or beginning with `-`, and a `page_size` of zero or larger
+/// than the API allows are refused before anything is spawned.
 #[doc = include_str!("../docs/reference/pride.search.md")]
 ///
 /// # Examples
@@ -1383,19 +1390,19 @@ mod tests {
 
     #[test]
     fn nonpositive_page_size_rejected() {
-        let error = build_list_args("PXD000001", 0).unwrap_err();
+        let error = build_list_args("PXD000001", Some(0)).unwrap_err();
         assert!(error.to_string().contains("must be positive"));
     }
 
     #[test]
     fn a_page_size_larger_than_the_api_allows_is_refused() {
-        let error = build_list_args("PXD000001", 2_147_483_648).unwrap_err();
+        let error = build_list_args("PXD000001", Some(2_147_483_648)).unwrap_err();
         assert!(error.to_string().contains("larger than the API allows"));
     }
 
     #[test]
     fn list_args_carry_the_canonical_accession_and_page_size() {
-        let args = build_list_args("  pxd000001 ", 100).unwrap();
+        let args = build_list_args("  pxd000001 ", Some(100)).unwrap();
         assert_eq!(
             args,
             vec![
@@ -1410,9 +1417,16 @@ mod tests {
     }
 
     #[test]
+    fn list_files_without_a_page_size_sends_none_so_mzlibs_default_applies() {
+        // The crate used to send 100 of its own. mzLib's GetProjectFilesAsync has its default.
+        let args = build_list_args("PXD000001", ListOptions::default().page_size).unwrap();
+        assert_eq!(args, ["pride", "files", "--accession", "PXD000001"]);
+    }
+
+    #[test]
     fn list_defaults_match_pymzlib() {
         let defaults = ListOptions::default();
-        assert_eq!(defaults.page_size, 100);
+        assert_eq!(defaults.page_size, None);
         assert_eq!(defaults.timeout, Some(Duration::from_secs(300)));
     }
 
@@ -1708,7 +1722,7 @@ mod tests {
     #[test]
     fn search_args_are_assembled_in_the_documented_order() {
         assert_eq!(
-            build_search_args("  phosphoproteome ", 50).unwrap(),
+            build_search_args("  phosphoproteome ", Some(50)).unwrap(),
             [
                 "pride",
                 "search",
@@ -1721,24 +1735,31 @@ mod tests {
     }
 
     #[test]
+    fn search_without_a_page_size_sends_none_so_mzlibs_default_applies() {
+        // The crate used to send 100 of its own. mzLib's SearchProjectsAsync has its default.
+        let args = build_search_args("phospho", SearchOptions::default().page_size).unwrap();
+        assert_eq!(args, ["pride", "search", "--keyword", "phospho"]);
+    }
+
+    #[test]
     fn a_bad_search_is_refused_before_anything_is_spawned() {
         for (keyword, page_size) in [
-            ("", 100),
-            ("   ", 100),
-            ("-x", 100),
-            ("--no-overwrite", 100),
-            ("ok", 0),
-            ("ok", u32::MAX),
+            ("", None),
+            ("   ", Some(100)),
+            ("-x", None),
+            ("--no-overwrite", Some(100)),
+            ("ok", Some(0)),
+            ("ok", Some(u32::MAX)),
         ] {
             let error = build_search_args(keyword, page_size).unwrap_err();
             assert!(
                 matches!(error, MzLibError::Usage(_)),
-                "{keyword:?} {page_size}"
+                "{keyword:?} {page_size:?}"
             );
         }
         let long = "a".repeat(MAX_KEYWORD_LENGTH + 1);
-        let error = build_search_args(&long, 100).unwrap_err();
+        let error = build_search_args(&long, None).unwrap_err();
         assert!(error.to_string().contains("HTTP 500"), "{error}");
-        assert!(build_search_args(&"a".repeat(MAX_KEYWORD_LENGTH), 100).is_ok());
+        assert!(build_search_args(&"a".repeat(MAX_KEYWORD_LENGTH), None).is_ok());
     }
 }

@@ -18,7 +18,8 @@
 //! * a `proteins read` recording made with an accession filter answers only a filtered call, and
 //!   the reverse; a recording for one isobaric `kit` answers only a call that names a kit;
 //! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs, and
-//!   for `peptidoform convert` the sequences sent must be the recording's `input` column, in order.
+//!   for `peptidoform convert` the sequences sent must be the recording's `input` column, in order;
+//! * a recording listed in `RECORDED_WITH` fits only a call that sends the options it was made with.
 //!
 //! No match, or more than one, is answered as a usage error naming the candidates, so the doctest
 //! fails and says why.
@@ -107,6 +108,27 @@ const ECHOED_AS: &[(&str, &str)] = &[
 /// Verbs whose input travels on stdin and is echoed in the recording, so a recording answers only a
 /// call that sent the same input. stdin is read only for these.
 const STDIN_ECHO: &[&str] = &["quant flashlfq", "peptidoform convert"];
+
+/// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
+/// that leaves the option out takes a default (mzLib's) that the replay does not know, and the echo
+/// of a value that was given looks the same as the echo of a default. So a call without `--max-mods`
+/// cannot be answered from the max-mods 1 albumin digest. pyMzLib's `RECORDED_WITH`.
+const RECORDED_WITH: &[(&str, &[(&str, &str)])] =
+    &[("peptidoform_P02768_small.json", &[("max-mods", "1")])];
+
+/// Why this recording cannot answer a call that does not send what it was recorded with, or `None`.
+fn recorded_with_mismatch(
+    recording: &Recording,
+    options: &[(String, Option<String>)],
+) -> Option<String> {
+    let (_, required) = RECORDED_WITH
+        .iter()
+        .find(|(fixture, _)| *fixture == recording.fixture)?;
+    required.iter().find_map(|(name, value)| {
+        (option(options, name).and_then(|v| v.as_deref()) != Some(*value))
+            .then(|| format!("recorded with --{name} {value}, which the call does not send"))
+    })
+}
 
 fn option<'a>(options: &'a [(String, Option<String>)], name: &str) -> Option<&'a Option<String>> {
     options.iter().find(|(n, _)| n == name).map(|(_, v)| v)
@@ -317,13 +339,15 @@ fn answer(argv: &[String], stdin: &str) -> (bool, String) {
     let mut fits = Vec::new();
     let mut reasons = Vec::new();
     for recording in *candidates {
-        let why = mismatch(recording, &options).or_else(|| {
-            if STDIN_ECHO.contains(&verb.as_str()) {
-                stdin_mismatch(recording, stdin, &verb)
-            } else {
-                None
-            }
-        });
+        let why = mismatch(recording, &options)
+            .or_else(|| recorded_with_mismatch(recording, &options))
+            .or_else(|| {
+                if STDIN_ECHO.contains(&verb.as_str()) {
+                    stdin_mismatch(recording, stdin, &verb)
+                } else {
+                    None
+                }
+            });
         match why {
             Some(why) => reasons.push(format!("{}: {why}", recording.fixture)),
             None => fits.push(recording),
