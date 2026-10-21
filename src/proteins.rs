@@ -1308,8 +1308,8 @@ pub struct GoAnnotations {
     /// Rows in the protein-group table, decoys included.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub table_row_count: u64,
-    /// Of those, decoy groups (a label containing `D`, so an entrapment decoy `ED` too), which are
-    /// skipped: decoys carry no GO.
+    /// Of those, decoy groups, which are skipped: decoys carry no GO. A group is a decoy when any
+    /// `|`-joined parent label is `D` or the entrapment decoy `ED` (mzLib #1371).
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub decoy_group_count: u64,
     /// Groups annotated: every non-decoy group, contaminants included, each once even when

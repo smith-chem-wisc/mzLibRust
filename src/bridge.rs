@@ -443,7 +443,48 @@ pub fn invoke(
     stdin: Option<&str>,
     timeout: Option<Duration>,
 ) -> Result<serde_json::Value> {
+    #[cfg(test)]
+    if let Some(answer) = intercept::answer(timeout) {
+        return answer;
+    }
     invoke_with(&ProcessRunner, args, stdin, timeout)
+}
+
+/// A verb's own tests' view of the [`invoke`] call it makes, without spawning a bridge.
+///
+/// pyMzLib's tests get this by monkeypatching `_bridge.invoke`. Here a verb module's test wraps
+/// its call in [`intercept::timeouts`]: every `invoke` on that thread then records the timeout it
+/// was given and answers [`MzLibError::ServiceUnavailable`] instead of spawning anything.
+#[cfg(test)]
+pub(crate) mod intercept {
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    use super::{MzLibError, Result, SERVICE_UNAVAILABLE_TYPE};
+
+    thread_local! {
+        static SEEN: RefCell<Option<Vec<Option<Duration>>>> = const { RefCell::new(None) };
+    }
+
+    /// Record `timeout` and answer an outage, if this thread is inside [`timeouts`].
+    pub(crate) fn answer(timeout: Option<Duration>) -> Option<Result<serde_json::Value>> {
+        SEEN.with(|seen| {
+            seen.borrow_mut().as_mut().map(|calls| {
+                calls.push(timeout);
+                Err(MzLibError::ServiceUnavailable {
+                    error_type: SERVICE_UNAVAILABLE_TYPE.to_owned(),
+                    message: "PRIDE is down".to_owned(),
+                })
+            })
+        })
+    }
+
+    /// Run `body` with every `invoke` intercepted, and return the timeout each call was given.
+    pub(crate) fn timeouts(body: impl FnOnce()) -> Vec<Option<Duration>> {
+        SEEN.with(|seen| *seen.borrow_mut() = Some(Vec::new()));
+        body();
+        SEEN.with(|seen| seen.borrow_mut().take().unwrap_or_default())
+    }
 }
 
 /// [`invoke`], against an explicit runner. The seam the transport tests use.

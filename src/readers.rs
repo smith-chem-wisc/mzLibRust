@@ -1045,7 +1045,9 @@ pub struct ScanRecords {
 /// `intensity`.
 ///
 /// **Unfiltered.** Decoys, contaminants and groups above 1% FDR are all rows, as MetaMorpheus
-/// writes them. Filter on `q_value` and `decoy_contaminant_target` before counting.
+/// writes them. Filter on `q_value` and the `is_decoy` and `is_contaminant` flags before counting:
+/// the flags read every `|`-joined parent label of `decoy_contaminant_target` (mzLib #1371), so a
+/// group labelled `T|C` is a contaminant and `T|ET` entrapment.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProteinGroupRecords {
     /// The absolute path that was read.

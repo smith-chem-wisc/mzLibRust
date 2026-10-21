@@ -151,6 +151,8 @@ const SHORT_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct VariancePrior {
     /// Prior degrees of freedom d0. `None` means **infinite** (see [`Self::df_infinite`]). Larger
     /// means the features' variances agree, so each is shrunk harder toward [`Self::scale`].
+    /// 0 with fewer than 3 features: mzLib then fits no prior (mzLib#1398, as limma's
+    /// `squeezeVar` does), so each feature keeps its own variance.
     #[serde(default)]
     pub df: Option<f64>,
     /// `true` when the residual variances are no more dispersed than sampling alone explains, so
@@ -163,8 +165,16 @@ pub struct VariancePrior {
     /// Basis functions the trend spline used, intercept included; 1 without a trend.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub spline_basis_count: u32,
-    /// s0², the prior variance, in squared response units. `None` when trended: s0² is then per
-    /// feature, in the `prior_variance` column.
+    /// s0², the prior variance, in squared response units, when every fitted feature shares one.
+    /// `None` when it differs by feature, which is then in the `prior_variance` column
+    /// ([`FitRow::prior_variance`]): with a trend, or with fewer than 3 features. With so few,
+    /// mzLib fits no prior (mzLib#1398, as limma's `squeezeVar`): [`Self::df`] is 0 and each
+    /// feature keeps its own variance.
+    ///
+    /// **Bridges before pyMzLib 0.5.1 report the first feature's own variance here when there are
+    /// fewer than 3 features**, as though it were the prior. Until
+    /// [`MZLIB_BRIDGE_VERSION`](crate::install::MZLIB_BRIDGE_VERSION) is 0.5.1 or later, read
+    /// [`FitRow::prior_variance`] for so small a table.
     #[serde(default)]
     pub scale: Option<f64>,
 }
@@ -260,7 +270,8 @@ pub struct FitRow {
     pub bh_adjusted: Option<f64>,
     /// The moderated residual variance, in squared response units.
     pub posterior_variance: Option<f64>,
-    /// s0² for this feature, in squared response units.
+    /// s0² for this feature, in squared response units. With fewer than 3 features it is the
+    /// feature's own variance, because no prior is fitted.
     pub prior_variance: Option<f64>,
     /// Residual standard deviation before moderation, in response units.
     pub sigma: Option<f64>,
