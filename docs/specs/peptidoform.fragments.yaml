@@ -185,7 +185,7 @@ bindings:
 examples:
   - fixture: peptidoform_P02768_small.json
     py: "digest = pymzlib.peptidoform.fragments('P02768', max_modifications=1)"
-    rust: "let digest = mzlib::peptidoform::fragments_with(\"P02768\", &FragmentOptions { max_modifications: 1, ..Default::default() })?;"
+    rust: "let digest = mzlib::peptidoform::fragments_with(\"P02768\", &FragmentOptions { max_modifications: Some(1), ..Default::default() })?;"
     r: "digest <- peptidoform_fragments('P02768', max_modifications = 1)"
 
 open_questions:

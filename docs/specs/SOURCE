@@ -1,7 +1,7 @@
 # Written by scripts/sync-specs.ps1. Do not edit; re-run the script.
 repository: trishorts/bridge (private)
 path: design/verbs
-commit: 98ee56646ab41f1dd75d07ec417045cb536f0b60
+commit: 27887027cf70936affcf59e31d4172136bf1b037
 uncommitted_changes: no
 synced: 2026-10-21
 specs: 36
