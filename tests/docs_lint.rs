@@ -28,6 +28,7 @@ const GUIDES: &[&str] = &[
     "peptidoform",
     "pride",
     "proteins",
+    "ptmqtl",
     "readers",
     "sdrf",
     "stats",

@@ -61,7 +61,8 @@
 //! Spearman correlation, logistic and mixed models per feature, and entrapment FDP estimates, each
 //! held by mzLib to the R reference — is the [`stats`] module. The design and contrasts files it
 //! reads, from a sample sheet, and every peptide in every sample, from a FlashLFQ or MetaMorpheus
-//! peptide table, are the [`diff`] module.
+//! peptide table, are the [`diff`] module. PTM site occupancy, PTM-PTM pairs and the effect of a
+//! per-run trait on each site's occupancy are the [`ptmqtl`] module.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -130,6 +131,7 @@ pub mod isobaric;
 pub mod peptidoform;
 pub mod pride;
 pub mod proteins;
+pub mod ptmqtl;
 pub mod readers;
 pub mod sdrf;
 pub mod stats;
