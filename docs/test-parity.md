@@ -37,6 +37,10 @@ the reason it is not portable. Nothing was silently dropped.
 | diff live | `test_diff_live.py` 5 | `tests/live_diff.rs` 5 | 1:1 |
 | ptmqtl live | `test_ptmqtl_live.py` 4 | `tests/live_ptmqtl.rs` 4 | 1:1 |
 | PRIDE checksums | `test_pride.py` 10 checksum tests, and `file_checksums` in the no-timeout parametrization | `src/pride.rs` 11 | 1:1 by function, plus the manifest-versus-checksum size. The verb guard's `("pride checksums", "0.6.0")` is held by `bridge.rs`'s `require_verb` tests, not per verb; a non-string accession cannot reach `&str` (above) |
+| sdrf isobaric design | `test_sdrf_isobaric_design.py` 12 offline (one parametrized over 10 refused arguments) | `src/sdrf.rs` 9 | 1:1 by function. `kit=10` and a bare-string `condition_columns` cannot be expressed in Rust; an empty `condition_columns` is this crate's "not sent", as for `design_with`. The verb guard is `bridge.rs`'s |
+| sdrf isobaric design live | `test_sdrf_isobaric_design.py` 2 live | `tests/live_sdrf.rs` 2 | 1:1: the recording and `TmtDesign.txt` against the 0.6.0 bridge, and an unknown kit is `isobaric kits`' own usage error |
+| sdrf restrict | `test_sdrf_restrict.py` 7 offline (two parametrized over 9 and 3 refused arguments) | `src/sdrf.rs` 5, and `written_sdrf_reads_the_path_mzlib_reports` for `pool` | 1:1 by function. A bare string, a number and an empty mapping cannot reach `&[SearchedFile]`; a negative window cannot reach `u64` |
+| sdrf restrict live | `test_sdrf_restrict.py` 4 live | `tests/live_sdrf.rs` 4, and `pool_out_reports_the_file_mzlib_wrote` | 1:1: the recording, `out`'s `.sdrf.tsv` rename, restrict then design with native paths (SDRF-B5), and no `comment[data file]` is `ArgumentException` |
 | PRIDE checksums live | `test_pride_live.py` 3 | `tests/live_pride.rs` 3 | 1:1: the list covers the FTP root's deposits, one download's length and MD5 match its row, an unknown accession is `ProjectNotFound`. Skip on a bridge older than pyMzLib 0.6.0 |
 
 ## Tests eliminated by Rust's type system

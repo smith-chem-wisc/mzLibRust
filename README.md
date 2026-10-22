@@ -94,6 +94,12 @@ let design = mzlib::sdrf::design_with("PXD067622.sdrf.tsv", &mzlib::sdrf::Design
 })?;
 let spectra = design.spectra()?;          // Vec<SpectraFile>, 0-based, for flashlfq::quantify_with
 
+// A TMT design (1-based, as the SDRF writes it), after cutting the SDRF to the files a search read.
+let scoped = mzlib::sdrf::restrict("PXD008841.sdrf.tsv", &["X-calib.mzML".into()])?;
+let tmt = mzlib::sdrf::isobaric_design_with("PXD008841_searched.sdrf.tsv",
+    &mzlib::sdrf::IsobaricDesignOptions { kit: Some("TMT10".into()),
+                                          plex_column: Some("comment[plex]".into()), ..Default::default() })?;
+
 // Isobaric kits — every TMT, TMTpro, iTRAQ and DiLeu channel with its reporter-ion m/z, from mzLib.
 let tmtpro = mzlib::isobaric::kits(Some("TMT18"))?;
 

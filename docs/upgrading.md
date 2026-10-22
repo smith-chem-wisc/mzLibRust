@@ -27,6 +27,11 @@ mzLib did not move. These are the bridge's own.
   the `residual_df_differ` caveat names `marginal_likelihood` as mzLib's estimator for that case.
   The `bh_adjusted` caveat says "per coefficient and per contrast". Every number is unchanged;
   only code that matches caveat text needs a look.
+- **`sdrf::pool_with` with `PoolOptions::out` names the file it wrote.** mzLib adds `.sdrf.tsv`
+  to a name that does not already end in it, so an `out` of `x.tsv` writes `x.tsv.sdrf.tsv`.
+  `PooledSdrf::written`'s `WrittenSdrf::path` used to say `x.tsv`, a file that does not exist; it
+  now says `x.tsv.sdrf.tsv`. The file written is the same. An `out` already ending in `.sdrf.tsv`
+  is unchanged. `sdrf::restrict_with`, new in this bridge, reports its `out` the same way.
 
 ## The pyMzLib 0.5.0 bridge (built from mzLib 1.0.595)
 

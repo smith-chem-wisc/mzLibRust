@@ -15,6 +15,8 @@
 //! | Get what it says about each sample | [`samples`], [`samples_many`] | `SdrfSampleBlock` |
 //! | Read ages in years | [`parse_ages`] | `SdrfAge.TryParse` |
 //! | Drive a quantification from it, or learn why it cannot | [`design_with`], [`design`] | `SdrfLabelFreeDesign` |
+//! | The same for a TMT, iTRAQ or DiLeu experiment: which sample is in which channel | [`isobaric_design_with`] | `SdrfIsobaricDesign` |
+//! | Know which rows describe the files a search read | [`restrict_with`], [`restrict`] | `SdrfSearchScope` |
 //!
 //! ```
 //! # mzlib_replay::activate();
@@ -213,8 +215,329 @@
 //! leaving them undeclared is itself a refusal. When the SDRF names files without the directory
 //! you keep them in, or the search read only some of them, pass [`DesignOptions::searched_files`]:
 //! each must be named exactly (case and extension) by one row, and rows for other files are
-//! dropped and listed in `notes`. **Label-free only**: an isobaric SDRF needs a channel design this
-//! does not build; the channels themselves are [`crate::isobaric`].
+//! dropped and listed in `notes`. **Label-free only**: an isobaric SDRF needs a channel design;
+//! read it with [`isobaric_design_with`], below. A search that read `X-calib.mzML` matches no row
+//! naming `X.raw`: [`restrict_with`] the SDRF to the search first.
+//!
+//! ## Read an isobaric (TMT) design
+//!
+//! **The question.** In a TMT, TMTpro, iTRAQ or DiLeu experiment, many samples share one run:
+//! each sits in a channel, and its reporter ion says how much of each peptide came from it. To
+//! compare samples, MetaMorpheus needs to know which sample is in which channel of which file, and
+//! it reads that only from a `TmtDesign.txt` beside the spectra. Without one, it writes reporter
+//! intensities per PSM and quantifies nothing per channel. The SDRF already holds the design: one
+//! row per file and channel.
+//!
+//! **[`isobaric_design_with`] reads it out, or refuses and says why.** It calls mzLib's
+//! `SdrfIsobaricDesign` (mzLib #1380), which runs MetaMorpheus's own checks on a TMT design and
+//! reports every failure at once: one plex, fraction and technical replicate per file; each channel
+//! described one way within a plex; no sample twice at one fraction of a plex. It needs two facts
+//! that mzLib will not guess from the SDRF:
+//!
+//! | You must say | How | Why mzLib will not guess it |
+//! |---|---|---|
+//! | The kit the search used | [`IsobaricDesignOptions::kit`] | One kit's labels can be a subset of another's: a TMT11 plex that left 131C empty reads exactly like TMT10 |
+//! | Where each file's plex is written | exactly one of `plex_column`, `plex_file_name_pattern`, `single_plex` | The column that looks like a plex often is not one (see PXD061609 below) |
+//!
+//! The kit is named as [`crate::isobaric::kits`] takes it, by the same mzLib code: `"TMT10"`,
+//! `"tmt18"`, `"TMT6-plex"`, `"iTRAQ4"`, `"TMT11 on K"`. A name mzLib does not know is
+//! [`MzLibError::Usage`], listing the known kits.
+//!
+//! The examples use mzLib's own isobaric design files, cut from
+//! [bigbio/sdrf-annotated-datasets](https://github.com/bigbio/sdrf-annotated-datasets): PXD008841
+//! (breast tumours, TMT10; two fractions each of two plexes of a nine-plex study) and PXD061609
+//! (eighteen mouse samples, ten tissues of both sexes, TMTpro 18; two fractions of each of three
+//! fractionation arms of one plex).
+//!
+//! PXD008841 has no plex column. The plex survives only in the file names, spelled two ways
+//! (`TMTpool1`, `TMT_pool5`), so one regular expression reads both. Its group named `plex` is the
+//! plex:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::sdrf::{isobaric_design_with, IsobaricDesignOptions};
+//!
+//! let tmt = isobaric_design_with(
+//!     "PXD008841.subset.sdrf.tsv",
+//!     &IsobaricDesignOptions {
+//!         kit: Some("TMT10".into()),
+//!         plex_file_name_pattern: Some(r"TMT_?pool(?<plex>\d+)".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!((tmt.is_valid, tmt.file_count, tmt.record_count), (true, 4, 40));
+//! assert_eq!(tmt.plex_ids, [("1".to_owned(), 1), ("5".to_owned(), 2)].into());
+//! let channels = tmt.channels()?;
+//! for c in &channels[..3] {
+//!     println!("{} | {} | {} | {} | {}", c.plex, c.channel, c.sample_name, c.condition, c.fraction);
+//! }
+//! //   1 | 126 | OSL.53E | basal-like breast carcinoma | 1
+//! //   1 | 127N | OSL.567 | luminal A breast carcinoma | 1
+//! //   1 | 127C | OSL.3FF | basal-like breast carcinoma | 1
+//! assert_eq!(channels[1].sample_name, "OSL.567");
+//! assert_eq!((channels[9].channel.as_str(), channels[9].sample_name.as_str()), ("131N", "pool"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **What each row means.** One row per file and annotated channel: files in SDRF order, each
+//! file's channels in reporter m/z order ([`SdrfIsobaricDesign::kit_channels`]).
+//!
+//! | Field | Meaning |
+//! |---|---|
+//! | `full_path` | The file, as the SDRF names it, or the searched path you passed for it |
+//! | `plex`, `plex_id` | The plex, as your source gives it, and its number, 1..N in name order (MetaMorpheus numbers plexes the same way) |
+//! | `sample_name`, `channel` | The SDRF `source name` in that channel, and the channel as the kit spells it (`127N`), whatever form `comment[label]` used |
+//! | `condition` | The condition columns' values joined with `_`, exactly as [`design_with`] builds it |
+//! | `biological_replicate`, `fraction`, `technical_replicate` | The SDRF's own numbers, **1-based**, never ranked or shifted |
+//!
+//! **This design is 1-based; [`design_with`] is 0-based.** [`isobaric_design_with`] returns the
+//! SDRF's numbers as written, starting at 1, which is also what `TmtDesign.txt` holds.
+//! [`design_with`] returns mzLib's `SpectraFileInfo` coordinates, starting at 0. The split is
+//! mzLib's own, and neither the bridge nor this crate converts either table. **Never join or
+//! compare the two without adding or removing 1.**
+//!
+//! Channel 131N is the reference pool of PXD008841's bridge design. mzLib does not read sample
+//! type yet, so every annotated channel is a study sample, the pool included: leave it out of a
+//! comparison yourself. A kit channel the SDRF does not annotate has no row. Read PXD008841 as
+//! TMT11 and `kit_channels` gains `131C`; the table does not.
+//!
+//! ### Nothing is guessed
+//!
+//! Declare no plex source, and mzLib refuses rather than infer one:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::sdrf::{isobaric_design_with, IsobaricDesignOptions};
+//! let unknown = isobaric_design_with(
+//!     "PXD008841.subset.sdrf.tsv",
+//!     &IsobaricDesignOptions { kit: Some("TMT10".into()), ..Default::default() },
+//! )?;
+//! assert_eq!((unknown.is_valid, unknown.plex_source.as_str()), (false, "(not declared)"));
+//! assert!(unknown.refusals[0].starts_with(
+//!     "No plex source was declared. Name the column that holds the plex, give a file-name \
+//!      pattern whose group captures it, or name the single plex."
+//! ));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! PXD061609 is the reason. Its `comment[sample preparation batch]` holds `NoSAX`, `HighSalt` and
+//! `LowSalt`: three fractionation arms of **one** plex, every arm carrying all eighteen samples
+//! and numbering its fractions from 1. Read as the one plex it is, the arms' fraction 1s collide,
+//! and MetaMorpheus could not tell them apart, so mzLib refuses, once for each sample and
+//! fraction. Declare the batch column as the plex, and each arm becomes a plex of its own, which
+//! MetaMorpheus accepts:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::sdrf::{isobaric_design_with, IsobaricDesignOptions};
+//! let one = isobaric_design_with(
+//!     "PXD061609.subset.sdrf.tsv",
+//!     &IsobaricDesignOptions {
+//!         kit: Some("TMT18".into()),
+//!         single_plex: Some("tube1".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!((one.is_valid, one.refusals.len()), (false, 36));
+//! assert!(one.refusals[0].starts_with(
+//!     "Plex 'tube1' has sample 'brain_female' biorep 1 fraction 1 techrep 1 more than once:"
+//! ));
+//!
+//! let arms = isobaric_design_with(
+//!     "PXD061609.subset.sdrf.tsv",
+//!     &IsobaricDesignOptions {
+//!         kit: Some("TMT18".into()),
+//!         plex_column: Some("comment[sample preparation batch]".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert!(arms.is_valid);
+//! assert_eq!(arms.plex_ids.keys().collect::<Vec<_>>(), ["HighSalt", "LowSalt", "NoSAX"]);
+//! assert_eq!(arms.record_count, 108);
+//! let second = &arms.channels()?[1];
+//! assert_eq!(
+//!     (second.sample_name.as_str(), second.biological_replicate, second.condition.as_str()),
+//!     ("brain_male", 2, "NT=brain;AC=UBERON:0000955")
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Whether a fractionation arm should be quantified as a plex is a decision about your
+//! experiment, not something mzLib can read from the file; that is why it makes you declare it.
+//! Note two more things about the rows. `condition` is the factor cell as written, key=value
+//! grammar and all. And the biological replicate is the SDRF's own number (here, a tissue's female
+//! and male samples are replicates 1 and 2): an isobaric design never ranks replicates the way
+//! [`design_with`] does.
+//!
+//! **The traps.**
+//!
+//! - **1-based against 0-based**, above. It is the one to remember.
+//! - **A refusal is a result.** `is_valid` `false` returns `Ok`, with `refusals` filled and the
+//!   table empty. A missing kit, no plex source, two plex sources and a pattern that does not parse
+//!   are all refusals, not errors. Print `report` for mzLib's whole account.
+//! - **Searched files match by exact name.** [`IsobaricDesignOptions::searched_files`] works as
+//!   for [`design_with`]: each must be named exactly by some row. A search that read `X-calib.mzML`
+//!   matches no row naming `X.raw`; restrict the SDRF to the search first (next section).
+//! - **`out` names a folder.** mzLib writes MetaMorpheus's `TmtDesign.txt` inside it (only for a
+//!   valid design), replacing one already there. MetaMorpheus reads it only from the folder of the
+//!   first spectra file, and refuses a folder that also holds an `ExperimentalDesign.tsv`.
+//! - **TMT16 is TMTpro 16-plex.** MetaMorpheus searches it with its TMT18 label; a TMT16 design is
+//!   read as is by such a run, with 134C and 135N empty.
+//!
+//! ## Restrict an SDRF to one search's files
+//!
+//! **The question.** A deposited SDRF describes every file the depositors acquired. Your search
+//! read some of them, often under other names: MetaMorpheus calibrates `X.raw` and searches
+//! `X-calib.mzML`. Which rows describe the files your search read, and what does the SDRF fail to
+//! describe?
+//!
+//! **[`restrict_with`] answers both.** It calls mzLib's `SdrfSearchScope.Restrict` (mzLib #1451),
+//! which joins each searched file to its acquisition **by stem**, ignoring case, after removing
+//! the derivative suffixes MetaMorpheus writes (`-calib`, `-averaged`, in any order). Each kept row
+//! is carried cell for cell, with the searched file's name written into a new
+//! [`SEARCHED_DATA_FILE_COLUMN`], directly after `comment[data file]`. Nothing is renumbered.
+//!
+//! Here is a search over PXD008841 that hits every problem but one. It has two calibrated runs,
+//! the raw file of one of them as well, a renamed file whose acquisition you know, and a file the
+//! SDRF does not describe:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::sdrf::{restrict_with, RestrictOptions, SearchedFile};
+//!
+//! let pool1 = "HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr0";
+//! let pool5 = "HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr0";
+//! let scoped = restrict_with(
+//!     "PXD008841.subset.sdrf.tsv",
+//!     &[
+//!         SearchedFile::from(format!(r"D:\search\{pool1}1-calib.mzML")),
+//!         SearchedFile::from(format!("{pool1}2-calib.mzML")),
+//!         SearchedFile::from(format!("{pool1}2.raw")),
+//!         SearchedFile::acquired_from("sample_A.mzML", format!("{pool5}1.raw")),
+//!         SearchedFile::from("not_in_sdrf.mzML"),
+//!     ],
+//!     &RestrictOptions { limit: Some(2), ..Default::default() },
+//! )?;
+//! assert_eq!((scoped.input_row_count, scoped.document.row_count), (40, 30));
+//! assert_eq!(
+//!     scoped.document.value("comment[data file]")[0],
+//!     Some("HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr01.raw")
+//! );
+//! assert_eq!(
+//!     scoped.searched_data_files()[0],
+//!     Some("HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr01-calib.mzML")
+//! );
+//! assert_eq!(scoped.searched_without_row, ["not_in_sdrf.mzML"]);
+//! assert_eq!(
+//!     scoped.dropped_data_files,
+//!     ["HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr02.raw"]
+//! );
+//! // Two searched files claimed fraction 2's acquisition; the first in name order kept its rows.
+//! assert_eq!(
+//!     scoped.ambiguous,
+//!     [format!("{pool1}2: {pool1}2-calib.mzML, {pool1}2.raw")]
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Pass [`SearchedFile::from`] a path or name when you know only the searched name, and
+//! [`SearchedFile::acquired_from`] when you also know which acquired file a searched one came from
+//! (MetaMorpheus reads it from an mzML's own `sourceFile`). A name you give wins over the suffix
+//! rule, which is how `sample_A.mzML` found pool 5's first fraction above.
+//!
+//! **What each report means.**
+//!
+//! | Report | Meaning | What to do |
+//! |---|---|---|
+//! | `searched_without_row` | Searched files the SDRF has no row for | They have no design. Fix the SDRF, or leave them out of the quantification |
+//! | `dropped_data_files` | Acquired files the SDRF describes that the search did not read | Usually expected; check that none was meant to be searched |
+//! | `ambiguous` | Two or more searched files claimed one acquisition, as `stem: searched, searched` | The first in name order kept the rows. The others have none, and are not in `searched_without_row` |
+//! | `shared_stem` | One searched file joined rows naming two **different** acquired files (`X.raw` and `X.mzML`), as `searched: acquired, acquired` | Every such row is kept, so the document describes one run twice. Only the depositor knows which row is right |
+//!
+//! [`RestrictedSdrf::document`] is an [`SdrfDocument`]: [`SdrfDocument::value`],
+//! [`SdrfDocument::all`] and [`SdrfDocument::records`] work on it. A row shorter than the header is
+//! padded with empty cells, so unlike [`read`], its rows are never ragged.
+//!
+//! ### Restrict, then read the design
+//!
+//! [`design_with`] and [`isobaric_design_with`] match `searched_files` by **exact** name. That is
+//! deliberate: mzLib leaves the stem join to [`restrict_with`]. Both readers key on
+//! `comment[searched data file]` when a document has it, so restrict first, write the result, and
+//! read the design from it:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use std::path::PathBuf;
+//!
+//! use mzlib::sdrf::{
+//!     isobaric_design_with, restrict_with, IsobaricDesignOptions, RestrictOptions, SearchedFile,
+//!     WrittenSdrf,
+//! };
+//!
+//! let runs: Vec<PathBuf> = [
+//!     "HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr0",
+//!     "HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr0",
+//! ]
+//! .iter()
+//! .flat_map(|pool| (1..=2).map(move |i| PathBuf::from(format!(r"D:\search\{pool}{i}-calib.mzML"))))
+//! .collect();
+//! let searched: Vec<SearchedFile> = runs.iter().cloned().map(SearchedFile::from).collect();
+//!
+//! let kept = restrict_with(
+//!     "PXD008841.subset.sdrf.tsv",
+//!     &searched,
+//!     &RestrictOptions {
+//!         out: Some("PXD008841_searched.sdrf.tsv".into()),
+//!         limit: Some(2),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!(
+//!     kept.written,
+//!     Some(WrittenSdrf { path: "PXD008841_searched.sdrf.tsv".to_owned(), row_count: 40 })
+//! );
+//!
+//! let tmt = isobaric_design_with(
+//!     "PXD008841_searched.sdrf.tsv",
+//!     &IsobaricDesignOptions {
+//!         kit: Some("TMT10".into()),
+//!         plex_file_name_pattern: Some(r"TMT_?pool(?<plex>\d+)".into()),
+//!         searched_files: Some(runs),
+//!         out: Some("design".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!(tmt.file_key_column.as_deref(), Some("comment[searched data file]"));
+//! // Recorded on Windows. Read a path from these as text: a reader on another platform does not
+//! // split it on '\'.
+//! assert_eq!(
+//!     tmt.channels()?[0].full_path,
+//!     r"D:\search\HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr01-calib.mzML"
+//! );
+//! let written = tmt.written.as_ref().expect("a valid design with out writes TmtDesign.txt");
+//! assert_eq!(written.record_count, 40);
+//! assert!(written.path.ends_with("TmtDesign.txt"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Give the same searched files to [`isobaric_design_with`] with the unrestricted SDRF and every
+//! one is refused: the SDRF names `X.raw`, and the search read `X-calib.mzML`.
+//!
+//! **The traps.**
+//!
+//! - **`out` must end in `.tsv`; name it `.sdrf.tsv`.** mzLib adds `.sdrf.tsv` to a name that does
+//!   not already end in it, so `searched.tsv` is written as `searched.tsv.sdrf.tsv`.
+//!   [`WrittenSdrf::path`] always names the file actually written, for [`pool_with`] as well.
+//! - **`out` writes the whole document**, whatever the limit and offset are, with CRLF line
+//!   endings whatever the input used.
+//! - **`comment[searched data file]` holds the file name, not the folder.** The design readers
+//!   take the folder from their `searched_files`.
+//! - **mzLib's design readers split a path on this platform's separator only** (the bridge's
+//!   thread, SDRF-B5). `restrict_with` reduces either separator on any platform, but a design read
+//!   on Linux from `D:\search\X-calib.mzML` keys on the whole string. Pass searched paths in the
+//!   form the platform you run on writes them.
+//! - **An SDRF with no `comment[data file]` column cannot be restricted.** mzLib raises, and this
+//!   crate returns [`MzLibError::Bridge`] with `error_type` `"ArgumentException"`.
 //!
 //! Ported from pyMzLib's `pymzlib.sdrf`, which decided the verbs, the wire fields and the caveats.
 //!
@@ -222,7 +545,7 @@
 //!
 #![doc = include_str!("../docs/reference/cite.sdrf.md")]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -370,14 +693,16 @@ impl SdrfDocument {
     }
 }
 
-/// Where [`pool_with`] wrote the merged document, when asked to write one.
+/// Where [`pool_with`] or [`restrict_with`] wrote its document, when asked to write one.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WrittenSdrf {
-    /// The path written.
+    /// The file mzLib actually wrote, which is not always the name you gave: mzLib adds
+    /// `.sdrf.tsv` to a name that does not already end in it, so an `out` of `x.tsv` writes
+    /// `x.tsv.sdrf.tsv`. Bridges before pyMzLib 0.6.0 reported the name as given for [`pool_with`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub path: String,
-    /// Rows written — the **whole** merged document, not the windowed slice. The limit and offset
-    /// shape what comes back over the wire; they never shorten the file.
+    /// Rows written — the **whole** document, not the windowed slice. The limit and offset shape
+    /// what comes back over the wire; they never shorten the file.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub row_count: u64,
 }
@@ -442,7 +767,8 @@ pub struct PoolOptions {
     /// The window and the timeout, as for [`read_with`].
     pub read: ReadOptions,
     /// Write the merged document here as SDRF. The **whole** document is written regardless of
-    /// the limit and offset.
+    /// the limit and offset. A name that does not end in `.sdrf.tsv` gets it added, so `x.tsv`
+    /// writes `x.tsv.sdrf.tsv`; [`WrittenSdrf::path`] says which file was written.
     pub out: Option<String>,
 }
 
@@ -2028,38 +2354,8 @@ impl SdrfDesign {
 /// The arguments and stdin of a `sdrf design` call, validated before anything is spawned.
 fn design_request(path: &Path, options: &DesignOptions) -> Result<(Vec<String>, Option<String>)> {
     let mut args = one_path_args("design", path)?;
-
-    if !options.condition_columns.is_empty() {
-        for (index, name) in options.condition_columns.iter().enumerate() {
-            if name.trim().is_empty() {
-                return Err(MzLibError::Usage(format!(
-                    "Condition column {index} is blank; every condition column must name a \
-                     factor value[...] column."
-                )));
-            }
-            if name.contains(['\t', '\n', '\r']) {
-                return Err(MzLibError::Usage(format!(
-                    "Condition column {index} contains a tab or line break, which the wire uses \
-                     to separate names: {name:?}."
-                )));
-            }
-        }
-        args.push("--condition-columns".to_owned());
-        args.push(options.condition_columns.join("\t"));
-    }
-
-    let stdin = match &options.searched_files {
-        None => None,
-        Some(files) => {
-            let lines = if files.is_empty() {
-                Vec::new()
-            } else {
-                bridge::path_lines(files, "searched file")?
-            };
-            args.push("--searched-files-stdin".to_owned());
-            Some(lines.join("\n") + "\n")
-        }
-    };
+    condition_columns_args(&mut args, &options.condition_columns)?;
+    let stdin = searched_files_stdin(&mut args, options.searched_files.as_ref())?;
 
     if let Some(out) = &options.out {
         let out = path_text(out, "out path")?;
@@ -2096,8 +2392,9 @@ pub fn design(path: impl AsRef<Path>) -> Result<SdrfDesign> {
 /// both recorded in [`SdrfDesign::notes`]: study-wide biological replicate numbers are ranked
 /// within each condition (`22 -> 1`), and rows for files the search does not read are dropped.
 ///
-/// **Label-free only.** An isobaric (TMT, iTRAQ) SDRF needs a channel design this does not
-/// produce; for the channels themselves see [`crate::isobaric::kits`].
+/// **Label-free only.** An isobaric (TMT, iTRAQ, DiLeu) SDRF needs a channel design: read it
+/// with [`isobaric_design_with`]. A search that read `X-calib.mzML` for an SDRF naming `X.raw`
+/// matches no row by exact name; [`restrict_with`] the SDRF first.
 #[doc = include_str!("../docs/reference/sdrf.design.md")]
 ///
 /// # Examples
@@ -2151,6 +2448,725 @@ pub fn design(path: impl AsRef<Path>) -> Result<SdrfDesign> {
 pub fn design_with(path: impl AsRef<Path>, options: &DesignOptions) -> Result<SdrfDesign> {
     let (args, stdin) = design_request(path.as_ref(), options)?;
     call(&args, stdin.as_deref(), options.timeout)
+}
+
+// ---- shared by design and isobaric design ---------------------------------------------------
+
+/// `--condition-columns` for [`design_with`] and [`isobaric_design_with`]: nothing for an empty
+/// list, so mzLib uses the document's only factor column.
+fn condition_columns_args(args: &mut Vec<String>, condition_columns: &[String]) -> Result<()> {
+    if condition_columns.is_empty() {
+        return Ok(());
+    }
+    for (index, name) in condition_columns.iter().enumerate() {
+        if name.trim().is_empty() {
+            return Err(MzLibError::Usage(format!(
+                "Condition column {index} is blank; every condition column must name a \
+                 factor value[...] column."
+            )));
+        }
+        if name.contains(['\t', '\n', '\r']) {
+            return Err(MzLibError::Usage(format!(
+                "Condition column {index} contains a tab or line break, which the wire uses \
+                 to separate names: {name:?}."
+            )));
+        }
+    }
+    args.push("--condition-columns".to_owned());
+    args.push(condition_columns.join("\t"));
+    Ok(())
+}
+
+/// `--searched-files-stdin` and its stdin for [`design_with`] and [`isobaric_design_with`]:
+/// nothing for `None`. An empty list is sent, and mzLib refuses it as a design.
+fn searched_files_stdin(
+    args: &mut Vec<String>,
+    searched_files: Option<&Vec<PathBuf>>,
+) -> Result<Option<String>> {
+    let Some(files) = searched_files else {
+        return Ok(None);
+    };
+    let lines = if files.is_empty() {
+        Vec::new()
+    } else {
+        bridge::path_lines(files, "searched file")?
+    };
+    args.push("--searched-files-stdin".to_owned());
+    Ok(Some(lines.join("\n") + "\n"))
+}
+
+// ---- isobaric design (mzLib 1.0.595) ------------------------------------------------------------
+
+/// The first pyMzLib release whose bridge has `sdrf isobaric-design` and `sdrf restrict`: their
+/// specs' `since.pymzlib`.
+const ISOBARIC_RESTRICT_SINCE: &str = "0.6.0";
+
+/// How [`isobaric_design_with`] reads a design. Every default is mzLib's, and mzLib's default for
+/// the kit and the plex source is to refuse: neither is ever guessed.
+///
+/// Declare the plex with **exactly one** of [`Self::plex_column`], [`Self::plex_file_name_pattern`]
+/// and [`Self::single_plex`]. None, or several, is mzLib's refusal, not a usage error.
+#[derive(Debug, Clone)]
+pub struct IsobaricDesignOptions {
+    /// The kit the search used, named as [`crate::isobaric::kits`] takes it (`"TMT10"`, `"tmt18"`,
+    /// `"TMT6-plex"`, `"TMT11 on K"`), resolved by the same mzLib code. `None` (the default) sends
+    /// none, and mzLib then refuses: the kit is never guessed from the labels, because one kit's
+    /// labels can be a subset of another's. A blank name is refused here; an unknown one is the
+    /// bridge's usage error listing the known kits.
+    pub kit: Option<String>,
+    /// The column each row's plex is read from, by its exact name.
+    pub plex_column: Option<String>,
+    /// A .NET regular expression matched, ignoring case, against each row's file name; the plex is
+    /// its group named `plex`, else its first group, e.g. `r"TMT_?pool(?<plex>\d+)"`.
+    pub plex_file_name_pattern: Option<String>,
+    /// The name of the one plex every file belongs to.
+    pub single_plex: Option<String>,
+    /// The `factor value[...]` columns the condition is built from, exactly as
+    /// [`DesignOptions::condition_columns`]: empty (the default) sends nothing, and mzLib uses the
+    /// document's only factor column.
+    pub condition_columns: Vec<String>,
+    /// The files the search will read, exactly as [`DesignOptions::searched_files`]: each must be
+    /// named **exactly** by some row. A search that read `X-calib.mzML` for an SDRF naming `X.raw`
+    /// matches nothing; [`restrict_with`] the SDRF first.
+    pub searched_files: Option<Vec<PathBuf>>,
+    /// A **folder**, created when missing. mzLib writes MetaMorpheus's `TmtDesign.txt` (1-based)
+    /// inside it, replacing one already there, but only when the design is valid. MetaMorpheus
+    /// reads it only from the folder of the first spectra file. A path that names an existing
+    /// file is the bridge's usage error, checked before the SDRF is read.
+    pub out: Option<PathBuf>,
+    /// The longest the call may take. `None` waits indefinitely. Defaults to 60 seconds, as for
+    /// every function in this module.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for IsobaricDesignOptions {
+    fn default() -> Self {
+        Self {
+            kit: None,
+            plex_column: None,
+            plex_file_name_pattern: None,
+            single_plex: None,
+            condition_columns: Vec::new(),
+            searched_files: None,
+            out: None,
+            timeout: Some(DEFAULT_TIMEOUT),
+        }
+    }
+}
+
+/// The `TmtDesign.txt` that [`isobaric_design_with`] wrote under [`IsobaricDesignOptions::out`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct IsobaricDesignWritten {
+    /// The file written: the `out` folder joined with `TmtDesign.txt`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// Files written, in files.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub file_count: u64,
+    /// Rows written, one per file and annotated channel, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub record_count: u64,
+}
+
+/// One annotated channel of one file in an isobaric design, as mzLib reads it: a row of
+/// [`SdrfIsobaricDesign::channels`].
+///
+/// **Every number here is 1-based, as the SDRF writes it**, unlike [`DesignedFile`], whose
+/// numbers are 0-based. That is mzLib's own split (`SdrfIsobaricDesign` against
+/// `SpectraFileInfo`), and this crate converts neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesignedChannel {
+    /// The file: the searched path you passed for it, else the file name the SDRF gives.
+    pub full_path: String,
+    /// The plex, as the source you declared gives it (a column cell, a pattern's group, or the
+    /// single plex).
+    pub plex: String,
+    /// The plex's number in [`SdrfIsobaricDesign::plex_ids`], 1-based.
+    pub plex_id: u32,
+    /// The SDRF `source name` of the sample in this channel.
+    pub sample_name: String,
+    /// The channel as the kit spells it, e.g. `127N`, whatever form `comment[label]` used.
+    pub channel: String,
+    /// The condition columns' values joined with `_`.
+    pub condition: String,
+    /// 1-based, exactly as written; never ranked.
+    pub biological_replicate: u32,
+    /// 1-based, as written; 1 when the SDRF has no fraction column.
+    pub fraction: u32,
+    /// 1-based, as written; 1 when the SDRF has no technical-replicate column.
+    pub technical_replicate: u32,
+}
+
+/// An isobaric (TMT, TMTpro, iTRAQ, DiLeu) design read from an SDRF, or every reason it was
+/// refused: what [`isobaric_design_with`] returns.
+///
+/// **A refusal is an answer, not an error.** When [`Self::is_valid`] is `false`,
+/// [`Self::refusals`] lists every reason at once and the table is empty. A missing kit, no plex
+/// source, two plex sources and a bad pattern are refusals too.
+///
+/// The table has one row per file and annotated channel: `full_path`, `plex`, `plex_id`,
+/// `sample_name`, `channel`, `condition`, `biological_replicate`, `fraction` and
+/// `technical_replicate`, with the meanings of [`DesignedChannel`]. [`Self::channels`] gives the
+/// same rows as structs. **All of the numbers are 1-based.**
+#[derive(Debug, Clone, Deserialize)]
+pub struct SdrfIsobaricDesign {
+    /// The SDRF path as given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// `true` when there are no refusals. `false` is an answer: the table is then empty.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub is_valid: bool,
+    /// The kit name exactly as you gave it. `None` when you gave none, and mzLib then refused.
+    #[serde(default)]
+    pub kit: Option<String>,
+    /// mzLib's name for the kit it resolved to (`TMT10`, `TMT18`, `iTRAQ4`, ...), as
+    /// [`crate::isobaric::kits`] names it. `None` when no kit was given.
+    #[serde(default)]
+    pub kit_type: Option<String>,
+    /// Every channel of the kit, in reporter m/z order. A channel here and absent from the table
+    /// is one the SDRF does not annotate. `None` when no kit was given.
+    #[serde(default)]
+    pub kit_channels: Option<Vec<String>>,
+    /// The plex column you gave, or `None`.
+    #[serde(default)]
+    pub plex_column: Option<String>,
+    /// The plex pattern you gave, or `None`.
+    #[serde(default)]
+    pub plex_file_name_pattern: Option<String>,
+    /// The single plex you gave, or `None`.
+    #[serde(default)]
+    pub single_plex: Option<String>,
+    /// Where mzLib read the plex from, as its report prints it; `"(not declared)"` when no single
+    /// source could be used.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub plex_source: String,
+    /// Plex name to its number, 1..N in case-insensitive name order (the order MetaMorpheus
+    /// numbers plexes in). The map iterates in this crate's name order; the number is mzLib's.
+    /// Empty when refused.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub plex_ids: BTreeMap<String, u32>,
+    /// Plexes in the design, a count of plexes; `0` when refused.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub plex_count: u64,
+    /// The column files were keyed on: `comment[searched data file]` when the SDRF has it, else
+    /// `comment[data file]`. `None` when it has neither, so no row names a file; that is itself a
+    /// refusal.
+    #[serde(default)]
+    pub file_key_column: Option<String>,
+    /// The `factor value[...]` columns the condition was built from, in join order; empty when
+    /// none could be chosen.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub condition_columns: Vec<String>,
+    /// Whether [`IsobaricDesignOptions::condition_columns`] was given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub condition_columns_declared: bool,
+    /// Whether [`IsobaricDesignOptions::searched_files`] was given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub searched_files_given: bool,
+    /// Files in the design, in files; `0` when refused.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub file_count: u64,
+    /// Rows in the table, one per file and annotated channel, in rows; `0` when refused.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub record_count: u64,
+    /// Every reason the design was refused, in mzLib's words. Empty when valid.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub refusals: Vec<String>,
+    /// What was dropped or filled on the way: rows for files the search does not read, and a file
+    /// with no row of its own for one of its plex's channels.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub notes: Vec<String>,
+    /// mzLib's human-readable account of all of the above (`SdrfIsobaricDesign.Report`). Print it.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub report: String,
+    /// The design table: files in SDRF row order, then each file's channels in reporter m/z order.
+    #[serde(flatten)]
+    pub columns: Table,
+    /// The `TmtDesign.txt` written; `None` when [`IsobaricDesignOptions::out`] was not given, or
+    /// the design was refused and nothing was written.
+    #[serde(default)]
+    pub written: Option<IsobaricDesignWritten>,
+    /// What the design does and does not cover. The first says it is 1-based; read them once.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+impl SdrfIsobaricDesign {
+    /// Every row as a [`DesignedChannel`]: files in SDRF order, each file's channels in reporter
+    /// m/z order. Empty when refused.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not the type the wire contract says.
+    pub fn channels(&self) -> Result<Vec<DesignedChannel>> {
+        if self.columns.is_empty() {
+            return Ok(Vec::new());
+        }
+        let text = |name: &str| self.columns.strings(name);
+        let (full_path, plex, sample_name, channel, condition) = (
+            text("full_path")?,
+            text("plex")?,
+            text("sample_name")?,
+            text("channel")?,
+            text("condition")?,
+        );
+        let plex_id = self.columns.integers("plex_id")?;
+        let biological = self.columns.integers("biological_replicate")?;
+        let fraction = self.columns.integers("fraction")?;
+        let technical = self.columns.integers("technical_replicate")?;
+        let number = |value: Option<i64>, what: &str| -> Result<u32> {
+            value.and_then(|v| u32::try_from(v).ok()).ok_or_else(|| {
+                MzLibError::Protocol(format!(
+                    "sdrf isobaric-design returned a {what} that is not a whole number: {value:?}"
+                ))
+            })
+        };
+        (0..full_path.len())
+            .map(|i| {
+                Ok(DesignedChannel {
+                    full_path: full_path[i].clone().unwrap_or_default(),
+                    plex: plex[i].clone().unwrap_or_default(),
+                    plex_id: number(plex_id[i], "plex_id")?,
+                    sample_name: sample_name[i].clone().unwrap_or_default(),
+                    channel: channel[i].clone().unwrap_or_default(),
+                    condition: condition[i].clone().unwrap_or_default(),
+                    biological_replicate: number(biological[i], "biological_replicate")?,
+                    fraction: number(fraction[i], "fraction")?,
+                    technical_replicate: number(technical[i], "technical_replicate")?,
+                })
+            })
+            .collect()
+    }
+}
+
+/// `--<name> value` for a string option, nothing for `None`; a blank value or a line break is
+/// refused before anything is spawned.
+fn optional_text(
+    args: &mut Vec<String>,
+    value: Option<&String>,
+    name: &str,
+    example: &str,
+) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.trim().is_empty() {
+        return Err(MzLibError::Usage(format!(
+            "{name} must be non-blank, or None, e.g. {example:?}."
+        )));
+    }
+    if value.contains(['\n', '\r']) {
+        return Err(MzLibError::Usage(format!(
+            "{name} may not contain a line break: {value:?}."
+        )));
+    }
+    args.push(format!("--{}", name.replace('_', "-")));
+    args.push(value.clone());
+    Ok(())
+}
+
+/// The arguments and stdin of a `sdrf isobaric-design` call, validated before anything is spawned.
+fn isobaric_design_request(
+    path: &Path,
+    options: &IsobaricDesignOptions,
+) -> Result<(Vec<String>, Option<String>)> {
+    let mut args = one_path_args("isobaric-design", path)?;
+    optional_text(&mut args, options.kit.as_ref(), "kit", "TMT10")?;
+    optional_text(
+        &mut args,
+        options.plex_column.as_ref(),
+        "plex_column",
+        "comment[plex]",
+    )?;
+    optional_text(
+        &mut args,
+        options.plex_file_name_pattern.as_ref(),
+        "plex_file_name_pattern",
+        r"TMT_?pool(?<plex>\d+)",
+    )?;
+    optional_text(
+        &mut args,
+        options.single_plex.as_ref(),
+        "single_plex",
+        "plex1",
+    )?;
+    condition_columns_args(&mut args, &options.condition_columns)?;
+    let stdin = searched_files_stdin(&mut args, options.searched_files.as_ref())?;
+    if let Some(out) = &options.out {
+        let out = path_text(out, "out path")?;
+        if out.is_empty() {
+            return Err(MzLibError::Usage(
+                "out must name a folder; TmtDesign.txt is written inside it, e.g. 'design'."
+                    .to_owned(),
+            ));
+        }
+        args.push("--out".to_owned());
+        args.push(out.to_owned());
+    }
+    Ok((args, stdin))
+}
+
+/// Read an isobaric (TMT, TMTpro, iTRAQ, DiLeu) design out of an SDRF, or every reason it cannot
+/// be read.
+///
+/// Calls mzLib's `SdrfIsobaricDesign.Read` (mzLib #1380). It runs MetaMorpheus's own checks on a
+/// TMT design (one plex, fraction and technical replicate per file; a channel described once per
+/// plex; no sample twice at one fraction in a plex) and **refuses rather than repairs**, reporting
+/// every failure at once. **It guesses nothing:** not the kit, because one kit's labels can be a
+/// subset of another's, and not the plex, which you declare with exactly one of
+/// [`IsobaricDesignOptions::plex_column`], [`IsobaricDesignOptions::plex_file_name_pattern`] and
+/// [`IsobaricDesignOptions::single_plex`]. Giving none, or several, is mzLib's refusal.
+///
+/// **The numbers are 1-based, as the SDRF writes them.** [`design_with`]'s are 0-based. That split
+/// is mzLib's, and this crate converts neither. The
+/// [module guide](crate::sdrf#read-an-isobaric-tmt-design) walks through two real deposits.
+#[doc = include_str!("../docs/reference/sdrf.isobaric-design.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for a blank path, a blank kit, plex option or
+/// condition column, one holding a line break (a tab, for a condition column), a searched file
+/// that is blank or holds a tab or line break, or a blank `out`; and when the bridge in use is
+/// older than pyMzLib 0.6.0's, which has no `sdrf isobaric-design`.
+///
+/// # Examples
+///
+/// PXD008841 writes no plex column; the plex survives only in the file names, spelled two ways
+/// (`TMTpool1`, `TMT_pool5`), so one pattern reads both:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::sdrf::{isobaric_design_with, IsobaricDesignOptions};
+///
+/// let d = isobaric_design_with(
+///     "PXD008841.subset.sdrf.tsv",
+///     &IsobaricDesignOptions {
+///         kit: Some("TMT10".into()),
+///         plex_file_name_pattern: Some(r"TMT_?pool(?<plex>\d+)".into()),
+///         ..Default::default()
+///     },
+/// )?;
+/// assert_eq!((d.is_valid, d.file_count, d.record_count), (true, 4, 40));
+/// assert_eq!(d.plex_ids, [("1".to_owned(), 1), ("5".to_owned(), 2)].into());
+/// let c = &d.channels()?[9];
+/// assert_eq!((c.channel.as_str(), c.sample_name.as_str()), ("131N", "pool"));
+/// assert_eq!((c.plex_id, c.fraction, c.biological_replicate), (1, 1, 1));   // 1-based
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// Declare no plex source and mzLib refuses rather than guess one:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// # use mzlib::sdrf::{isobaric_design_with, IsobaricDesignOptions};
+/// let refused = isobaric_design_with(
+///     "PXD008841.subset.sdrf.tsv",
+///     &IsobaricDesignOptions { kit: Some("TMT10".into()), ..Default::default() },
+/// )?;
+/// assert_eq!((refused.is_valid, refused.record_count), (false, 0));
+/// assert!(refused.refusals[0].starts_with("No plex source was declared."));
+/// assert!(refused.channels()?.is_empty());
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/sdrf.isobaric-design.see-also.md")]
+pub fn isobaric_design_with(
+    path: impl AsRef<Path>,
+    options: &IsobaricDesignOptions,
+) -> Result<SdrfIsobaricDesign> {
+    let (args, stdin) = isobaric_design_request(path.as_ref(), options)?;
+    bridge::require_verb("sdrf isobaric-design", ISOBARIC_RESTRICT_SINCE)?;
+    call(&args, stdin.as_deref(), options.timeout)
+}
+
+// ---- restrict (mzLib 1.0.595) -------------------------------------------------------------------
+
+/// The column [`restrict_with`] writes each kept row's searched file name into, directly after
+/// `comment[data file]`.
+pub const SEARCHED_DATA_FILE_COLUMN: &str = "comment[searched data file]";
+
+/// One file a search read, for [`restrict_with`]: its name, and the acquired file it came from
+/// when you know it.
+///
+/// Build one from a path or name (`"X-calib.mzML".into()`), or with [`Self::acquired_from`] when
+/// you know the acquisition, as MetaMorpheus does from an mzML's own `sourceFile`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchedFile {
+    /// The file the search read, as a path or a bare name.
+    pub searched: PathBuf,
+    /// The acquired file it came from, when you know it. It overrides mzLib's suffix rule for this
+    /// file. `None` (what `From` gives) leaves the join to the rule.
+    pub acquired: Option<PathBuf>,
+}
+
+impl SearchedFile {
+    /// A searched file whose acquired file you know.
+    pub fn acquired_from(searched: impl Into<PathBuf>, acquired: impl Into<PathBuf>) -> Self {
+        Self {
+            searched: searched.into(),
+            acquired: Some(acquired.into()),
+        }
+    }
+}
+
+impl From<&str> for SearchedFile {
+    fn from(searched: &str) -> Self {
+        Self {
+            searched: searched.into(),
+            acquired: None,
+        }
+    }
+}
+
+impl From<String> for SearchedFile {
+    fn from(searched: String) -> Self {
+        Self {
+            searched: searched.into(),
+            acquired: None,
+        }
+    }
+}
+
+impl From<PathBuf> for SearchedFile {
+    fn from(searched: PathBuf) -> Self {
+        Self {
+            searched,
+            acquired: None,
+        }
+    }
+}
+
+impl From<&Path> for SearchedFile {
+    fn from(searched: &Path) -> Self {
+        Self {
+            searched: searched.to_path_buf(),
+            acquired: None,
+        }
+    }
+}
+
+/// How much of a restricted document to return, and where to write the whole of it. Every
+/// default is mzLib's.
+#[derive(Debug, Clone)]
+pub struct RestrictOptions {
+    /// Return at most this many restricted rows. `None` (the default) returns every row.
+    pub limit: Option<u64>,
+    /// Skip this many restricted rows in the payload. The file [`Self::out`] writes is never
+    /// windowed.
+    pub offset: u64,
+    /// Also write the **whole** restricted document here as SDRF, whatever the limit and offset
+    /// are, with CRLF line endings. Must end in `.tsv`, checked by the bridge before the SDRF is
+    /// read; a missing folder is created. **Name it `.sdrf.tsv`**: mzLib adds `.sdrf.tsv` to a
+    /// name that does not already end in it, so `searched.tsv` is written as
+    /// `searched.tsv.sdrf.tsv`. [`RestrictedSdrf::written`] names the file written.
+    pub out: Option<PathBuf>,
+    /// The longest the call may take. `None` waits indefinitely. Defaults to 60 seconds.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for RestrictOptions {
+    fn default() -> Self {
+        Self {
+            limit: None,
+            offset: 0,
+            out: None,
+            timeout: Some(DEFAULT_TIMEOUT),
+        }
+    }
+}
+
+/// An SDRF restricted to the files one search read, and what the restriction could not place:
+/// what [`restrict_with`] returns.
+///
+/// [`Self::document`] is the **restricted** document, with every [`SdrfDocument`] accessor: the
+/// input's rows for the acquisitions the search read, carried cell for cell, with
+/// [`SEARCHED_DATA_FILE_COLUMN`] added directly after `comment[data file]`. A kept row shorter
+/// than the header is padded with empty cells, so unlike [`read`] the rows are never ragged.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RestrictedSdrf {
+    /// The restricted document. Its `path` is the SDRF that was restricted, as given; its
+    /// `row_count` counts the rows kept, before the window.
+    #[serde(flatten)]
+    pub document: SdrfDocument,
+    /// The searched files as sent, in order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub searched_files: Vec<String>,
+    /// How many searched files you named an acquired file for, in files. `0` when none was, and
+    /// mzLib was then given no map.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub acquired_name_count: u64,
+    /// Data rows in the SDRF before the restriction, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub input_row_count: u64,
+    /// Searched files (file names) the SDRF has no row for. Reported, never invented.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub searched_without_row: Vec<String>,
+    /// Acquired files the SDRF describes that this search did not read, in row order. A row
+    /// naming no file is dropped too, and not listed.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub dropped_data_files: Vec<String>,
+    /// Acquisitions two or more searched files claimed, as `"stem: searched, searched"`. The first
+    /// in name order kept the rows; the others have none and are not in
+    /// [`Self::searched_without_row`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub ambiguous: Vec<String>,
+    /// Searched files whose rows name two or more **different** acquired files (one run listed as
+    /// `X.raw` and `X.mzML`), as `"searched: acquired, acquired"`. Every such row is kept, so the
+    /// document can describe one run twice.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub shared_stem: Vec<String>,
+    /// Where the whole restricted document was written, or `None` if [`RestrictOptions::out`] was
+    /// not set.
+    #[serde(default)]
+    pub written: Option<WrittenSdrf>,
+}
+
+impl RestrictedSdrf {
+    /// The searched file each returned row was joined to: its name, no folder.
+    pub fn searched_data_files(&self) -> Vec<Option<&str>> {
+        self.document.value(SEARCHED_DATA_FILE_COLUMN)
+    }
+}
+
+/// The arguments and stdin of a `sdrf restrict` call, validated before anything is spawned.
+///
+/// One stdin line per searched file: `searched`, or `searched<TAB>acquired` where an acquired file
+/// is named.
+fn restrict_request(
+    path: &Path,
+    searched_files: &[SearchedFile],
+    options: &RestrictOptions,
+) -> Result<(Vec<String>, String)> {
+    if searched_files.is_empty() {
+        return Err(MzLibError::Usage(
+            "restrict needs at least one searched file.".to_owned(),
+        ));
+    }
+    let mut lines = Vec::with_capacity(searched_files.len());
+    for (index, file) in searched_files.iter().enumerate() {
+        let searched = path_text(&file.searched, "searched file")?;
+        if searched.is_empty() {
+            return Err(MzLibError::Usage(format!(
+                "Searched file {index} is blank; every searched file must be a path or a name."
+            )));
+        }
+        let mut fields = vec![searched];
+        if let Some(acquired) = &file.acquired {
+            let acquired = path_text(acquired, "acquired file")?;
+            if acquired.is_empty() {
+                return Err(MzLibError::Usage(format!(
+                    "The acquired file for '{searched}' is blank; give a name, or None."
+                )));
+            }
+            fields.push(acquired);
+        }
+        if let Some(bad) = fields.iter().find(|text| text.contains(['\t', '\n', '\r'])) {
+            return Err(MzLibError::Usage(format!(
+                "A searched or acquired file contains a tab or newline, which the wire uses to \
+                 separate them: {bad:?}."
+            )));
+        }
+        lines.push(fields.join("\t"));
+    }
+
+    let mut args = one_path_args("restrict", path)?;
+    window_args(
+        &mut args,
+        &ReadOptions {
+            limit: options.limit,
+            offset: options.offset,
+            timeout: None,
+        },
+    );
+    if let Some(out) = &options.out {
+        let out = path_text(out, "out path")?;
+        if out.is_empty() {
+            return Err(MzLibError::Usage(
+                "out must be a file path ending in .tsv, e.g. 'searched.sdrf.tsv'.".to_owned(),
+            ));
+        }
+        args.push("--out".to_owned());
+        args.push(out.to_owned());
+    }
+    Ok((args, lines.join("\n") + "\n"))
+}
+
+/// Restrict an SDRF to the files one search read, with every default.
+///
+/// See [`restrict_with`] for the reference.
+///
+/// # Errors
+///
+/// As [`restrict_with`].
+pub fn restrict(path: impl AsRef<Path>, searched_files: &[SearchedFile]) -> Result<RestrictedSdrf> {
+    restrict_with(path, searched_files, &RestrictOptions::default())
+}
+
+/// Restrict an SDRF to the files one search read, joining each searched file to the row of its
+/// acquisition, and report what the join could not place.
+///
+/// Calls mzLib's `SdrfSearchScope.Restrict` (mzLib #1451). A search reads `X-calib.mzML` while the
+/// SDRF names the acquired `X.raw`; mzLib joins them **by stem**, ignoring case, after removing
+/// the derivative suffixes MetaMorpheus writes (`-calib`, `-averaged`, in any order and number).
+/// Each kept row is carried cell for cell, with the searched file's name in a new
+/// [`SEARCHED_DATA_FILE_COLUMN`]; nothing is renumbered. A [`SearchedFile::acquired`] you name
+/// overrides the suffix rule for that file.
+///
+/// **Restrict first, then read a design.** [`design_with`] and [`isobaric_design_with`] match
+/// `searched_files` by exact name, and key on `comment[searched data file]` when a document has
+/// it, so a restricted document joins the search's own file names. The
+/// [module guide](crate::sdrf#restrict-an-sdrf-to-one-searchs-files) shows both steps.
+#[doc = include_str!("../docs/reference/sdrf.restrict.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for a blank path, no searched file, a blank
+/// searched or acquired file, one holding a tab or line break, or a blank `out`; and when the
+/// bridge in use is older than pyMzLib 0.6.0's, which has no `sdrf restrict`.
+///
+/// # Examples
+///
+/// Two calibrated runs, the raw file of one of them as well, a renamed file whose acquisition you
+/// know, and one the SDRF does not describe:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::sdrf::{restrict_with, RestrictOptions, SearchedFile};
+///
+/// let pool1 = "HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr0";
+/// let pool5 = "HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr0";
+/// let searched = [
+///     SearchedFile::from(format!(r"D:\search\{pool1}1-calib.mzML")),
+///     SearchedFile::from(format!("{pool1}2-calib.mzML")),
+///     SearchedFile::from(format!("{pool1}2.raw")),
+///     SearchedFile::acquired_from("sample_A.mzML", format!("{pool5}1.raw")),
+///     SearchedFile::from("not_in_sdrf.mzML"),
+/// ];
+/// let scoped = restrict_with(
+///     "PXD008841.subset.sdrf.tsv",
+///     &searched,
+///     &RestrictOptions { limit: Some(2), ..Default::default() },
+/// )?;
+/// let doc = &scoped.document;
+/// assert_eq!((scoped.input_row_count, doc.row_count, doc.returned_count), (40, 30, 2));
+/// let first = format!("{pool1}1-calib.mzML");
+/// assert_eq!(scoped.searched_data_files(), [Some(first.as_str()); 2]);   // the name, no folder
+/// assert_eq!(scoped.searched_without_row, ["not_in_sdrf.mzML"]);
+/// assert_eq!(scoped.dropped_data_files, [format!("{pool5}2.raw")]);
+/// assert_eq!(
+///     scoped.ambiguous,
+///     [format!("{pool1}2: {pool1}2-calib.mzML, {pool1}2.raw")]
+/// );
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/sdrf.restrict.see-also.md")]
+pub fn restrict_with(
+    path: impl AsRef<Path>,
+    searched_files: &[SearchedFile],
+    options: &RestrictOptions,
+) -> Result<RestrictedSdrf> {
+    let (args, stdin) = restrict_request(path.as_ref(), searched_files, options)?;
+    bridge::require_verb("sdrf restrict", ISOBARIC_RESTRICT_SINCE)?;
+    call(&args, Some(&stdin), options.timeout)
 }
 
 fn protocol(error: serde_json::Error) -> MzLibError {
@@ -2850,5 +3866,494 @@ mod tests {
         assert!(design_request(Path::new("a.sdrf.tsv"), &empty_out).is_err());
         assert!(design_request(Path::new(""), &DesignOptions::default()).is_err());
         assert_eq!(DesignOptions::default().timeout, Some(DEFAULT_TIMEOUT));
+    }
+
+    // ---- isobaric design (mzLib #1380) ----------------------------------------------------------
+
+    const POOL_PATTERN: &str = r"TMT_?pool(?<plex>\d+)";
+    const BATCH: &str = "comment[sample preparation batch]";
+
+    /// A recording in tests/fixtures/, read at run time: the isobaric and restrict ones are large.
+    fn recorded_file<T: serde::de::DeserializeOwned>(name: &str) -> T {
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join(name),
+        )
+        .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn isobaric(name: &str) -> SdrfIsobaricDesign {
+        recorded_file(name)
+    }
+
+    fn tmt10(pattern: Option<&str>) -> IsobaricDesignOptions {
+        IsobaricDesignOptions {
+            kit: Some("TMT10".to_owned()),
+            plex_file_name_pattern: pattern.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_valid_isobaric_design_projects_every_annotated_channel() {
+        let (args, stdin) = isobaric_design_request(
+            Path::new("PXD008841.subset.sdrf.tsv"),
+            &tmt10(Some(POOL_PATTERN)),
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "sdrf",
+                "isobaric-design",
+                "--path",
+                "PXD008841.subset.sdrf.tsv",
+                "--kit",
+                "TMT10",
+                "--plex-file-name-pattern",
+                POOL_PATTERN
+            ]
+        );
+        assert_eq!(stdin, None);
+
+        let d = isobaric("sdrf_isobaric_design_PXD008841.json");
+        assert!(d.is_valid && d.refusals.is_empty() && d.notes.is_empty());
+        assert_eq!(d.kit.as_deref(), Some("TMT10"));
+        assert_eq!(d.kit_type.as_deref(), Some("TMT10"));
+        assert_eq!(d.kit_channels.as_ref().map(Vec::len), Some(10));
+        assert_eq!(d.plex_file_name_pattern.as_deref(), Some(POOL_PATTERN));
+        assert_eq!(
+            (d.plex_column.as_deref(), d.single_plex.as_deref()),
+            (None, None)
+        );
+        assert_eq!(
+            d.plex_ids,
+            BTreeMap::from([("1".to_owned(), 1), ("5".to_owned(), 2)])
+        );
+        assert_eq!((d.plex_count, d.file_count, d.record_count), (2, 4, 40));
+        assert_eq!(d.channels().unwrap().len(), 40);
+        assert_eq!(d.file_key_column.as_deref(), Some("comment[data file]"));
+        assert_eq!(d.condition_columns, ["factor value[disease]"]);
+        assert!(!d.condition_columns_declared && !d.searched_files_given);
+        assert_eq!(d.written, None);
+        assert_eq!(
+            d.columns.names(),
+            [
+                "full_path",
+                "plex",
+                "plex_id",
+                "sample_name",
+                "channel",
+                "condition",
+                "biological_replicate",
+                "fraction",
+                "technical_replicate"
+            ]
+        );
+        assert_eq!(d.caveats.len(), 8);
+        assert!(d.caveats[0].starts_with("1-BASED"));
+        assert!(d.report.contains("4 file(s), 2 plex(es), kit TMT10"));
+    }
+
+    #[test]
+    fn the_isobaric_numbers_stay_one_based() {
+        let d = isobaric("sdrf_isobaric_design_PXD008841.json");
+        let channels = d.channels().unwrap();
+        let set = |f: fn(&DesignedChannel) -> u32| -> std::collections::BTreeSet<u32> {
+            channels.iter().map(f).collect()
+        };
+        assert_eq!(set(|c| c.fraction), [1, 2].into());
+        assert_eq!(set(|c| c.technical_replicate), [1].into());
+        assert_eq!(set(|c| c.biological_replicate), [1].into());
+        assert_eq!(set(|c| c.plex_id), [1, 2].into());
+        let first_file: Vec<&DesignedChannel> = channels
+            .iter()
+            .filter(|c| c.full_path == channels[0].full_path)
+            .collect();
+        let order: Vec<&str> = first_file.iter().map(|c| c.channel.as_str()).collect();
+        assert_eq!(
+            Some(order),
+            d.kit_channels
+                .as_ref()
+                .map(|k| k.iter().map(String::as_str).collect()),
+            "reporter m/z order"
+        );
+        assert_eq!(first_file.last().unwrap().sample_name, "pool");
+    }
+
+    #[test]
+    fn an_isobaric_refusal_is_a_result() {
+        let (args, _) =
+            isobaric_design_request(Path::new("PXD008841.subset.sdrf.tsv"), &tmt10(None)).unwrap();
+        assert_eq!(
+            args,
+            [
+                "sdrf",
+                "isobaric-design",
+                "--path",
+                "PXD008841.subset.sdrf.tsv",
+                "--kit",
+                "TMT10"
+            ]
+        );
+        let d = isobaric("sdrf_isobaric_design_PXD008841_noplex.json");
+        assert!(!d.is_valid);
+        assert!(d.refusals[0].starts_with("No plex source was declared"));
+        assert_eq!(d.plex_source, "(not declared)");
+        assert_eq!((d.file_count, d.record_count), (0, 0));
+        assert!(d.channels().unwrap().is_empty() && d.plex_ids.is_empty());
+    }
+
+    #[test]
+    fn a_declared_batch_column_gives_three_plexes() {
+        let options = IsobaricDesignOptions {
+            kit: Some("TMT18".to_owned()),
+            plex_column: Some(BATCH.to_owned()),
+            ..Default::default()
+        };
+        let (args, _) =
+            isobaric_design_request(Path::new("PXD061609.subset.sdrf.tsv"), &options).unwrap();
+        assert_eq!(args[4..], ["--kit", "TMT18", "--plex-column", BATCH]);
+        let d = isobaric("sdrf_isobaric_design_PXD061609.json");
+        assert!(d.is_valid);
+        assert_eq!(
+            d.plex_ids,
+            BTreeMap::from([
+                ("HighSalt".to_owned(), 1),
+                ("LowSalt".to_owned(), 2),
+                ("NoSAX".to_owned(), 3)
+            ])
+        );
+        assert_eq!(d.record_count, 108);
+        assert_eq!(d.kit_channels.map(|k| k.len()), Some(18));
+    }
+
+    #[test]
+    fn one_plex_over_three_arms_is_refused_every_reason_at_once() {
+        let d = isobaric("sdrf_isobaric_design_PXD061609_oneplex.json");
+        assert!(!d.is_valid);
+        assert_eq!(d.single_plex.as_deref(), Some("tube1"));
+        assert_eq!(d.refusals.len(), 36);
+        assert!(d.refusals.iter().all(|r| r.contains("more than once")));
+    }
+
+    #[test]
+    fn isobaric_condition_columns_and_searched_files_cross_as_design_sends_them() {
+        let options = IsobaricDesignOptions {
+            condition_columns: vec!["factor value[disease]".to_owned()],
+            searched_files: Some(vec![
+                PathBuf::from("/data/a-calib.mzML"),
+                PathBuf::from("b-calib.mzML"),
+            ]),
+            out: Some(PathBuf::from("design")),
+            ..tmt10(Some(POOL_PATTERN))
+        };
+        let (args, stdin) =
+            isobaric_design_request(Path::new("PXD008841_searched.sdrf.tsv"), &options).unwrap();
+        assert_eq!(
+            args[args.len() - 5..],
+            [
+                "--condition-columns",
+                "factor value[disease]",
+                "--searched-files-stdin",
+                "--out",
+                "design"
+            ]
+        );
+        assert_eq!(stdin.as_deref(), Some("/data/a-calib.mzML\nb-calib.mzML\n"));
+    }
+
+    #[test]
+    fn a_restricted_document_keys_on_the_searched_name() {
+        let d = isobaric("sdrf_isobaric_design_searched.json");
+        assert_eq!(
+            d.file_key_column.as_deref(),
+            Some(SEARCHED_DATA_FILE_COLUMN)
+        );
+        assert!(d.searched_files_given);
+        let paths: std::collections::BTreeSet<String> = d
+            .channels()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.full_path)
+            .collect();
+        // Recorded on Windows: compared as text, never split on a separator.
+        let expected: std::collections::BTreeSet<String> = [
+            r"D:\search\HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr01-calib.mzML",
+            r"D:\search\HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr02-calib.mzML",
+            r"D:\search\HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr01-calib.mzML",
+            r"D:\search\HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr02-calib.mzML",
+        ]
+        .map(str::to_owned)
+        .into();
+        assert_eq!(paths, expected);
+        let written = d.written.unwrap();
+        assert_eq!((written.file_count, written.record_count), (4, 40));
+        assert!(written.path.ends_with("TmtDesign.txt"));
+    }
+
+    #[test]
+    fn no_isobaric_option_is_sent_unless_given() {
+        let (args, stdin) = isobaric_design_request(
+            Path::new("PXD008841.subset.sdrf.tsv"),
+            &IsobaricDesignOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "sdrf",
+                "isobaric-design",
+                "--path",
+                "PXD008841.subset.sdrf.tsv"
+            ]
+        );
+        assert_eq!(stdin, None);
+        assert_eq!(
+            IsobaricDesignOptions::default().timeout,
+            Some(DEFAULT_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn bad_isobaric_arguments_are_refused_before_the_bridge() {
+        let cases: Vec<(IsobaricDesignOptions, &str)> = vec![
+            (
+                IsobaricDesignOptions {
+                    kit: Some(String::new()),
+                    ..Default::default()
+                },
+                "kit must be non-blank",
+            ),
+            (
+                IsobaricDesignOptions {
+                    plex_column: Some("  ".to_owned()),
+                    ..Default::default()
+                },
+                "plex_column must be non-blank",
+            ),
+            (
+                IsobaricDesignOptions {
+                    plex_file_name_pattern: Some("a\nb".to_owned()),
+                    ..Default::default()
+                },
+                "line break",
+            ),
+            (
+                IsobaricDesignOptions {
+                    single_plex: Some(String::new()),
+                    ..Default::default()
+                },
+                "single_plex must be non-blank",
+            ),
+            (
+                IsobaricDesignOptions {
+                    condition_columns: vec![" ".to_owned()],
+                    ..Default::default()
+                },
+                "blank",
+            ),
+            (
+                IsobaricDesignOptions {
+                    searched_files: Some(vec![PathBuf::from("")]),
+                    ..Default::default()
+                },
+                "blank",
+            ),
+            (
+                IsobaricDesignOptions {
+                    out: Some(PathBuf::from("")),
+                    ..Default::default()
+                },
+                "out must name a folder",
+            ),
+        ];
+        for (options, message) in cases {
+            let error = isobaric_design_request(Path::new("a.sdrf.tsv"), &options).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains(message)),
+                "{message}: {error:?}"
+            );
+        }
+        assert!(isobaric_design_request(Path::new(""), &tmt10(None)).is_err());
+    }
+
+    // ---- restrict (mzLib #1451) -----------------------------------------------------------------
+
+    const POOL1: &str = "HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr0";
+    const POOL5: &str = "HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr0";
+
+    fn messy() -> Vec<SearchedFile> {
+        vec![
+            SearchedFile::from(format!(r"D:\search\{POOL1}1-calib.mzML")),
+            SearchedFile::from(format!("{POOL1}2-calib.mzML")),
+            SearchedFile::from(format!("{POOL1}2.raw")),
+            SearchedFile::acquired_from("sample_A.mzML", format!("{POOL5}1.raw")),
+            SearchedFile::from("not_in_sdrf.mzML"),
+        ]
+    }
+
+    fn restricted(name: &str) -> RestrictedSdrf {
+        recorded_file(name)
+    }
+
+    #[test]
+    fn restrict_sends_an_acquired_name_only_where_one_is_given() {
+        let options = RestrictOptions {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let (args, stdin) =
+            restrict_request(Path::new("PXD008841.subset.sdrf.tsv"), &messy(), &options).unwrap();
+        assert_eq!(
+            args,
+            [
+                "sdrf",
+                "restrict",
+                "--path",
+                "PXD008841.subset.sdrf.tsv",
+                "--limit",
+                "2"
+            ]
+        );
+        assert_eq!(
+            stdin,
+            format!(
+                "D:\\search\\{POOL1}1-calib.mzML\n{POOL1}2-calib.mzML\n{POOL1}2.raw\n\
+                 sample_A.mzML\t{POOL5}1.raw\nnot_in_sdrf.mzML\n"
+            )
+        );
+        let scoped = restricted("sdrf_restrict_PXD008841.json");
+        let sent: Vec<String> = messy()
+            .into_iter()
+            .map(|f| f.searched.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(scoped.searched_files, sent);
+        assert_eq!(scoped.acquired_name_count, 1);
+    }
+
+    #[test]
+    fn the_restrict_reports_are_mzlibs() {
+        let scoped = restricted("sdrf_restrict_PXD008841.json");
+        let doc = &scoped.document;
+        assert_eq!((scoped.input_row_count, doc.row_count), (40, 30));
+        assert_eq!(
+            (doc.returned_count, doc.truncated, doc.offset),
+            (2, true, 0)
+        );
+        assert_eq!(scoped.searched_without_row, ["not_in_sdrf.mzML"]);
+        assert_eq!(scoped.dropped_data_files, [format!("{POOL5}2.raw")]);
+        assert_eq!(
+            scoped.ambiguous,
+            [format!("{POOL1}2: {POOL1}2-calib.mzML, {POOL1}2.raw")]
+        );
+        assert!(scoped.shared_stem.is_empty());
+        assert_eq!(scoped.written, None);
+        assert_eq!(doc.caveats.len(), 6);
+    }
+
+    #[test]
+    fn the_restricted_document_is_an_sdrf_document() {
+        let scoped = restricted("sdrf_restrict_PXD008841.json");
+        let doc = &scoped.document;
+        let data_file = doc.index_of("comment[data file]").unwrap();
+        assert_eq!(doc.columns[data_file + 1], SEARCHED_DATA_FILE_COLUMN);
+        let raw = format!("{POOL1}1.raw");
+        assert_eq!(doc.value("comment[data file]"), [Some(raw.as_str()); 2]);
+        let calib = format!("{POOL1}1-calib.mzML");
+        assert_eq!(
+            scoped.searched_data_files(),
+            [Some(calib.as_str()); 2],
+            "the name, no folder"
+        );
+        assert_eq!(doc.ragged_row_count(), 0, "mzLib pads a short row");
+    }
+
+    #[test]
+    fn restrict_sends_one_name_per_line_and_passes_out_through() {
+        let clean: Vec<SearchedFile> = [POOL1, POOL5]
+            .iter()
+            .flat_map(|p| {
+                (1..=2).map(move |i| SearchedFile::from(format!(r"D:\search\{p}{i}-calib.mzML")))
+            })
+            .collect();
+        let options = RestrictOptions {
+            limit: Some(2),
+            out: Some(PathBuf::from("PXD008841_searched.sdrf.tsv")),
+            ..Default::default()
+        };
+        let (args, stdin) =
+            restrict_request(Path::new("PXD008841.subset.sdrf.tsv"), &clean, &options).unwrap();
+        assert_eq!(
+            args[args.len() - 4..],
+            ["--limit", "2", "--out", "PXD008841_searched.sdrf.tsv"]
+        );
+        assert_eq!(stdin.lines().count(), 4);
+        assert!(
+            !stdin.contains('\t'),
+            "no acquired name is sent unless one is given"
+        );
+
+        let scoped = restricted("sdrf_restrict_PXD008841_out.json");
+        assert_eq!(
+            scoped.written,
+            Some(WrittenSdrf {
+                path: "PXD008841_searched.sdrf.tsv".to_owned(),
+                row_count: 40
+            })
+        );
+        assert_eq!(
+            (scoped.document.row_count, scoped.document.returned_count),
+            (40, 2)
+        );
+    }
+
+    #[test]
+    fn bad_searched_files_are_refused_before_the_bridge() {
+        let path = Path::new("PXD008841.subset.sdrf.tsv");
+        let options = RestrictOptions::default();
+        let cases: Vec<(Vec<SearchedFile>, &str)> = vec![
+            (Vec::new(), "at least one searched file"),
+            (vec![SearchedFile::from("")], "blank"),
+            (vec![SearchedFile::from("a\tb")], "tab or newline"),
+            (
+                vec![SearchedFile::acquired_from("a.mzML", "")],
+                "acquired file for 'a.mzML'",
+            ),
+            (
+                vec![SearchedFile::acquired_from("a.mzML", "b\n.raw")],
+                "tab or newline",
+            ),
+        ];
+        for (files, message) in cases {
+            let error = restrict_request(path, &files, &options).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains(message)),
+                "{message}: {error:?}"
+            );
+        }
+        let blank_out = RestrictOptions {
+            out: Some(PathBuf::from(" ")),
+            ..Default::default()
+        };
+        let error = restrict_request(path, &messy(), &blank_out).unwrap_err();
+        assert!(error.to_string().contains("ending in .tsv"));
+        assert!(restrict_request(Path::new(""), &messy(), &options).is_err());
+        assert_eq!(RestrictOptions::default().timeout, Some(DEFAULT_TIMEOUT));
+    }
+
+    // ---- pool --out names the file mzLib wrote ----------------------------------------------------
+
+    #[test]
+    fn written_sdrf_reads_the_path_mzlib_reports() {
+        // pyMzLib 0.6.0's bridge reports the file mzLib wrote, which is x.tsv.sdrf.tsv for an out of
+        // x.tsv; this crate passes it through, whatever it is.
+        let written: WrittenSdrf =
+            serde_json::from_str(r#"{"path": "merged.tsv.sdrf.tsv", "row_count": 24}"#).unwrap();
+        assert_eq!(written.path, "merged.tsv.sdrf.tsv");
+        assert_eq!(written.row_count, 24);
     }
 }

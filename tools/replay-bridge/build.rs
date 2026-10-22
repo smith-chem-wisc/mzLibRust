@@ -259,12 +259,25 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
         _ => Vec::new(),
     };
 
-    // The sequences a `peptidoform convert` recording was made from (stub.rs STDIN_ECHO).
-    let inputs: Vec<&str> = match map.get("columns").and_then(|c| c.get("input")) {
-        Some(Value::Array(rows)) if map.contains_key("source_format") => {
-            rows.iter().filter_map(Value::as_str).collect()
+    // The input a STDIN_ECHO verb's recording was made from, one entry per stdin line (stub.rs):
+    // the sequences of a `peptidoform convert` recording, and the searched files of an
+    // `sdrf restrict` one (its `searched_files`, as sent).
+    let strings = |value: Option<&Value>| -> Vec<String> {
+        match value {
+            Some(Value::Array(rows)) => rows
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
         }
-        _ => Vec::new(),
+    };
+    let inputs: Vec<String> = if map.contains_key("source_format") {
+        strings(map.get("columns").and_then(|c| c.get("input")))
+    } else if map.contains_key("searched_without_row") {
+        strings(map.get("searched_files"))
+    } else {
+        Vec::new()
     };
 
     format!(

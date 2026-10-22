@@ -17,8 +17,10 @@
 //!   under another name (`ECHOED_AS`), must name the recording's file;
 //! * a `proteins read` recording made with an accession filter answers only a filtered call, and
 //!   the reverse; a recording for one isobaric `kit` answers only a call that names a kit;
-//! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs, and
-//!   for `peptidoform convert` the sequences sent must be the recording's `input` column, in order;
+//! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs, for
+//!   `peptidoform convert` the sequences sent must be the recording's `input` column, in order, and
+//!   for `sdrf restrict` the searched files must be its `searched_files`, in order, with as many
+//!   acquired names as its `acquired_name_count`;
 //! * a recording listed in `RECORDED_WITH` fits only a call that sends the options it was made with.
 //!
 //! No match, or more than one, is answered as a usage error naming the candidates, so the doctest
@@ -41,7 +43,8 @@ struct Recording {
     bulk: bool,
     /// The file names of the recording's `spectra_files[].full_path`, for `STDIN_ECHO` verbs.
     runs: &'static [&'static str],
-    /// The recording's `input` column, for `peptidoform convert` (`STDIN_ECHO`).
+    /// What a `STDIN_ECHO` recording was made from, one entry per stdin line: the `input` column
+    /// of `peptidoform convert`, the `searched_files` of `sdrf restrict`.
     inputs: &'static [&'static str],
     /// (record_count or row_count, returned_count, offset) when the recording has a window.
     window: Option<(u64, u64, u64)>,
@@ -116,6 +119,7 @@ const STDIN_ECHO: &[&str] = &[
     "stats fit-mixed",
     "diff design",
     "diff observations",
+    "sdrf restrict",
 ];
 
 /// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
@@ -439,6 +443,33 @@ fn describe(options: &[(String, Option<String>)]) -> String {
 fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<String> {
     if let Some(why) = model_stdin_mismatch(recording, stdin, verb) {
         return why;
+    }
+    // sdrf restrict: the same searched files, in the same order, as the recording's
+    // searched_files, and as many acquired names as its acquired_name_count.
+    if verb == "sdrf restrict" {
+        let lines: Vec<Vec<&str>> = stdin
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.split('\t').collect())
+            .collect();
+        let sent: Vec<&str> = lines.iter().map(|fields| fields[0].trim()).collect();
+        if sent != recording.inputs {
+            return Some(format!(
+                "recorded for searched files {:?}, not {sent:?}",
+                recording.inputs
+            ));
+        }
+        let acquired = lines
+            .iter()
+            .filter(|fields| fields.len() > 1 && !fields[1].trim().is_empty())
+            .count();
+        let recorded = recording.get("acquired_name_count").map(python_str);
+        return (recorded.as_deref() != Some(acquired.to_string().as_str())).then(|| {
+            format!(
+                "recorded with {} acquired names, not {acquired}",
+                recorded.unwrap_or_default()
+            )
+        });
     }
     if verb == "peptidoform convert" {
         let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();

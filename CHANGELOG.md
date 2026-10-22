@@ -122,6 +122,26 @@ A wire verb's first appearance here is the version its spec in the bridge record
   PRIDE's checksums*: the check itself (size, then MD5, with the `md-5` crate, now a
   dev-dependency), what the list covers (not `generated/`, files the manifest omits, non-deposits)
   and its two traps. The tests' `spec_docs` lint reads a map return as a list of its values.
+- **`sdrf::isobaric_design_with`: the isobaric (TMT, TMTpro, iTRAQ, DiLeu) design an SDRF
+  describes, or every reason it cannot** (`sdrf isobaric-design`, mzLib #1380; spec
+  `sdrf.isobaric-design.yaml`). `SdrfIsobaricDesign` holds one row per file and annotated channel,
+  `channels()` gives them as `DesignedChannel`, and **every number is 1-based**, as the SDRF and
+  `TmtDesign.txt` write them, where `design_with`'s are 0-based: the split is mzLib's, and neither
+  is converted. Nothing is guessed: `IsobaricDesignOptions::kit` and exactly one of `plex_column`,
+  `plex_file_name_pattern` and `single_plex` must be given, and a missing one is mzLib's refusal,
+  a result, not an error. `out` names a folder, where mzLib writes MetaMorpheus's `TmtDesign.txt`.
+- **`sdrf::restrict_with`, `sdrf::restrict`: an SDRF cut to the files one search read** (`sdrf
+  restrict`, mzLib #1451; spec `sdrf.restrict.yaml`). mzLib joins `X-calib.mzML` to the row naming
+  `X.raw` by stem; a `SearchedFile::acquired_from` overrides the rule for one file.
+  `RestrictedSdrf` is the restricted `SdrfDocument` with `comment[searched data file]`
+  (`SEARCHED_DATA_FILE_COLUMN`) after `comment[data file]`, and mzLib's four reports:
+  `searched_without_row`, `dropped_data_files`, `ambiguous`, `shared_stem`. Restrict first, then
+  read a design: both design readers key on the searched name. The `sdrf` guide gains *Read an
+  isobaric (TMT) design* and *Restrict an SDRF to one search's files*, every example replayed from
+  pyMzLib's recordings over mzLib's own PXD008841 and PXD061609 subsets (copied byte for byte), and
+  the SDRF-B5 trap: mzLib's design readers split a path on the running platform's separator only,
+  so the live tests build native paths. The replay bridge holds a `sdrf restrict` call to the
+  recording made from the same searched files, as pyMzLib's does.
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.
@@ -301,6 +321,11 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Changed
 
+- **`sdrf::pool_with(.., PoolOptions { out, .. })` reports the file mzLib wrote** (the pyMzLib
+  0.6.0 bridge). mzLib adds `.sdrf.tsv` to a name that does not already end in it, so an `out` of
+  `x.tsv` writes `x.tsv.sdrf.tsv`; `WrittenSdrf::path` said `x.tsv`, a file that does not exist,
+  and now says `x.tsv.sdrf.tsv`. The file written is the same. `PoolOptions::out` and
+  `WrittenSdrf::path` say so, and `docs/upgrading.md` has the entry.
 - **PRIDE's metadata calls add no timeout of their own** (pyMzLib #87). `pride::list_files` and
   `pride::search` defaulted, through `ListOptions::default()` and `SearchOptions::default()`, to a
   300 s timeout, and `pride::list_ftp_files` passed one, which turned a PRIDE outage that hangs into
