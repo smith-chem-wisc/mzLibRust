@@ -108,6 +108,14 @@ let db = mzlib::proteins::read(&["human.xml"])?;
 println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
 let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bovine.fasta"])?;
 
+// Where is canonical residue 82 in the isoform? And what entry, isoform and variants is this?
+let aln = mzlib::proteins::align(&canonical, &isoform)?;
+println!("{:?}", aln.map_source_to_target(82)?);                          // Some(76), or None at a gap
+let parsed = mzlib::proteins::parse_accessions(&["P04637-2", "NP_000537.3_R72P"])?;
+
+// Orthologs across species, exactly as Ensembl Compara states them, from every species' dump.
+let snap = mzlib::proteins::build_orthology_with("116", &orthology_options)?;
+
 // Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
 let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
 // Differential abundance with no R — limma's moderated t, held by mzLib to limma itself.

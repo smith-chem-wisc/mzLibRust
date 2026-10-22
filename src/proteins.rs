@@ -8,6 +8,9 @@
 //! | know whether a peptide is unique, shared within a gene, or shared across genes | [`classify_peptides_with`] | `PeptideUniquenessClassifier` |
 //! | annotate MetaMorpheus protein groups with GO terms, every member kept | [`annotate_go_with`] | `GoGroupAnnotator` |
 //! | fetch the current GO release, on purpose | [`update_go`] | `Loaders.UpdateGeneOntology` |
+//! | carry a position to an isoform, an ortholog or a newer release | [`align_with`], [`align`] | `PairwiseAligner` |
+//! | read an accession back into entry, isoform or version, and variants | [`parse_accessions`] | `VariantApplication.ParseAccession` |
+//! | know which genes are orthologous across species, as Compara states it | [`build_orthology_with`] | `OrthologySnapshot` |
 //!
 //! Questions a search result cannot answer on its own, each answered by mzLib from the protein
 //! database you searched.
@@ -116,7 +119,8 @@
 //! [`GoAnnotations::go`] (its sha256) with your results.
 //!
 //! These examples replay the recordings in `tests/fixtures/`, made over the small databases in
-//! `tests/fixtures/proteins/` — the same ones pyMzLib's examples replay.
+//! `tests/fixtures/proteins/` (and, for orthology, mzLib's own three-species test world in
+//! `tests/fixtures/orthology/`) — the same ones pyMzLib's examples replay.
 //!
 //! [`read_with`], [`resolve_genes_with`] and [`classify_peptides_with`] take **one database or
 //! many**. A list is read in one bridge call, in order;
@@ -149,6 +153,516 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
+//! ## Map a residue from one sequence onto another
+//!
+//! **The problem.** A position means something only in the sequence it was counted in. A
+//! phosphosite reported on the canonical isoform, a variant called against last year's UniProt
+//! release, a cysteine you know in the human protein: before you look for it in an isoform, an
+//! ortholog or a newer entry, you need the residue that *corresponds* to it there. Counting the
+//! same number along the other sequence is wrong as soon as there is one insertion or deletion
+//! before it.
+//!
+//! [`align_with`] aligns pairs of sequences with mzLib's `PairwiseAligner` (mzLib #1428) and maps
+//! every residue to its counterpart in the other sequence, or to `None` when it has none. Here the
+//! canonical DYNC1I2 sequence (Q13409) is aligned with its isoforms 2B and 2C, read from the
+//! database with [`ProteinReadOptions::sequences`]:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use std::collections::HashMap;
+//!
+//! use mzlib::proteins::{align_with, read_with, AlignOptions, ProteinReadOptions};
+//!
+//! let db = read_with(
+//!     &["human_extra.fasta"],
+//!     &ProteinReadOptions {
+//!         contaminants: vec!["contaminants.fasta".into()],
+//!         accessions: Some(
+//!             ["Q13409", "Q13409-2", "Q13409-3", "P02768", "P02769"].map(String::from).to_vec(),
+//!         ),
+//!         sequences: true,
+//!         ..Default::default()
+//!     },
+//! )?;
+//! let seq: HashMap<String, String> = db
+//!     .columns
+//!     .strings("accession")?
+//!     .into_iter()
+//!     .zip(db.columns.strings("sequence")?)
+//!     .filter_map(|(accession, sequence)| Some((accession?, sequence?)))
+//!     .collect();
+//!
+//! let isoforms = align_with(
+//!     &[(&seq["Q13409"], &seq["Q13409-2"]), (&seq["Q13409"], &seq["Q13409-3"])],
+//!     &AlignOptions::default(),
+//! )?;
+//! let each = isoforms.alignments()?;
+//! let (two_b, two_c) = (&each[0], &each[1]);
+//! for p in [75, 76, 82, 100, 120, 133] {
+//!     println!("{p} {:?} {:?}", two_b.map_source_to_target(p)?, two_c.map_source_to_target(p)?);
+//! }
+//! //   75 Some(75) Some(75)
+//! //   76 None None
+//! //   82 Some(76) Some(76)
+//! //   100 Some(94) Some(94)
+//! //   120 Some(114) None
+//! //   133 Some(127) Some(107)
+//! assert_eq!(two_b.map_source_to_target(76)?, None);
+//! assert_eq!(two_c.map_source_to_target(133)?, Some(107));
+//!
+//! // Where the gaps fall: '-' wherever a residue faces one (characters 60 to 139 of 2C's rows).
+//! assert_eq!(
+//!     &two_c.aligned_source[60..140],
+//!     "EALLQSMGLTPESPIVFSEYWVPPPMSPSSKSVSTPSEAGSQDSGDGAVGSRTLHWDTDPSVLQLHSDSDLGRGPIKLGM"
+//! );
+//! assert_eq!(
+//!     &two_c.aligned_target[60..140],
+//!     "EALLQSMGLTPESPI------VPPPMSPSSKSVSTPSEAGSQDSGDGAVGSR--------------------RGPIKLGM"
+//! );
+//! assert_eq!((two_b.identical, two_b.substituted, two_b.source_residues_facing_gap), (632, 0, 6));
+//! assert_eq!(isoforms.aligner_id, "global-affine;BLOSUM62;open=11;extend=1;end-gaps=free");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Reading it row by row:
+//!
+//! - **Up to residue 75 the numbers agree.** Both isoforms begin with the same 75 residues.
+//! - **Residues 76 to 81 have no counterpart in either isoform**: `None`, never the nearest
+//!   residue. Both isoforms lack those six residues of the canonical sequence.
+//! - **After the gap the numbers are shifted**: canonical residue 100 is residue 94 of each
+//!   isoform.
+//! - **Isoform 2C lacks 20 more** (canonical 113 to 132), so canonical 120 has no counterpart in
+//!   2C, and canonical 133 is 2C's residue 107.
+//!
+//! [`Alignment::map_target_to_source`] goes the other way. [`Alignment::aligned_source`] and
+//! [`Alignment::aligned_target`] hold `-` wherever a residue faces a gap: print the two one above
+//! the other to see the alignment, as the last asserts above do for isoform 2C.
+//!
+//! **What each number means.** `identical` and
+//! `substituted` count the paired residues that are the same letter and that differ;
+//! `source_residues_facing_gap` and `target_residues_facing_gap` count the residues with no
+//! counterpart. `score` is the alignment's BLOSUM62 score in half-bits (see the traps).
+//! [`Alignments::aligner_id`] names the method and every parameter, so store it beside any
+//! position you map.
+//!
+//! **Orthologs: the counterpart can be a different amino acid.** Across species most residues
+//! still pair, but many pair with a *different* residue. Human serum albumin's free thiol, Cys34
+//! of the mature protein, is residue 58 of the UniProt sequence, which counts the 24-residue
+//! signal peptide and propeptide. In bovine albumin it is a cysteine at 58 too. Residue 26 pairs
+//! as well, but it is A in human and T in bovine albumin:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use std::collections::HashMap;
+//! # use mzlib::proteins::{align_with, read_with, AlignOptions, ProteinReadOptions};
+//! # let db = read_with(
+//! #     &["human_extra.fasta"],
+//! #     &ProteinReadOptions {
+//! #         contaminants: vec!["contaminants.fasta".into()],
+//! #         accessions: Some(
+//! #             ["Q13409", "Q13409-2", "Q13409-3", "P02768", "P02769"].map(String::from).to_vec(),
+//! #         ),
+//! #         sequences: true,
+//! #         ..Default::default()
+//! #     },
+//! # )?;
+//! # let seq: HashMap<String, String> = db.columns.strings("accession")?.into_iter()
+//! #     .zip(db.columns.strings("sequence")?)
+//! #     .filter_map(|(a, s)| Some((a?, s?))).collect();
+//! let albumin = mzlib::proteins::align(&seq["P02768"], &seq["P02769"])?;
+//! assert_eq!(albumin.map_source_to_target(58)?, Some(58));
+//! assert_eq!(&seq["P02769"][57..58], "C");
+//! assert_eq!(
+//!     (albumin.identical, albumin.substituted, albumin.source_residues_facing_gap),
+//!     (465, 142, 2)
+//! );
+//! assert_eq!(albumin.map_source_to_target(26)?, Some(26));
+//! assert_eq!((&seq["P02768"][25..26], &seq["P02769"][25..26]), ("A", "T"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **Always check the residue at the mapped position** before you carry a modification across: a
+//! phosphosite on S is not a site on A. [`Alignments::residue_map`] has the whole map as a table,
+//! one row per residue of both sequences, with both letters side by side in its `residue` and
+//! `mapped_residue` columns.
+//!
+//! **Many pairs, one call.** [`align_with`] takes a list of `(source, target)` pairs and aligns
+//! them in one bridge process, in order, so a few thousand isoform pairs cost one process start.
+//! The residue map has a `pair_index` column, and [`Alignments::alignments`] gives one
+//! [`Alignment`] per pair. For a large batch where you only want the scores and counts, set
+//! [`AlignOptions::residue_map`] to `false`: the map has one row per residue of both sequences,
+//! and leaving it out keeps the answer small.
+//!
+//! **The options, and whose defaults they are.** Every option left `None` is **mzLib's to set**.
+//! Nothing is sent for it, and the result says what the aligner used: the isoform alignment above
+//! passed no options, so its [`Alignments::matrix`], [`Alignments::gap_open`],
+//! [`Alignments::gap_extend`], [`Alignments::end_gaps`] and [`Alignments::max_cells`] are mzLib's
+//! own defaults in this build.
+//!
+//! | Option | Meaning |
+//! |---|---|
+//! | [`AlignOptions::gap_open`] | cost of opening a gap, in BLOSUM62's half-bits; a gap of *k* residues costs `gap_open + k * gap_extend` (BLAST's convention; mzLib's defaults are BLASTP's) |
+//! | [`AlignOptions::gap_extend`] | cost of each residue in a gap, the first included |
+//! | [`AlignOptions::end_gaps`] | [`EndGaps::Free`]: an overhang at either end costs nothing (EMBOSS needle's default), so a signal peptide or a longer tail is not penalised. [`EndGaps::Charged`]: every gap costs |
+//! | [`AlignOptions::max_cells`] | the largest table mzLib will build, `(source length + 1) * (target length + 1)` cells of one byte; a larger pair is refused rather than allowed to exhaust memory |
+//!
+//! The matrix is always BLOSUM62, mzLib's default and the only one offered.
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::proteins::{align_with, AlignOptions, EndGaps};
+//!
+//! // mzLib's deletion and overhang cases, with every option left to mzLib.
+//! let free = align_with(
+//!     &[("MKTAYIAKQRQISFVKSHFSRQ", "MKTAYIAKISFVKSHFSRQ"), ("MLLLPEPTIDE", "PEPTIDE")],
+//!     &AlignOptions::default(),
+//! )?;
+//! assert_eq!(
+//!     (free.matrix.as_str(), free.gap_open, free.gap_extend, free.end_gaps.as_str(), free.max_cells),
+//!     ("BLOSUM62", 11, 1, "free", 200_000_000)
+//! );
+//! let charged = align_with(
+//!     &[("MLLLPEPTIDE", "PEPTIDE")],
+//!     &AlignOptions { end_gaps: Some(EndGaps::Charged), ..Default::default() },
+//! )?;
+//! // The four-residue overhang costs 11 + 4 * 1 only when it is charged.
+//! assert_eq!(free.columns.integers("score")?[1], Some(39));
+//! assert_eq!(charged.columns.integers("score")?, [Some(24)]);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **The traps.**
+//!
+//! - **`score` is not an identity, a bit score or an E-value.** It is a raw sum of BLOSUM62 scores
+//!   in half-bits, less the gaps, and it grows with length. Compare scores only between
+//!   alignments with the same `aligner_id`. This crate computes no percent identity, because
+//!   there are several definitions: divide `identical` by the length you mean.
+//! - **It is a global alignment.** Every residue of both sequences is placed, paired or facing a
+//!   gap. With free end gaps a short sequence is placed on the best-scoring stretch of a long one,
+//!   even when it has no real match there.
+//! - **One optimal alignment, chosen the same way every time.** Where two alignments score the
+//!   same, mzLib's traceback picks one, always the same one. Isoform 2B above is a real case:
+//!   canonical V76 and V82 are both V, either could pair with the isoform's V76, and mzLib pairs
+//!   V82, leaving V76 to W81 facing the gap. Another aligner may give the equally good other
+//!   answer.
+//! - **Pass bare one-letter sequences.** mzLib refuses only `-` and `.`, as
+//!   [`MzLibError::Usage`]. Any other character BLOSUM62 does not name (selenocysteine `U`,
+//!   pyrrolysine `O`, a digit, a space, a modification bracket) is scored as an unknown residue
+//!   `X`, silently. Strip modifications first.
+//! - **Long pairs need a larger `max_cells`.** Time and memory grow with the product of the two
+//!   lengths. Two titin isoforms need about 1.2 billion cells, past the default; mzLib accepts up
+//!   to 2,147,483,591. Two identical sequences are aligned residue for residue without the table,
+//!   so the limit does not apply to them.
+//!
+//! ## Read an accession into entry, isoform and variants
+//!
+//! **The problem.** The accessions a search reports are not all plain entries. UniProt isoforms
+//! carry `-2`; RefSeq accessions carry a `.3` version; and mzLib names a protein with applied
+//! sequence variants after its entry, `P04637_S70N_A80T` or `NP_000537.3_R72P`. To join results to
+//! anything you keep per entry (genes, orthologs, GO terms) you need the entry back, without
+//! losing the isoform or the variants. Cutting at the first `_` turns `NP_000537` into `NP`.
+//!
+//! [`parse_accessions`] reads each accession with mzLib's own grammars
+//! (`VariantApplication.ParseAccession`, mzLib #1382):
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let parsed = mzlib::proteins::parse_accessions(&[
+//!     "P04637", "P04637-2", "Q13409-2", "NP_000537.3_R72P", "P04637_S70N_A80T",
+//!     "P04637_2", "DECOY_P02768", "sp|P04637|P53_HUMAN", "P04637|P02768",
+//! ])?;
+//! let c = &parsed.columns;
+//! let (input, namespace, entry) = (c.strings("input")?, c.strings("namespace")?, c.strings("entry_accession")?);
+//! let (isoform, version, variants) = (c.integers("isoform")?, c.integers("version")?, c.strings("applied_variants")?);
+//! for i in 0..input.len() {
+//!     println!("{:?} {:?} {:?} {:?} {:?} {:?}", input[i], namespace[i], entry[i], isoform[i], version[i], variants[i]);
+//! }
+//! //   "P04637"              uniprot       P04637               -  -  -
+//! //   "P04637-2"            uniprot       P04637               2  -  -
+//! //   "Q13409-2"            uniprot       Q13409               2  -  -
+//! //   "NP_000537.3_R72P"    refseq        NP_000537            -  3  R72P
+//! //   "P04637_S70N_A80T"    uniprot       P04637               -  -  S70N_A80T
+//! //   "P04637_2"            unrecognized  P04637_2             -  -  -
+//! //   "DECOY_P02768"        unrecognized  DECOY_P02768         -  -  -
+//! //   "sp|P04637|P53_HUMAN" unrecognized  sp|P04637|P53_HUMAN  -  -  -
+//! //   "P04637|P02768"       unrecognized  P04637|P02768        -  -  -
+//! assert_eq!(namespace[5].as_deref(), Some("unrecognized"));
+//! assert_eq!((version[3], variants[3].as_deref()), (Some(3), Some("R72P")));
+//! assert_eq!(
+//!     [parsed.namespace_counts["unrecognized"], parsed.namespace_counts["uniprot"], parsed.namespace_counts["refseq"]],
+//!     [4, 4, 1]
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! What each column means:
+//!
+//! - **`entry_accession`** is the UniProt entry or the unversioned RefSeq accession. It answers
+//!   "same entry?", **not** "same sequence?": `P04637` and `P04637-2` share it, but they are
+//!   different sequences. Join per-entry data on it; join sequence-level data on `input`.
+//! - **`isoform`** and **`version`** are the `-n` and `.n` numbers, `None` when there is none.
+//! - **`parent_accession`** is the entry the variants were applied to, isoform or version kept:
+//!   `NP_000537.3` for `NP_000537.3_R72P`. Look the parent sequence up under it.
+//! - **`applied_variants`** is the variant suffix exactly as written, `None` when there is none.
+//!   It is not checked against any sequence.
+//! - **`namespace`** is one of [`NAMESPACES`], spelled as [`resolve_genes_with`] spells it, so the
+//!   two tables join.
+//!
+//! [`ParsedAccessions::entry_of`] is the `input` to `entry_accession` map, for grouping.
+//!
+//! **It parses and never repairs.** Everything outside the two grammars comes back
+//! `unrecognized`, with `entry_accession` equal to the input, so a data problem stays visible
+//! instead of being fixed silently:
+//!
+//! - **`P04637_2` is not a variant of P04637.** It is mzLib's loader counter for a *different*
+//!   entry whose accession collided with P04637's.
+//! - **Decoy, contaminant and entrapment prefixes** (`DECOY_P02768`) and **FASTA headers**
+//!   (`sp|P04637|P53_HUMAN`) are left as they are.
+//! - **A protein group** (`P04637|P02768`) is not split. Split groups on `|` first, if that is
+//!   what you mean.
+//! - **Lower case and spaces count.** `" P04637"` is unrecognized: every accession is sent exactly
+//!   as you give it. Only RefSeq *protein* accessions (`NP_`, `XP_`, `YP_`, `WP_`, `AP_`) are
+//!   recognized, so a transcript (`NM_`) or an Ensembl id (`ENSP...`) is unrecognized too.
+//! - **An isoform or version past 2,147,483,647** reads as `None`, while the namespace still says
+//!   `uniprot` or `refseq`: mzLib keeps the entry and drops the number.
+//!
+//! ## Orthologs across species: an Ensembl Compara snapshot
+//!
+//! **The problem.** You have a mouse result and a human question, or identifications from three
+//! species to line up: which human gene is this mouse gene's ortholog? Ensembl Compara answers
+//! that, per species pair, in bulk files with three traps:
+//!
+//! 1. **The dumps partition.** Each species has its own homology dump, and Compara puts each of a
+//!    pair's relationships in *one* of the pair's two dumps, arbitrarily. In release 116 every
+//!    human-mouse orthology is in the **mouse** dump and none is in the human one. Reading the
+//!    dump named after your species gives a complete-looking, badly incomplete answer.
+//! 2. **Orthology is not transitive.** Human A ~ mouse B and mouse B ~ rat C does not make A ~ C.
+//!    Chaining pairs into groups invents tuples Compara never asserted.
+//! 3. **"No ortholog" means three things.** The gene's tree may hold a gene of the other species
+//!    with no ortholog called, hold none of that species, or the gene may be in no tree at all.
+//!
+//! [`build_orthology_with`] builds mzLib's orthology snapshot (`OrthologySnapshot`, mzLib #1381),
+//! which makes the first trap structural (**mzLib refuses a call without every species' dump**)
+//! and keeps the other two visible. This example is mzLib's own test world, written to
+//! `tests/fixtures/orthology/`: four human genes, three mouse and two rat, with every human-mouse
+//! row in the mouse dump:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::proteins::{build_orthology_with, OrthologyOptions};
+//!
+//! let species = ["homo_sapiens", "mus_musculus", "rattus_norvegicus"];
+//! let options = OrthologyOptions {
+//!     gtfs: vec![
+//!         ("homo_sapiens".into(), "Homo_sapiens.GRCh38.116.gtf".into()),
+//!         ("mus_musculus".into(), "Mus_musculus.GRCm39.116.gtf".into()),
+//!         ("rattus_norvegicus".into(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+//!     ],
+//!     dumps: species
+//!         .iter()
+//!         .map(|s| format!("homologies/{s}/Compara.116.protein_default.homologies.tsv.gz").into())
+//!         .collect(),
+//!     gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+//!     ..Default::default()
+//! };
+//! let snap = build_orthology_with(
+//!     "116",
+//!     &OrthologyOptions {
+//!         // Every human gene, in mouse.
+//!         pair_status: Some(("homo_sapiens".into(), "mus_musculus".into())),
+//!         ..options.clone()
+//!     },
+//! )?;
+//! let status = snap.pair_status.as_ref().expect("pair_status was asked for");
+//! let (ids, statuses) = (status.columns.strings("gene_id")?, status.columns.strings("status")?);
+//! for (id, status) in ids.iter().zip(&statuses) {
+//!     println!("{} {}", id.as_deref().unwrap_or(""), status.as_deref().unwrap_or(""));
+//! }
+//! //   ENSG00000000001 has_ortholog
+//! //   ENSG00000000002 has_ortholog
+//! //   ENSG00000000003 tree_lacks_target_species
+//! //   ENSG00000000004 not_in_any_tree
+//! assert_eq!(statuses[3].as_deref(), Some("not_in_any_tree"));
+//! assert_eq!(&snap.snapshot_id[..12], "5487ebcabe48");
+//!
+//! // Every species' dump, always: the human dump holds one row (human-rat); all three human-mouse
+//! // rows came from the mouse dump.
+//! let kept: Vec<(&str, u64)> = snap.dumps.iter().map(|(s, d)| (s.as_str(), d.rows_kept)).collect();
+//! assert_eq!(kept, [("homo_sapiens", 1), ("mus_musculus", 5), ("rattus_norvegicus", 1)]);
+//! for p in &snap.pairs {
+//!     println!("{} {} {} {}", p.species_a, p.species_b, p.ortholog_count, p.paralog_count);
+//! }
+//! //   homo_sapiens homo_sapiens 0 0
+//! //   homo_sapiens mus_musculus 3 0
+//! //   homo_sapiens rattus_norvegicus 1 0
+//! //   mus_musculus mus_musculus 0 1
+//! //   mus_musculus rattus_norvegicus 2 0
+//! //   rattus_norvegicus rattus_norvegicus 0 0
+//! assert_eq!(snap.pair("mus_musculus", "homo_sapiens")?.row_count, 3);   // either order
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Record [`OrthologySnapshot::snapshot_id`] with any result you draw from the snapshot. It is
+//! mzLib's sha256 over the format, the release, the species and every input's sha256, so the same
+//! inputs always give the same id, and a different id means different inputs.
+//!
+//! Leave the mouse dump out and mzLib refuses: *"No homology dump for mus_musculus. Each pair's
+//! relationships are split between its two species' dumps, so every species' dump is required."*
+//! That is [`MzLibError::Usage`]. A pair with nothing in it, such as the human paralogs here,
+//! still has its entry.
+//!
+//! **What to download, once per release.** Nothing is downloaded for you. For release 116, from
+//! `https://ftp.ensembl.org/pub/release-116/`:
+//!
+//! | Input | Path under the release | Size (human, 116) | Option |
+//! |---|---|---|---|
+//! | Each species' primary-assembly GTF | `gtf/homo_sapiens/Homo_sapiens.GRCh38.116.gtf.gz` | 141 MB | [`OrthologyOptions::gtfs`] |
+//! | Each species' homology dump | `tsv/ensembl-compara/homologies/homo_sapiens/Compara.116.protein_default.homologies.tsv.gz` | 109 MB | [`OrthologyOptions::dumps`] |
+//! | The gene trees, one file for all species | `compara/vertebrates.GeneTree_content.default.e116.txt.gz` | 79 MB | [`OrthologyOptions::gene_trees`] |
+//!
+//! - **The species names are Ensembl production names**: `homo_sapiens`, `mus_musculus`,
+//!   `rattus_norvegicus`, exactly as the dumps' `species` column spells them.
+//! - **Take the dump in each species' own folder.** Every species' dump has the same file name, so
+//!   keep them in their folders. One folder up, `homologies/` also holds a 10 GB file of the same
+//!   name; it is not one species' dump.
+//! - **Keep Ensembl's file names.** mzLib holds the gene trees and every dump to your `release`
+//!   only when their names carry it (`.e116.txt.gz`, `Compara.116.`). A renamed file is not
+//!   checked, and a caveat says which.
+//! - **A GTF's own number is not compared.** Ensembl publishes some species with their own
+//!   annotation release. mzLib holds a gene set to the dumps by content instead: a homology that
+//!   names a gene the gene set lacks is refused.
+//! - **A compact gene table works too.** If you made one for [`resolve_genes_with`] with mzLib's
+//!   `EnsemblGeneSetWriter`, pass it in [`OrthologyOptions::gene_sets`] instead. It carries the
+//!   GTF's provenance, so the snapshot and its id are the same.
+//!
+//! **What each status means.** [`OrthologyOptions::pair_status`] gives every gene of
+//! `from_species`'s gene set exactly one status in `to_species`. It says how far Compara's
+//! inference got, not what biology holds:
+//!
+//! | status | what it means | read it as |
+//! |---|---|---|
+//! | `has_ortholog` | at least one ortholog in `to_species` | an answer; the Parquet has the rows |
+//! | `no_edge_in_shared_tree` | the gene's tree holds a `to_species` gene, and Compara called no ortholog to it | the nearest the data comes to "no ortholog exists" |
+//! | `tree_lacks_target_species` | the gene's tree holds no `to_species` gene | nothing was compared |
+//! | `not_in_any_tree` | the gene is in the gene set but in no gene tree | no call was attempted |
+//!
+//! [`PairStatus::status_counts`] counts genes per status, every status present, and
+//! [`PairStatus::genes`] lists one status's genes. **A status is not symmetric**: ask for
+//! `("mus_musculus", "homo_sapiens")` separately. **Every biotype is a row**, so choose your
+//! denominator by filtering on `gene_biotype`.
+//!
+//! **Write the snapshot, then query it.** The relationships themselves go to disk. Give
+//! [`OrthologyOptions::out`] a directory that does not exist yet:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::proteins::{build_orthology_with, OrthologyOptions};
+//! # let species = ["homo_sapiens", "mus_musculus", "rattus_norvegicus"];
+//! # let options = OrthologyOptions {
+//! #     gtfs: vec![
+//! #         ("homo_sapiens".into(), "Homo_sapiens.GRCh38.116.gtf".into()),
+//! #         ("mus_musculus".into(), "Mus_musculus.GRCm39.116.gtf".into()),
+//! #         ("rattus_norvegicus".into(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+//! #     ],
+//! #     dumps: species.iter()
+//! #         .map(|s| format!("homologies/{s}/Compara.116.protein_default.homologies.tsv.gz").into())
+//! #         .collect(),
+//! #     gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+//! #     ..Default::default()
+//! # };
+//! let written = build_orthology_with(
+//!     "116",
+//!     &OrthologyOptions {
+//!         restrict_gene_trees: true,
+//!         out: Some("compara-116".into()),
+//!         ..options
+//!     },
+//! )?;
+//! assert!(written.snapshot_id.starts_with("5487ebcabe48"));   // the same id as above
+//! let files = &written.written.as_ref().expect("out was given").files;
+//! for f in &files[..7] {
+//!     println!("{} {:?}", f.path, f.rows);
+//! }
+//! //   genes/homo_sapiens.parquet Some(4)
+//! //   genes/mus_musculus.parquet Some(3)
+//! //   genes/rattus_norvegicus.parquet Some(2)
+//! //   members/homo_sapiens.parquet Some(3)
+//! //   members/mus_musculus.parquet Some(3)
+//! //   members/rattus_norvegicus.parquet Some(2)
+//! //   pairs/homo_sapiens__homo_sapiens.parquet Some(0)
+//! let last = files.last().unwrap();
+//! assert_eq!((last.path.as_str(), last.rows), ("views.sql", None));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! The directory holds `genes/SPECIES.parquet` (the gene set), `members/SPECIES.parquet` (gene to
+//! Compara tree), `pairs/A__B.parquet` (every relationship between A and B, A sorting first;
+//! A == B holds the paralogs), `views.sql` and `manifest.json` (every input and file with its
+//! sha256, at [`WrittenSnapshot::manifest`]). The same inputs always give the same bytes. **A
+//! directory that is not empty is refused**: a snapshot is written once, and next release's goes
+//! in a new directory to compare with this one. [`OrthologyOptions::restrict_gene_trees`] keeps
+//! only your species' genes from the gene-tree file; without it, mzLib keeps every gene in it and
+//! a caveat says how many. The snapshot is the same either way, as the equal ids show.
+//!
+//! **mzLib writes Parquet and ships no reader, and this crate reads none.** Query the files with
+//! DuckDB (its command-line shell, or the `duckdb` crate), which runs the macros mzLib writes in
+//! `views.sql`. These are the answers for the test world above:
+//!
+//! ```sql
+//! .read compara-116/views.sql
+//!
+//! -- Every human protein-coding gene's status in mouse: pair_status, from the files.
+//! SELECT status, count(*) AS genes
+//! FROM pair_status('compara-116', 'homo_sapiens', 'mus_musculus')
+//! WHERE gene_biotype = 'protein_coding'
+//! GROUP BY status ORDER BY status;
+//! -- has_ortholog 2 | not_in_any_tree 1 | tree_lacks_target_species 1
+//!
+//! -- The orthologs, oriented from human: one row per relationship, one-to-many kept as several.
+//! SELECT gene, partner_gene, relationship_type, identity, partner_identity
+//! FROM orthologs('compara-116', 'homo_sapiens', 'mus_musculus') ORDER BY gene, partner_gene;
+//! -- ENSG00000000001 ENSMUSG00000000001 ortholog_one2one  91.0 90.0
+//! -- ENSG00000000002 ENSMUSG00000000002 ortholog_one2many 71.0 70.0
+//! -- ENSG00000000002 ENSMUSG00000000003 ortholog_one2many 61.0 60.0
+//!
+//! -- One gene per species where all three pairs are orthologs; never chained.
+//! SELECT * FROM species_set3('compara-116', 'homo_sapiens', 'mus_musculus', 'rattus_norvegicus');
+//! -- ENSG00000000001 ENSMUSG00000000001 ENSRNOG00000000001 true
+//! ```
+//!
+//! H2 is orthologous to mouse M2, and M2 to rat R2, but H2 ~ R2 was never called, so
+//! `species_set3` does not return H2. That is trap 2, handled.
+//!
+//! **What the Parquet holds.** `pairs/A__B.parquet` has one row per relationship, ordered by
+//! Compara's `homology_id`. Values are Compara's, verbatim, and **a NULL stays null, never 0 or
+//! false**: `identity_a` and `identity_b` (percent; the share of **that side's** protein identical
+//! to the other's, so the two differ), `goc_score` (0 to 100), `wga_coverage` (percent), `dn` and
+//! `ds` (substitutions per site; null for most comparisons), `is_high_confidence` (null: Compara
+//! declines to say, which is not false), and `source_dump` (the **file name** of the dump the row
+//! came from: provenance, not meaning). `members/SPECIES.parquet`'s `group_id` is `compara-116:`
+//! plus the tree id, so trees are never compared across releases. The full column lists, with
+//! types and units, are on [`build_orthology_with`].
+//!
+//! **The traps.**
+//!
+//! - **Never chain pairs.** Use `species_set3` (or mzLib's `OrthologySnapshot.SpeciesSet` for more
+//!   species), which requires every two members of a tuple to be orthologs.
+//! - **One-to-many is several rows.** Nothing is picked: a human gene with two mouse orthologs has
+//!   two rows, both `ortholog_one2many`. Decide per question.
+//! - **The gene set and the dumps must be one release.** A homology naming a gene its gene set
+//!   lacks is refused as [`MzLibError::Bridge`] (`InvalidDataException`): that is what a GTF and
+//!   dumps from different releases look like. Use the primary-assembly GTF, as for
+//!   [`resolve_genes_with`].
+//! - **`source_dump` cannot tell species apart.** Ensembl gives every species' dump the same file
+//!   name, so the column holds that one name everywhere, and a caveat says so. `manifest.json`'s
+//!   `inputs` list each dump with its species and sha256.
+//! - **Join with [`resolve_genes_with`] on the gene set.** Its `gene_set_sha256` column and
+//!   [`OrthologySnapshot::gene_sets`]`[species].sha256` are the same value when both were counted
+//!   against the same GTF. Check that before joining a resolution to a snapshot.
+//! - **It is slow and large.** Every input is read whole. For human, mouse and rat at release 116,
+//!   mzLib reports about 20 s to build and 40 s more to write 13 files (9.0 MB). Leave the timeout
+//!   at `None` and set `restrict_gene_trees` when memory is short.
+//!
 //! # What these functions will not tell you, and say so instead
 //!
 //! - **A FASTA knows no GO terms and no Ensembl genes.** Its headers carry organism (`OS=`),
@@ -167,8 +681,8 @@
 //! - **GO annotation takes exactly one database**, because every row carries its sha256. A
 //!   contaminant member whose entry is not in that XML reads `no_entry`, not `no_go_terms`.
 //!
-//! Wire verbs: `proteins read`, `genes resolve`, `proteins classify-peptides`,
-//! `proteins annotate-go` and `proteins update-go`.
+//! Wire verbs: `proteins read`, `genes resolve`, `genes orthology`, `proteins classify-peptides`,
+//! `proteins annotate-go`, `proteins update-go`, `proteins align` and `proteins parse-accession`.
 //!
 //! ## Cite
 //!
@@ -1657,6 +2171,1101 @@ pub fn update_go(go_obo: impl AsRef<Path>) -> Result<GoUpdate> {
     call((args, None), None)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Alignment (mzLib 1.0.595, #1428)
+// ---------------------------------------------------------------------------------------------
+
+/// The pyMzLib release whose bridge first dispatches `proteins align` and
+/// `proteins parse-accession`: their specs' `since.pymzlib`.
+const ALIGN_SINCE: &str = "0.6.0";
+
+/// The end-gap rule [`align_with`] uses, as mzLib's aligner id spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EndGaps {
+    /// A gap at either end of either sequence costs nothing, so a signal peptide or a longer tail
+    /// on one side is not penalised (EMBOSS needle's default). mzLib's default.
+    Free,
+    /// Every gap costs, at the ends too.
+    Charged,
+}
+
+impl EndGaps {
+    /// The wire spelling: `"free"` or `"charged"`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Charged => "charged",
+        }
+    }
+}
+
+/// How [`align_with`] aligns. **Every option left `None` is mzLib's to set**: nothing is sent for
+/// it, and the result says what the aligner used ([`Alignments::gap_open`] and the rest).
+#[derive(Debug, Clone)]
+pub struct AlignOptions {
+    /// Cost of opening a gap, in half-bits (BLOSUM62 score units), charged once per gap: a gap of
+    /// `k` residues costs `gap_open + k * gap_extend`. `None`: mzLib's, 11 at the pin (BLASTP's
+    /// for BLOSUM62). mzLib refuses a negative value.
+    pub gap_open: Option<i64>,
+    /// Cost of each residue in a gap, the first included, in half-bits (BLOSUM62 score units).
+    /// `None`: mzLib's, 1 at the pin. mzLib refuses less than 1.
+    pub gap_extend: Option<i64>,
+    /// The end-gap rule. `None`: mzLib's, [`EndGaps::Free`].
+    pub end_gaps: Option<EndGaps>,
+    /// The largest table mzLib will build, `(source length + 1) * (target length + 1)` cells of
+    /// one byte each; a larger pair is refused rather than allowed to exhaust memory. `None`:
+    /// mzLib's, 200,000,000 cells (about 200 MB) at the pin. Two titin isoforms need about 1.2
+    /// billion; mzLib accepts up to 2,147,483,591.
+    pub max_cells: Option<u64>,
+    /// Return [`Alignments::residue_map`], one row per residue of both sequences. `true` (the
+    /// default) sends nothing; `false` sends `--no-residue-map` and returns only the pairs table,
+    /// for a large batch where you want the scores and counts.
+    pub residue_map: bool,
+    /// Time to allow. `None` (the default) waits.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for AlignOptions {
+    fn default() -> Self {
+        Self {
+            gap_open: None,
+            gap_extend: None,
+            end_gaps: None,
+            max_cells: None,
+            residue_map: true,
+            timeout: None,
+        }
+    }
+}
+
+/// What [`align_with`] returns: one row per pair, and every residue's counterpart.
+///
+/// [`Self::columns`] is the pairs table, one row per input pair, in input order: `pair_index`
+/// (from 0), `source_length` and `target_length` (residues), `score` (half-bits), `identical` and
+/// `substituted` (paired residues that are the same letter, and that differ),
+/// `source_residues_facing_gap` and `target_residues_facing_gap` (residues with no counterpart),
+/// and `aligned_source` and `aligned_target` (each sequence with `-` where it faces a gap).
+/// [`Self::alignments`] gives the same rows as [`Alignment`] structs, each with its residue map.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Alignments {
+    /// mzLib's name for the method and every parameter, e.g.
+    /// `"global-affine;BLOSUM62;open=11;extend=1;end-gaps=free"`. One aligner per call. Store it
+    /// with any position you map, so the mapping says how it was made.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub aligner_id: String,
+    /// The substitution matrix, always `"BLOSUM62"`: mzLib's default and the only one offered.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub matrix: String,
+    /// The gap-open cost used, in half-bits (BLOSUM62 score units): yours, or mzLib's default.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub gap_open: i64,
+    /// The cost per gap residue used, in half-bits (BLOSUM62 score units): yours, or mzLib's.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub gap_extend: i64,
+    /// `"free"` or `"charged"`: the end-gap rule used, yours or mzLib's.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub end_gaps: String,
+    /// The table limit used, in cells: yours, or mzLib's default.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub max_cells: u64,
+    /// Pairs aligned, in pairs: the rows of [`Self::columns`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub record_count: u64,
+    /// The pairs table, one row per pair; its column order is [`Table::names`].
+    #[serde(flatten)]
+    pub columns: Table,
+    /// One row per residue of each sequence of each pair, pair by pair: a pair's source residues
+    /// first, then its target residues. Columns `pair_index`, `sequence` (`"source"` or
+    /// `"target"`), `position` (1-based), `residue`, `mapped_position` (1-based position of its
+    /// counterpart in the other sequence; null when it faces a gap, **never** the nearest residue)
+    /// and `mapped_residue` (the counterpart; null when it faces a gap). `None` when
+    /// [`AlignOptions::residue_map`] was `false`.
+    #[serde(default)]
+    pub residue_map: Option<LongTable>,
+    /// What the score and the mapping do and do not mean.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// One pair's alignment, from [`align`] or [`Alignments::alignments`].
+///
+/// Positions are **1-based**, as in mzLib and UniProt. A residue facing a gap has no counterpart,
+/// and [`Self::map_source_to_target`] returns `None` for it, never the nearest residue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alignment {
+    /// Position of the pair in the input, from 0.
+    pub pair_index: u64,
+    /// mzLib's name for the method and every parameter (the call's [`Alignments::aligner_id`]).
+    pub aligner_id: String,
+    /// Substitution scores summed over the paired residues, less every charged gap, in BLOSUM62's
+    /// half-bits. A raw score: it grows with length, and is not a bit score, an E-value or a
+    /// percent identity.
+    pub score: i64,
+    /// Paired residues that are the same letter (case-insensitive).
+    pub identical: u64,
+    /// Paired residues that differ.
+    pub substituted: u64,
+    /// Source residues with no counterpart in the target.
+    pub source_residues_facing_gap: u64,
+    /// Target residues with no counterpart in the source.
+    pub target_residues_facing_gap: u64,
+    /// The source's length, in residues.
+    pub source_length: usize,
+    /// The target's length, in residues.
+    pub target_length: usize,
+    /// The source with `-` wherever it faces a target residue across a gap.
+    pub aligned_source: String,
+    /// The target with `-` wherever it faces a source residue across a gap. As long as
+    /// [`Self::aligned_source`]; print the two one above the other to see the alignment.
+    pub aligned_target: String,
+    /// For each source position `p`, item `p - 1` is the paired target position, or `None` when
+    /// that residue faces a gap. `None` as a whole when the call asked for no residue map.
+    pub source_to_target: Option<Vec<Option<usize>>>,
+    /// The same, from each target position to the source.
+    pub target_to_source: Option<Vec<Option<usize>>>,
+    /// What the score and the mapping do and do not mean (the call's caveats).
+    pub caveats: Vec<String>,
+}
+
+impl Alignment {
+    /// The target position paired with source `position` (1-based), or `None` if it faces a gap.
+    ///
+    /// It reads the residue map mzLib's `TryMapSourceToTarget` filled; nothing is computed here.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] if `position` is outside 1 to [`Self::source_length`], or the call
+    /// asked for no residue map.
+    pub fn map_source_to_target(&self, position: usize) -> Result<Option<usize>> {
+        lookup(
+            self.source_to_target.as_deref(),
+            position,
+            self.source_length,
+            "source",
+        )
+    }
+
+    /// The source position paired with target `position` (1-based), or `None` if it faces a gap.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] if `position` is outside 1 to [`Self::target_length`], or the call
+    /// asked for no residue map.
+    pub fn map_target_to_source(&self, position: usize) -> Result<Option<usize>> {
+        lookup(
+            self.target_to_source.as_deref(),
+            position,
+            self.target_length,
+            "target",
+        )
+    }
+}
+
+fn lookup(
+    table: Option<&[Option<usize>]>,
+    position: usize,
+    length: usize,
+    what: &str,
+) -> Result<Option<usize>> {
+    let table = table.ok_or_else(|| {
+        MzLibError::Usage(
+            "This alignment has no residue map: it came from a call with residue_map: false."
+                .to_owned(),
+        )
+    })?;
+    if !(1..=length).contains(&position) {
+        return Err(MzLibError::Usage(format!(
+            "position {position} is outside the {what}, which has positions 1 to {length} \
+             (positions are 1-based, as in mzLib and UniProt)."
+        )));
+    }
+    Ok(table[position - 1])
+}
+
+impl Alignments {
+    /// One [`Alignment`] per pair, in input order, each with its residue map.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not the type the wire contract says.
+    pub fn alignments(&self) -> Result<Vec<Alignment>> {
+        let count = |name: &str| -> Result<Vec<u64>> {
+            self.columns
+                .integers(name)?
+                .into_iter()
+                .map(|value| {
+                    value.and_then(|v| u64::try_from(v).ok()).ok_or_else(|| {
+                        MzLibError::Protocol(format!(
+                            "proteins align returned a {name} that is not a count: {value:?}"
+                        ))
+                    })
+                })
+                .collect()
+        };
+        let pair_index = count("pair_index")?;
+        let source_length = count("source_length")?;
+        let target_length = count("target_length")?;
+        let identical = count("identical")?;
+        let substituted = count("substituted")?;
+        let source_gaps = count("source_residues_facing_gap")?;
+        let target_gaps = count("target_residues_facing_gap")?;
+        let score = self.columns.integers("score")?;
+        let aligned_source = self.columns.strings("aligned_source")?;
+        let aligned_target = self.columns.strings("aligned_target")?;
+
+        // (pair, sequence) -> position -> mapped position, from the residue map.
+        let mut maps: BTreeMap<(u64, String), BTreeMap<usize, Option<usize>>> = BTreeMap::new();
+        if let Some(map) = &self.residue_map {
+            let pairs = map.columns.integers("pair_index")?;
+            let sequences = map.columns.strings("sequence")?;
+            let positions = map.columns.integers("position")?;
+            let mapped = map.columns.integers("mapped_position")?;
+            for i in 0..pairs.len() {
+                let (Some(pair), Some(sequence), Some(position)) =
+                    (pairs[i], sequences[i].clone(), positions[i])
+                else {
+                    return Err(MzLibError::Protocol(format!(
+                        "proteins align returned a residue-map row with no pair, sequence or \
+                         position (row {i})"
+                    )));
+                };
+                maps.entry((pair as u64, sequence))
+                    .or_default()
+                    .insert(position as usize, mapped[i].map(|m| m as usize));
+            }
+        }
+        let table = |pair: u64, sequence: &str, length: usize| -> Option<Vec<Option<usize>>> {
+            self.residue_map.as_ref()?;
+            let found = maps.get(&(pair, sequence.to_owned()));
+            Some(
+                (1..=length)
+                    .map(|p| found.and_then(|f| f.get(&p).copied().flatten()))
+                    .collect(),
+            )
+        };
+
+        (0..pair_index.len())
+            .map(|i| {
+                let pair = pair_index[i];
+                let (source, target) = (source_length[i] as usize, target_length[i] as usize);
+                Ok(Alignment {
+                    pair_index: pair,
+                    aligner_id: self.aligner_id.clone(),
+                    score: score[i].ok_or_else(|| {
+                        MzLibError::Protocol(format!("proteins align returned no score (row {i})"))
+                    })?,
+                    identical: identical[i],
+                    substituted: substituted[i],
+                    source_residues_facing_gap: source_gaps[i],
+                    target_residues_facing_gap: target_gaps[i],
+                    source_length: source,
+                    target_length: target,
+                    aligned_source: aligned_source[i].clone().unwrap_or_default(),
+                    aligned_target: aligned_target[i].clone().unwrap_or_default(),
+                    source_to_target: table(pair, "source", source),
+                    target_to_source: table(pair, "target", target),
+                    caveats: self.caveats.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The pairs as stdin lines, `source<TAB>target`, unchanged, refusing what cannot travel.
+fn pair_lines<S: AsRef<str>, T: AsRef<str>>(pairs: &[(S, T)]) -> Result<Vec<String>> {
+    if pairs.is_empty() {
+        return Err(MzLibError::Usage(
+            "At least one pair is required, e.g. [(\"MKTAYIAK\", \"MKTSYIAK\")].".to_owned(),
+        ));
+    }
+    pairs
+        .iter()
+        .enumerate()
+        .map(|(index, (source, target))| {
+            let (source, target) = (source.as_ref(), target.as_ref());
+            for (name, value) in [("source", source), ("target", target)] {
+                // One pair is one stdin line, its two sequences split on the tab, so neither may
+                // hold a tab or a line break: either would shift or split every later pair.
+                if value.contains(['\t', '\n', '\r']) {
+                    return Err(MzLibError::Usage(format!(
+                        "Pair {index}'s {name} contains a tab or line break: {value:?}."
+                    )));
+                }
+            }
+            // The bridge skips a blank line, which would put every later result on the wrong pair.
+            if format!("{source}{target}").trim().is_empty() {
+                return Err(MzLibError::Usage(format!(
+                    "Pair {index} has two empty sequences; there is nothing to align."
+                )));
+            }
+            Ok(format!("{source}\t{target}"))
+        })
+        .collect()
+}
+
+/// The arguments and stdin of a `proteins align` call: only the options that were given.
+fn align_request<S: AsRef<str>, T: AsRef<str>>(
+    pairs: &[(S, T)],
+    options: &AlignOptions,
+) -> Result<(Vec<String>, Option<String>)> {
+    let lines = pair_lines(pairs)?;
+    let mut args = vec!["proteins".to_owned(), "align".to_owned()];
+    for (name, value) in [
+        ("--gap-open", options.gap_open.map(|v| v.to_string())),
+        ("--gap-extend", options.gap_extend.map(|v| v.to_string())),
+        ("--max-cells", options.max_cells.map(|v| v.to_string())),
+    ] {
+        if let Some(value) = value {
+            args.push(name.to_owned());
+            args.push(value);
+        }
+    }
+    if let Some(end_gaps) = options.end_gaps {
+        args.push("--end-gaps".to_owned());
+        args.push(end_gaps.as_str().to_owned());
+    }
+    if !options.residue_map {
+        args.push("--no-residue-map".to_owned());
+    }
+    Ok((args, Some(lines.join("\n") + "\n")))
+}
+
+/// Align two protein sequences with mzLib, with every default, and map residues from one onto
+/// the other.
+///
+/// The one-pair form of [`align_with`]: the same bridge call and the same mzLib defaults,
+/// returning one [`Alignment`] with its residue map. To set an option for one pair, pass
+/// `&[(source, target)]` to [`align_with`].
+///
+/// ```
+/// # mzlib_replay::activate();
+/// // mzLib's own deletion case: QRQ (source 9 to 11) is missing from the target.
+/// let aln = mzlib::proteins::align("MKTAYIAKQRQISFVKSHFSRQ", "MKTAYIAKISFVKSHFSRQ")?;
+/// assert_eq!(aln.aligned_source, "MKTAYIAKQRQISFVKSHFSRQ");
+/// assert_eq!(aln.aligned_target, "MKTAYIAK---ISFVKSHFSRQ");
+/// assert_eq!((aln.score, aln.identical, aln.source_residues_facing_gap), (80, 19, 3));
+/// let mapped: Vec<Option<usize>> = [8, 9, 10, 11, 12]
+///     .iter()
+///     .map(|&p| aln.map_source_to_target(p))
+///     .collect::<Result<_, _>>()?;
+/// assert_eq!(mapped, [Some(8), None, None, None, Some(9)]);
+/// assert_eq!(aln.map_target_to_source(9)?, Some(12));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// # Errors
+///
+/// As [`align_with`].
+pub fn align(source: &str, target: &str) -> Result<Alignment> {
+    let result = align_with(&[(source, target)], &AlignOptions::default())?;
+    result.alignments()?.into_iter().next().ok_or_else(|| {
+        MzLibError::Protocol("proteins align returned no row for the pair it was given".to_owned())
+    })
+}
+
+/// Align pairs of protein sequences in one call, and map every residue across each pair.
+///
+/// Wraps mzLib's `PairwiseAligner.Align` (mzLib #1428): a **global** alignment with affine gaps
+/// (Gotoh's form of Needleman-Wunsch) scored with **BLOSUM62**, and the residue map its
+/// `TryMapSourceToTarget` and `TryMapTargetToSource` give. Use it to carry a position (a
+/// modification site, a variant, a cleavage site) from one sequence to another: an isoform, an
+/// ortholog, an older release of the same entry. Pairs are aligned in one bridge process, in
+/// order, so a few thousand isoform pairs cost one process start.
+///
+/// Each sequence is sent exactly as given: case is kept (and compared case-insensitively), and
+/// either sequence may be empty, not both. mzLib refuses `-` and `.`; it scores any other letter
+/// BLOSUM62 does not name (`U`, `O`, a digit, a space) as `X`, so strip modifications first. The
+/// [module guide](crate::proteins#map-a-residue-from-one-sequence-onto-another) carries a phosphosite
+/// across isoforms and an ortholog.
+#[doc = include_str!("../docs/reference/proteins.align.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for no pairs, two empty sequences, or a
+/// sequence holding a tab or line break; and when the bridge in use is older than pyMzLib 0.6.0's,
+/// which has no `proteins align`.
+///
+/// # Examples
+///
+/// A deletion and an extra N-terminus, mzLib's own test cases, with mzLib's defaults:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{align_with, AlignOptions};
+///
+/// let alns = align_with(
+///     &[("MKTAYIAKQRQISFVKSHFSRQ", "MKTAYIAKISFVKSHFSRQ"), ("MLLLPEPTIDE", "PEPTIDE")],
+///     &AlignOptions::default(),
+/// )?;
+/// assert_eq!(alns.aligner_id, "global-affine;BLOSUM62;open=11;extend=1;end-gaps=free");
+/// assert_eq!(alns.columns.integers("score")?, [Some(80), Some(39)]);
+/// assert_eq!(alns.columns.integers("source_residues_facing_gap")?, [Some(3), Some(4)]);
+/// let first_residues: Vec<Option<usize>> = alns
+///     .alignments()?
+///     .iter()
+///     .map(|a| a.map_target_to_source(1))
+///     .collect::<Result<_, _>>()?;
+/// assert_eq!(first_residues, [Some(1), Some(5)]);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// Charging the end gaps changes the score of an overhang, and the aligner id says so:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{align_with, AlignOptions, EndGaps};
+///
+/// let charged = align_with(
+///     &[("MLLLPEPTIDE", "PEPTIDE")],
+///     &AlignOptions { end_gaps: Some(EndGaps::Charged), ..Default::default() },
+/// )?;
+/// let only = &charged.alignments()?[0];
+/// assert_eq!((only.aligned_target.as_str(), only.score), ("----PEPTIDE", 24));
+/// assert_eq!(charged.aligner_id, "global-affine;BLOSUM62;open=11;extend=1;end-gaps=charged");
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/proteins.align.see-also.md")]
+pub fn align_with<S: AsRef<str>, T: AsRef<str>>(
+    pairs: &[(S, T)],
+    options: &AlignOptions,
+) -> Result<Alignments> {
+    let request = align_request(pairs, options)?;
+    bridge::require_verb("proteins align", ALIGN_SINCE)?;
+    call(request, options.timeout)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Accession parsing (mzLib 1.0.595, #1382)
+// ---------------------------------------------------------------------------------------------
+
+/// Every `namespace` [`parse_accessions`] can report: mzLib's `AccessionNamespace`, lower case,
+/// exactly as [`resolve_genes_with`] writes it.
+pub const NAMESPACES: [&str; 3] = ["uniprot", "refseq", "unrecognized"];
+
+/// What [`parse_accessions`] returns: one row per accession, in the order given.
+///
+/// [`Self::columns`] has `input` (exactly as given), `entry_accession` (the UniProt entry or
+/// unversioned RefSeq accession, `P04637` for `P04637-2_S70N`; `input` when unrecognized: an
+/// **entry**, not a sequence), `isoform` (UniProt `-n`; null when there is no suffix, always for
+/// RefSeq, or a number past 2,147,483,647), `version` (RefSeq `.n`; null likewise),
+/// `namespace` (one of [`NAMESPACES`]), `parent_accession` (the entry the variants were applied
+/// to, isoform or version kept; `input` when there are no applied variants), `applied_variants`
+/// (the variant suffix as written, `S70N_A80T`; null when none) and `has_applied_variants`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ParsedAccessions {
+    /// Accessions parsed, in accessions: the rows, duplicates included.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub record_count: u64,
+    /// Namespace to the accessions in it. Every key in [`NAMESPACES`] is present, zeros included.
+    /// A large `"unrecognized"` count is worth reading: see [`Self::caveats`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub namespace_counts: BTreeMap<String, u64>,
+    /// Accessions that name applied variants, in accessions.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub with_applied_variants_count: u64,
+    /// The table, one row per accession; its column order is [`Table::names`].
+    #[serde(flatten)]
+    pub columns: Table,
+    /// What mzLib leaves unrecognized rather than repairs, and other traps.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+impl ParsedAccessions {
+    /// Accession to entry accession, to group isoforms and variants under their entry. An
+    /// accession given twice appears once (it parses the same); an unrecognized one maps to
+    /// itself.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not the type the wire contract says.
+    pub fn entry_of(&self) -> Result<BTreeMap<String, String>> {
+        let inputs = self.columns.strings("input")?;
+        let entries = self.columns.strings("entry_accession")?;
+        Ok(inputs
+            .into_iter()
+            .zip(entries)
+            .filter_map(|(input, entry)| Some((input?, entry?)))
+            .collect())
+    }
+}
+
+/// The accessions as stdin lines, unchanged: mzLib parses and never repairs, so neither does this
+/// crate. A blank entry or a line break would shift every later row, so both are refused.
+fn accession_lines<S: AsRef<str>>(accessions: &[S]) -> Result<Vec<String>> {
+    if accessions.is_empty() {
+        return Err(MzLibError::Usage(
+            "At least one accession is required, e.g. [\"P04637-2\"].".to_owned(),
+        ));
+    }
+    accessions
+        .iter()
+        .map(|value| {
+            let value = value.as_ref();
+            // A space around an accession is NOT stripped: mzLib reads it as unrecognized, and
+            // that is the answer.
+            if value.trim().is_empty() {
+                return Err(MzLibError::Usage(
+                    "accessions contains a blank entry; every entry is one result row.".to_owned(),
+                ));
+            }
+            if value.contains(['\n', '\r']) {
+                return Err(MzLibError::Usage(format!(
+                    "An accession contains a line break: {value:?}."
+                )));
+            }
+            Ok(value.to_owned())
+        })
+        .collect()
+}
+
+/// Read accessions into entry, isoform or version, and applied variants, with mzLib.
+///
+/// Wraps mzLib's `VariantApplication.ParseAccession` (mzLib #1382), and through it
+/// `ProteinAccession.Parse`. It is the inverse of the names mzLib gives variant proteoforms:
+/// `P04637_S70N` is entry `P04637` with `S70N` applied, and `NP_000537.3_R72P` is RefSeq
+/// `NP_000537`, version 3, with `R72P`. Use it to link a search result's accession to anything you
+/// keep per entry (genes, orthologs, GO terms) without losing the isoform or the variants.
+///
+/// **It parses and never repairs.** An accession outside UniProt's and RefSeq's protein grammars
+/// comes back `"unrecognized"` and verbatim: lower case, a stray space, a FASTA header, a `DECOY_`
+/// prefix, a `|`-joined protein group, and `P12345_2`, mzLib's loader counter for a *different*
+/// entry whose accession collided. Each accession is sent exactly as given, one stdin line each,
+/// duplicates included. The [module
+/// guide](crate::proteins#read-an-accession-into-entry-isoform-and-variants) reads every case.
+#[doc = include_str!("../docs/reference/proteins.parse-accession.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for no accessions, or one that is blank or
+/// holds a line break (either would shift every later row); and when the bridge in use is older
+/// than pyMzLib 0.6.0's, which has no `proteins parse-accession`.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// let parsed = mzlib::proteins::parse_accessions(&[
+///     "P04637", "P04637-2", "Q13409-2", "NP_000537.3_R72P", "P04637_S70N_A80T",
+///     "P04637_2", "DECOY_P02768", "sp|P04637|P53_HUMAN", "P04637|P02768",
+/// ])?;
+/// let entries = parsed.columns.strings("entry_accession")?;
+/// assert_eq!(entries[3].as_deref(), Some("NP_000537"));
+/// assert_eq!(parsed.columns.integers("isoform")?[..3], [None, Some(2), Some(2)]);
+/// assert_eq!(parsed.columns.integers("version")?[3], Some(3));
+/// let variants = parsed.columns.strings("applied_variants")?;
+/// assert_eq!((variants[3].as_deref(), variants[4].as_deref()), (Some("R72P"), Some("S70N_A80T")));
+/// assert_eq!(parsed.namespace_counts["unrecognized"], 4);
+/// assert_eq!(parsed.entry_of()?["P04637_S70N_A80T"], "P04637");
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/proteins.parse-accession.see-also.md")]
+pub fn parse_accessions<S: AsRef<str>>(accessions: &[S]) -> Result<ParsedAccessions> {
+    let lines = accession_lines(accessions)?;
+    bridge::require_verb("proteins parse-accession", ALIGN_SINCE)?;
+    call(
+        (
+            vec!["proteins".to_owned(), "parse-accession".to_owned()],
+            Some(lines.join("\n") + "\n"),
+        ),
+        None,
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Orthology (mzLib 1.0.595, #1381)
+// ---------------------------------------------------------------------------------------------
+
+/// The pyMzLib release whose bridge first dispatches `genes orthology`.
+const ORTHOLOGY_SINCE: &str = "0.6.0";
+
+/// Every status [`build_orthology_with`] can report in [`OrthologySnapshot::pair_status`], as mzLib
+/// writes it (`OrthologySnapshot.StatusName`), in mzLib's order. Every gene gets exactly one, so
+/// "Compara found nothing", "there was nothing to compare against" and "no call was attempted"
+/// never share an empty result. `not_in_gene_set` is for a gene id from elsewhere, and never occurs
+/// in a pair-status table, whose rows are the gene set itself.
+pub const ORTHOLOGY_STATUSES: [&str; 5] = [
+    "has_ortholog",
+    "no_edge_in_shared_tree",
+    "tree_lacks_target_species",
+    "not_in_any_tree",
+    "not_in_gene_set",
+];
+
+/// What [`build_orthology_with`] reads, and what it writes. Every default is mzLib's.
+///
+/// `gene_trees`, `dumps` and at least one species in `gtfs` or `gene_sets` are required; the
+/// default leaves them empty, which is refused before anything is spawned.
+#[derive(Debug, Clone, Default)]
+pub struct OrthologyOptions {
+    /// Each species, as its Ensembl production name (`"homo_sapiens"`, as the dumps' `species`
+    /// column spells it), with its Ensembl primary-assembly GTF, plain or `.gz`. These are the
+    /// snapshot's species, sent on stdin one line each, in this order.
+    pub gtfs: Vec<(String, PathBuf)>,
+    /// Instead of a GTF, a compact gene table mzLib's `EnsemblGeneSetWriter` made from one (it keeps
+    /// the GTF's provenance, so the snapshot is the same). A species may be in `gtfs` or
+    /// `gene_sets`, not both.
+    pub gene_sets: Vec<(String, PathBuf)>,
+    /// One Compara homology dump per species
+    /// (`homologies/<species>/Compara.<release>.protein_default.homologies.tsv.gz`), in any order:
+    /// each dump's species is read from its rows. **Every species' dump is required**; mzLib
+    /// refuses a call without one.
+    pub dumps: Vec<PathBuf>,
+    /// Compara's gene-tree file, `<collection>.GeneTree_content.default.e<release>.txt.gz`.
+    /// Required.
+    pub gene_trees: PathBuf,
+    /// Keep only the gene-tree members in your gene sets. `false` (the default) is mzLib's default
+    /// and keeps every gene in the file: 4.2 million for the vertebrates of release 116. The
+    /// snapshot is the same either way; only memory differs.
+    pub restrict_gene_trees: bool,
+    /// A directory to write the snapshot to: Parquet tables (`genes/`, `members/`, `pairs/`),
+    /// `views.sql` and `manifest.json`. It must not exist yet or be empty: mzLib writes a snapshot
+    /// once and never updates one in place. `None` (the default): nothing is written.
+    pub out: Option<PathBuf>,
+    /// `(from_species, to_species)`: return every gene of `from_species` with its status in
+    /// `to_species` ([`PairStatus`]). Two different species of the snapshot, in that order: a
+    /// status is not symmetric. `None` (the default): not computed.
+    pub pair_status: Option<(String, String)>,
+    /// Time to allow. `None` (the default) waits: for human, mouse and rat at release 116, mzLib
+    /// reports about 20 s to build and 40 s more to write.
+    pub timeout: Option<Duration>,
+}
+
+/// Compara's gene-tree file a snapshot was built with, and what was kept from it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct GeneTrees {
+    /// The file's name, e.g. `vertebrates.GeneTree_content.default.e116.txt.gz`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_file_name: String,
+    /// Lower-case hex sha256 of the file's bytes as read (the compressed bytes for a `.gz`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// The release in the file name (`.e116.txt`); `None` when the name carries none, and then
+    /// mzLib could not hold the file to the release you gave (a caveat says so).
+    #[serde(default)]
+    pub release: Option<String>,
+    /// The Compara collection in the file name, e.g. `"vertebrates"`; `None` when the name does
+    /// not start `<collection>.GeneTree_content.`.
+    #[serde(default)]
+    pub collection: Option<String>,
+    /// Genes held in memory from the file, in genes: every gene in it, or with
+    /// [`OrthologyOptions::restrict_gene_trees`] only those in your gene sets.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub member_count: u64,
+    /// The sha256s of the gene sets the members were restricted to; `None` when every gene in the
+    /// file was kept.
+    #[serde(default)]
+    pub restricted_to_gene_sets: Option<Vec<String>>,
+}
+
+/// One species' Compara homology dump, as read.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HomologyDump {
+    /// The file's name. Ensembl names every species' dump
+    /// `Compara.<release>.protein_default.homologies.tsv.gz`, so this alone does not say whose it
+    /// is: the key of [`OrthologySnapshot::dumps`] does, read from the dump's rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_file_name: String,
+    /// Lower-case hex sha256 of the file's bytes as read.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// The release in the file name; `None` when it carries none (then not checked).
+    #[serde(default)]
+    pub release: Option<String>,
+    /// Every data row read and checked, kept or not, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub rows_read: u64,
+    /// Rows whose two species are both snapshot species, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub rows_kept: u64,
+}
+
+/// How many relationships one species pair holds: one row each in `pairs/<a>__<b>.parquet`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SpeciesPair {
+    /// The species that sorts first: side A of every row of the pair.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub species_a: String,
+    /// The other; the same species for its paralogs, the pair `(s, s)`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub species_b: String,
+    /// Relationships between the two, in rows. One row each, never merged or picked.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// Of those, orthologs (`ortholog_one2one`, `ortholog_one2many`, `ortholog_many2many`), in rows.
+    /// Always 0 for `(s, s)`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub ortholog_count: u64,
+    /// Paralogs (`within_species_paralog`, `other_paralog`, `gene_split`), in rows. Always 0
+    /// between two species.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub paralog_count: u64,
+    /// Homoeologs, between subgenomes of one polyploid species, in rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub homoeolog_count: u64,
+}
+
+/// One file of a written snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SnapshotFile {
+    /// Relative to [`WrittenSnapshot::directory`], with forward slashes, e.g.
+    /// `"pairs/homo_sapiens__mus_musculus.parquet"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub path: String,
+    /// Rows in the Parquet table, in rows; `None` for a file that is not a table (`views.sql`). A
+    /// pair with no relationship is still written, with 0 rows.
+    #[serde(default)]
+    pub rows: Option<u64>,
+    /// The file's size in bytes.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub bytes: u64,
+    /// Lower-case hex sha256 of the file, as `manifest.json` lists it.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+}
+
+/// Where [`build_orthology_with`] wrote the snapshot, with [`OrthologyOptions::out`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WrittenSnapshot {
+    /// The `out` directory, absolute.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub directory: String,
+    /// Every file written but `manifest.json`, in order of path: the Parquet tables
+    /// `genes/<species>.parquet`, `members/<species>.parquet` and `pairs/<a>__<b>.parquet`, and
+    /// `views.sql`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub files: Vec<SnapshotFile>,
+}
+
+impl WrittenSnapshot {
+    /// The path of `manifest.json`, which lists every input and file with its sha256.
+    #[must_use]
+    pub fn manifest(&self) -> PathBuf {
+        Path::new(&self.directory).join("manifest.json")
+    }
+}
+
+/// Every gene of one species with how far Compara's inference got in another.
+///
+/// [`Self::columns`] has one row per gene of [`Self::from_species`]'s gene set, every biotype, in
+/// order of gene id: `gene_id` (stable Ensembl id, unversioned), `gene_name` (the release's gene
+/// name, a label; null when the GTF gives none), `gene_biotype` (`unknown` when the GTF omits it)
+/// and `status` (one of [`ORTHOLOGY_STATUSES`] but `not_in_gene_set`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairStatus {
+    /// Whose genes the rows are.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub from_species: String,
+    /// The species each status is about.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub to_species: String,
+    /// Genes: every gene of `from_species`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// Status to the genes with it. Every key in [`ORTHOLOGY_STATUSES`] is present, zeros
+    /// included; `not_in_gene_set` is always 0 here.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub status_counts: BTreeMap<String, u64>,
+    /// The table, one row per gene; its column order is [`Table::names`].
+    #[serde(flatten)]
+    pub columns: Table,
+}
+
+impl PairStatus {
+    /// The gene ids with one status, in order of gene id.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] if `status` is not one of [`ORTHOLOGY_STATUSES`];
+    /// [`MzLibError::Protocol`] if a column is missing or not a string column.
+    pub fn genes(&self, status: &str) -> Result<Vec<String>> {
+        if !ORTHOLOGY_STATUSES.contains(&status) {
+            return Err(MzLibError::Usage(format!(
+                "status must be one of {}; got {status:?}.",
+                ORTHOLOGY_STATUSES.join(", ")
+            )));
+        }
+        let ids = self.columns.strings("gene_id")?;
+        let statuses = self.columns.strings("status")?;
+        Ok(ids
+            .into_iter()
+            .zip(statuses)
+            .filter(|(_, s)| s.as_deref() == Some(status))
+            .filter_map(|(id, _)| id)
+            .collect())
+    }
+}
+
+/// What [`build_orthology_with`] returns: an Ensembl Compara orthology snapshot, as built.
+///
+/// The relationships themselves are in the Parquet files [`OrthologyOptions::out`] writes, not
+/// here: this says what went in, what came out, and, with [`OrthologyOptions::pair_status`],
+/// every gene's status in one other species.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrthologySnapshot {
+    /// The Ensembl release you gave.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub release: String,
+    /// The snapshot's species, Ensembl production names, in sorted order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub species: Vec<String>,
+    /// `"ensembl-orthology-snapshot"`, as `manifest.json` names the format.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub format: String,
+    /// The format's version.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub format_version: u32,
+    /// mzLib's id for the snapshot: a sha256 over the format, the release, the species and every
+    /// input's sha256. The same inputs give the same id, written or not, and it is
+    /// `manifest.json`'s `snapshot_id`. Record it with any result drawn from the snapshot.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub snapshot_id: String,
+    /// Homology rows found in both of a pair's dumps, identical, and counted once, in rows. 0 in
+    /// release 116, whose dumps partition.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub identical_duplicates_dropped: u64,
+    /// Species to the [`GeneSet`] it was counted against, the same type [`resolve_genes_with`]
+    /// reports. Its `sha256` is what `manifest.json`'s `gene_set_sha256` and
+    /// [`resolve_genes_with`]'s `gene_set_sha256` column carry, so a resolution and a snapshot can
+    /// be checked against one gene set.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub gene_sets: BTreeMap<String, GeneSet>,
+    /// The gene-tree file.
+    pub gene_trees: GeneTrees,
+    /// Species to its [`HomologyDump`]. The species is read from the dump's rows.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub dumps: BTreeMap<String, HomologyDump>,
+    /// One [`SpeciesPair`] per species pair `(a, b)`, `a <= b`, `(s, s)` included.
+    /// [`Self::pair`] finds one in either order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub pairs: Vec<SpeciesPair>,
+    /// Where the snapshot was written; `None` without [`OrthologyOptions::out`], when nothing was
+    /// written.
+    #[serde(default)]
+    pub written: Option<WrittenSnapshot>,
+    /// Every gene's status in one other species; `None` without [`OrthologyOptions::pair_status`].
+    #[serde(default)]
+    pub pair_status: Option<PairStatus>,
+    /// This call's traps: a file name with no release (not checked against it), dumps sharing one
+    /// file name, a GTF named for another release, duplicate rows, unrestricted gene trees.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+impl OrthologySnapshot {
+    /// The counts for species `a` and `b`, given in either order.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] if `a` or `b` is not one of [`Self::species`].
+    pub fn pair(&self, a: &str, b: &str) -> Result<&SpeciesPair> {
+        let (first, second) = if a <= b { (a, b) } else { (b, a) };
+        self.pairs
+            .iter()
+            .find(|pair| pair.species_a == first && pair.species_b == second)
+            .ok_or_else(|| {
+                MzLibError::Usage(format!(
+                    "({a:?}, {b:?}) is not a pair of this snapshot's species: {}.",
+                    self.species.join(", ")
+                ))
+            })
+    }
+}
+
+/// A species name for stdin or `--pair-status`: no tab, line break or comma.
+fn species_name(name: &str, what: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(MzLibError::Usage(format!(
+            "Every species in {what} must be a non-empty Ensembl production name."
+        )));
+    }
+    if name.contains(['\t', '\r', '\n', ',']) {
+        return Err(MzLibError::Usage(format!(
+            "A species name cannot hold a tab, line break or comma: {name:?}."
+        )));
+    }
+    Ok(name.to_owned())
+}
+
+/// The arguments and stdin of a `genes orthology` call: the species lines
+/// (`species<TAB>gtf|gene-set<TAB>path`), a `--` line, then one dump per line.
+fn orthology_request(
+    release: &str,
+    options: &OrthologyOptions,
+) -> Result<(Vec<String>, Option<String>)> {
+    let release = release.trim();
+    if release.is_empty() || release.contains(char::is_whitespace) {
+        return Err(MzLibError::Usage(format!(
+            "release must be an Ensembl release, e.g. \"116\"; got {release:?}."
+        )));
+    }
+    let mut lines = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for (kind, list, what) in [
+        ("gtf", &options.gtfs, "gtfs"),
+        ("gene-set", &options.gene_sets, "gene_sets"),
+    ] {
+        for (species, path) in list {
+            let name = species_name(species, what)?;
+            if seen.contains(&name) {
+                return Err(MzLibError::Usage(format!(
+                    "'{name}' is given twice in gtfs and gene_sets; give each species one gene set."
+                )));
+            }
+            let path = optional_path(path, &format!("{what} {name}"))?;
+            if path.contains(['\t', '\n', '\r']) {
+                return Err(MzLibError::Usage(format!(
+                    "The path for {name} contains a tab or line break: {path:?}."
+                )));
+            }
+            lines.push(format!("{name}\t{kind}\t{path}"));
+            seen.push(name);
+        }
+    }
+    if lines.is_empty() {
+        return Err(MzLibError::Usage(
+            "At least one species is required: gtfs: vec![(\"homo_sapiens\".into(), \
+             \"Homo_sapiens.GRCh38.116.gtf.gz\".into())] (or gene_sets for compact gene tables)."
+                .to_owned(),
+        ));
+    }
+    if options.dumps.is_empty() {
+        return Err(MzLibError::Usage(
+            "dumps is empty. Give every species' Compara homology dump: each pair's \
+             relationships are split between the pair's two dumps, so mzLib requires them all."
+                .to_owned(),
+        ));
+    }
+    let dumps = bridge::path_lines(&options.dumps, "homology dump")?;
+    if let Some(bad) = dumps.iter().find(|line| line.as_str() == SECTION) {
+        return Err(MzLibError::Usage(format!(
+            "{bad:?} is not a usable homology dump path: it is the line that separates the species \
+             from the dumps."
+        )));
+    }
+
+    if options.gene_trees.as_os_str().is_empty() {
+        return Err(MzLibError::Usage(
+            "gene_trees is required: Compara's \
+             <collection>.GeneTree_content.default.e<release>.txt.gz."
+                .to_owned(),
+        ));
+    }
+    let mut args = vec![
+        "genes".to_owned(),
+        "orthology".to_owned(),
+        "--release".to_owned(),
+        release.to_owned(),
+        "--gene-trees".to_owned(),
+        optional_path(&options.gene_trees, "gene_trees")?,
+    ];
+    if options.restrict_gene_trees {
+        args.push("--restrict-gene-trees".to_owned());
+    }
+    if let Some(out) = &options.out {
+        args.push("--out".to_owned());
+        args.push(optional_path(out, "out")?);
+    }
+    if let Some((from, to)) = &options.pair_status {
+        let from = species_name(from, "pair_status")?;
+        let to = species_name(to, "pair_status")?;
+        args.push("--pair-status".to_owned());
+        args.push(format!("{from},{to}"));
+    }
+
+    lines.push(SECTION.to_owned());
+    lines.extend(dumps);
+    Ok((args, Some(lines.join("\n") + "\n")))
+}
+
+/// Build an Ensembl Compara orthology snapshot for your species, and write it as Parquet.
+///
+/// Wraps mzLib's `OrthologySnapshot.Build` and `OrthologySnapshotWriter.WriteAsync` (mzLib
+/// #1381). Which genes of one species are orthologous to which genes of another, kept exactly as
+/// Compara states it: one-to-many and many-to-many orthologies are several rows, paralogs are kept,
+/// and nothing is picked, merged or collapsed. Local files only; nothing is downloaded.
+///
+/// **Every species' homology dump is required, and mzLib refuses a call without one.** Compara
+/// puts each of a pair's relationships in one of the pair's two dumps, arbitrarily, and in practice
+/// they partition: in release 116 every human-mouse orthology is in the *mouse* dump and none is in
+/// the human one. Reading the dump named after your species gives a complete-looking, badly
+/// incomplete answer.
+///
+/// **Orthology is pairwise and not transitive.** A~B and B~C do not make A~C, so never chain
+/// pairs into groups. The written `views.sql` has a `species_set3` macro that forms a tuple only
+/// when every two members are orthologs.
+///
+/// The relationships are in the Parquet files [`OrthologyOptions::out`] writes, which mzLib cannot
+/// read back and this crate does not read (it carries no Parquet reader): query them with DuckDB,
+/// as the [module guide](crate::proteins#orthologs-across-species-an-ensembl-compara-snapshot)
+/// shows. Without `out`, the call checks that the inputs fit together and, with
+/// [`OrthologyOptions::pair_status`], says gene by gene how far Compara's inference got in one
+/// other species.
+///
+/// `release` is the Ensembl release of the Compara inputs, e.g. `"116"`. Required: mzLib holds the
+/// gene trees and every dump to it when their file names carry a release. A GTF's own number is not
+/// compared with it (Ensembl publishes some species with their own annotation release).
+#[doc = include_str!("../docs/reference/genes.orthology.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for a blank release or one holding a space;
+/// no species, a species given twice or a name holding a tab, line break or comma; no dumps, or a
+/// blank one; no gene trees; a blank `out`; and when the bridge in use is older than pyMzLib
+/// 0.6.0's, which has no `genes orthology`.
+///
+/// # Examples
+///
+/// mzLib's own test world: four human genes, three mouse and two rat, with every human-mouse row
+/// in the mouse dump, as in release 116.
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{build_orthology_with, OrthologyOptions};
+///
+/// let species = ["homo_sapiens", "mus_musculus", "rattus_norvegicus"];
+/// let gtfs = vec![
+///     ("homo_sapiens".to_owned(), "Homo_sapiens.GRCh38.116.gtf".into()),
+///     ("mus_musculus".to_owned(), "Mus_musculus.GRCm39.116.gtf".into()),
+///     ("rattus_norvegicus".to_owned(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+/// ];
+/// let dumps = species
+///     .iter()
+///     .map(|s| format!("homologies/{s}/Compara.116.protein_default.homologies.tsv.gz").into())
+///     .collect();
+/// let snap = build_orthology_with(
+///     "116",
+///     &OrthologyOptions {
+///         gtfs,
+///         dumps,
+///         gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+///         pair_status: Some(("homo_sapiens".into(), "mus_musculus".into())),
+///         ..Default::default()
+///     },
+/// )?;
+/// assert_eq!(snap.dumps["mus_musculus"].rows_kept, 5);
+/// assert_eq!(snap.pair("mus_musculus", "homo_sapiens")?.row_count, 3);   // either order
+/// let status = snap.pair_status.as_ref().expect("pair_status was asked for");
+/// assert_eq!(
+///     status.columns.strings("status")?,
+///     ["has_ortholog", "has_ortholog", "tree_lacks_target_species", "not_in_any_tree"]
+///         .map(|s| Some(s.to_owned()))
+/// );
+/// assert_eq!(status.genes("not_in_any_tree")?, ["ENSG00000000004"]);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/genes.orthology.see-also.md")]
+pub fn build_orthology_with(
+    release: &str,
+    options: &OrthologyOptions,
+) -> Result<OrthologySnapshot> {
+    let request = orthology_request(release, options)?;
+    bridge::require_verb("genes orthology", ORTHOLOGY_SINCE)?;
+    call(request, options.timeout)
+}
+
 #[cfg(test)]
 mod tests {
     //! Offline. The recordings are pyMzLib's, byte for byte, made against the small databases in
@@ -2289,5 +3898,704 @@ mod tests {
             ANNOTATION_STATUSES,
             ["annotated", "no_go_terms", "no_entry", "contaminant"]
         );
+    }
+
+    // ---- align (mzLib #1428) --------------------------------------------------------------------
+
+    fn recorded<T: serde::de::DeserializeOwned>(name: &str) -> T {
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join(name),
+        )
+        .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    const DELETION: (&str, &str) = ("MKTAYIAKQRQISFVKSHFSRQ", "MKTAYIAKISFVKSHFSRQ");
+
+    #[test]
+    fn align_sends_the_pair_on_stdin_and_no_option_it_was_not_given() {
+        let (args, stdin) = align_request(&[DELETION], &AlignOptions::default()).unwrap();
+        assert_eq!(args, ["proteins", "align"]);
+        assert_eq!(
+            stdin.as_deref(),
+            Some("MKTAYIAKQRQISFVKSHFSRQ\tMKTAYIAKISFVKSHFSRQ\n")
+        );
+        assert_eq!(AlignOptions::default().timeout, None);
+    }
+
+    #[test]
+    fn align_projects_mzlibs_counts_and_rows() {
+        let alns: Alignments = recorded("proteins_align_deletion.json");
+        let aln = &alns.alignments().unwrap()[0];
+        assert_eq!(aln.aligned_source, "MKTAYIAKQRQISFVKSHFSRQ");
+        assert_eq!(aln.aligned_target, "MKTAYIAK---ISFVKSHFSRQ");
+        assert_eq!((aln.score, aln.identical, aln.substituted), (80, 19, 0));
+        assert_eq!(
+            (
+                aln.source_residues_facing_gap,
+                aln.target_residues_facing_gap
+            ),
+            (3, 0)
+        );
+        assert_eq!((aln.source_length, aln.target_length), (22, 19));
+        assert_eq!(aln.aligner_id, alns.aligner_id);
+        assert_eq!(aln.caveats, alns.caveats);
+        assert_eq!(alns.residue_map.as_ref().unwrap().row_count, 41);
+    }
+
+    #[test]
+    fn a_residue_facing_a_gap_maps_to_none_never_a_neighbour() {
+        let alns: Alignments = recorded("proteins_align_deletion.json");
+        let aln = &alns.alignments().unwrap()[0];
+        let mapped: Vec<Option<usize>> = (8..=12)
+            .map(|p| aln.map_source_to_target(p).unwrap())
+            .collect();
+        assert_eq!(mapped, [Some(8), None, None, None, Some(9)]);
+        assert_eq!(aln.map_target_to_source(9).unwrap(), Some(12));
+    }
+
+    #[test]
+    fn a_position_outside_the_sequence_is_refused() {
+        let alns: Alignments = recorded("proteins_align_deletion.json");
+        let aln = &alns.alignments().unwrap()[0];
+        for position in [0, 23] {
+            let error = aln.map_source_to_target(position).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains("1-based")),
+                "{position}: {error:?}"
+            );
+        }
+        assert!(aln.map_target_to_source(20).is_err());
+    }
+
+    #[test]
+    fn each_align_option_given_is_sent_and_nothing_else() {
+        let cases: [(AlignOptions, &[&str]); 4] = [
+            (
+                AlignOptions {
+                    gap_open: Some(5),
+                    ..Default::default()
+                },
+                &["--gap-open", "5"],
+            ),
+            (
+                AlignOptions {
+                    gap_extend: Some(2),
+                    ..Default::default()
+                },
+                &["--gap-extend", "2"],
+            ),
+            (
+                AlignOptions {
+                    end_gaps: Some(EndGaps::Charged),
+                    ..Default::default()
+                },
+                &["--end-gaps", "charged"],
+            ),
+            (
+                AlignOptions {
+                    max_cells: Some(1000),
+                    ..Default::default()
+                },
+                &["--max-cells", "1000"],
+            ),
+        ];
+        for (options, sent) in cases {
+            let (args, _) = align_request(&[DELETION], &options).unwrap();
+            assert_eq!(args[2..], *sent);
+        }
+    }
+
+    #[test]
+    fn charged_end_gaps_come_back_in_the_envelope() {
+        let alns: Alignments = recorded("proteins_align_charged.json");
+        assert_eq!(alns.end_gaps, "charged");
+        assert_eq!(
+            alns.aligner_id,
+            "global-affine;BLOSUM62;open=11;extend=1;end-gaps=charged"
+        );
+        let aln = &alns.alignments().unwrap()[0];
+        assert_eq!(
+            (aln.aligned_target.as_str(), aln.score),
+            ("----PEPTIDE", 24)
+        );
+    }
+
+    #[test]
+    fn align_with_keeps_input_order_and_one_alignment_per_pair() {
+        let (_, stdin) = align_request(
+            &[DELETION, ("MLLLPEPTIDE", "PEPTIDE")],
+            &AlignOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            stdin.as_deref(),
+            Some("MKTAYIAKQRQISFVKSHFSRQ\tMKTAYIAKISFVKSHFSRQ\nMLLLPEPTIDE\tPEPTIDE\n")
+        );
+        let alns: Alignments = recorded("proteins_align_many.json");
+        assert_eq!(alns.record_count, 2);
+        let each = alns.alignments().unwrap();
+        assert_eq!(
+            each.iter().map(|a| a.pair_index).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(
+            alns.columns.integers("score").unwrap(),
+            [Some(80), Some(39)]
+        );
+        assert_eq!(each[1].map_target_to_source(1).unwrap(), Some(5));
+        assert_eq!(
+            (
+                alns.matrix.as_str(),
+                alns.gap_open,
+                alns.gap_extend,
+                alns.max_cells
+            ),
+            ("BLOSUM62", 11, 1, 200_000_000)
+        );
+    }
+
+    #[test]
+    fn residue_map_false_sends_the_flag_and_leaves_no_map() {
+        let options = AlignOptions {
+            residue_map: false,
+            ..Default::default()
+        };
+        let (args, _) = align_request(&[DELETION], &options).unwrap();
+        assert_eq!(args, ["proteins", "align", "--no-residue-map"]);
+        let alns: Alignments = recorded("proteins_align_no_map.json");
+        assert!(alns.residue_map.is_none());
+        let aln = &alns.alignments().unwrap()[0];
+        assert_eq!(aln.source_to_target, None);
+        let error = aln.map_source_to_target(1).unwrap_err();
+        assert!(error.to_string().contains("no residue map"));
+    }
+
+    #[test]
+    fn real_isoforms_shift_every_position_after_the_missing_exon() {
+        let alns: Alignments = recorded("proteins_align_dync1i2.json");
+        let each = alns.alignments().unwrap();
+        let (two_b, two_c) = (&each[0], &each[1]);
+        let mapped: Vec<(Option<usize>, Option<usize>)> = [75, 76, 82, 100, 120, 133]
+            .iter()
+            .map(|&p| {
+                (
+                    two_b.map_source_to_target(p).unwrap(),
+                    two_c.map_source_to_target(p).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            mapped,
+            [
+                (Some(75), Some(75)),
+                (None, None),
+                (Some(76), Some(76)),
+                (Some(94), Some(94)),
+                (Some(114), None),
+                (Some(127), Some(107))
+            ]
+        );
+        assert_eq!(
+            (
+                two_b.identical,
+                two_b.substituted,
+                two_b.source_residues_facing_gap
+            ),
+            (632, 0, 6)
+        );
+    }
+
+    #[test]
+    fn real_orthologs_substituted_residues_keep_their_own_letters() {
+        let alns: Alignments = recorded("proteins_align_albumin.json");
+        let albumin = &alns.alignments().unwrap()[0];
+        assert_eq!(albumin.map_source_to_target(58).unwrap(), Some(58));
+        assert_eq!(
+            (
+                albumin.identical,
+                albumin.substituted,
+                albumin.source_residues_facing_gap
+            ),
+            (465, 142, 2)
+        );
+        let map = alns.residue_map.as_ref().unwrap();
+        let residues = map.columns.strings("residue").unwrap();
+        let mapped = map.columns.strings("mapped_residue").unwrap();
+        let positions = map.columns.integers("position").unwrap();
+        let sequences = map.columns.strings("sequence").unwrap();
+        let row = (0..positions.len())
+            .find(|&i| positions[i] == Some(26) && sequences[i].as_deref() == Some("source"))
+            .unwrap();
+        assert_eq!(
+            (residues[row].as_deref(), mapped[row].as_deref()),
+            (Some("A"), Some("T")),
+            "a pair can be two different amino acids"
+        );
+    }
+
+    #[test]
+    fn bad_pairs_are_refused_before_the_bridge() {
+        let empty: [(&str, &str); 0] = [];
+        let cases: Vec<(Vec<(&str, &str)>, &str)> = vec![
+            (empty.to_vec(), "At least one pair"),
+            (vec![("PEP\tTIDE", "PEPTIDE")], "tab or line break"),
+            (vec![("PEPTIDE", "PEP\nTIDE")], "tab or line break"),
+            (vec![("", "")], "two empty sequences"),
+            (vec![(" ", "")], "two empty sequences"),
+        ];
+        for (pairs, message) in cases {
+            let error = align_request(&pairs, &AlignOptions::default()).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains(message)),
+                "{message}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_sequence_on_one_side_is_sent() {
+        let (_, stdin) = align_request(&[("", "PEP")], &AlignOptions::default()).unwrap();
+        assert_eq!(stdin.as_deref(), Some("\tPEP\n"));
+    }
+
+    // ---- parse-accession (mzLib #1382) ----------------------------------------------------------
+
+    #[test]
+    fn parse_accessions_sends_each_accession_unchanged() {
+        let lines = accession_lines(&[" P04637", "P04637 ", "p04637", "P04637|P02768"]).unwrap();
+        assert_eq!(
+            lines.join("\n") + "\n",
+            " P04637\nP04637 \np04637\nP04637|P02768\n",
+            "not stripped, not split"
+        );
+    }
+
+    #[test]
+    fn parse_accessions_projects_mzlibs_reading() {
+        let parsed: ParsedAccessions = recorded("proteins_parse_accession.json");
+        assert_eq!(parsed.record_count, 9);
+        assert_eq!(
+            parsed.namespace_counts,
+            BTreeMap::from([
+                ("refseq".to_owned(), 1),
+                ("uniprot".to_owned(), 4),
+                ("unrecognized".to_owned(), 4)
+            ])
+        );
+        assert_eq!(parsed.with_applied_variants_count, 2);
+        let entries = parsed.columns.strings("entry_accession").unwrap();
+        assert_eq!(
+            entries[..5],
+            ["P04637", "P04637", "Q13409", "NP_000537", "P04637"].map(|s| Some(s.to_owned()))
+        );
+        let namespaces = parsed.columns.strings("namespace").unwrap();
+        assert_eq!(
+            namespaces[4..7],
+            ["uniprot", "unrecognized", "unrecognized"].map(|s| Some(s.to_owned()))
+        );
+        assert!(namespaces
+            .iter()
+            .all(|n| NAMESPACES.contains(&n.as_deref().unwrap())));
+        assert_eq!(
+            parsed.columns.strings("parent_accession").unwrap()[3].as_deref(),
+            Some("NP_000537.3")
+        );
+        assert_eq!(parsed.entry_of().unwrap()["NP_000537.3_R72P"], "NP_000537");
+        assert_eq!(
+            parsed.entry_of().unwrap()["P04637_2"],
+            "P04637_2",
+            "unrecognized maps to itself"
+        );
+    }
+
+    #[test]
+    fn bad_accession_lists_are_refused_before_the_bridge() {
+        let empty: [&str; 0] = [];
+        for (accessions, message) in [
+            (&empty[..], "At least one accession"),
+            (&["P04637", " "][..], "blank entry"),
+            (&["P04637\nP02768"][..], "line break"),
+        ] {
+            let error = accession_lines(accessions).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains(message)),
+                "{message}: {error:?}"
+            );
+        }
+    }
+
+    // ---- genes orthology (mzLib #1381) -----------------------------------------------------------
+
+    const HUMAN: &str = "homo_sapiens";
+    const MOUSE: &str = "mus_musculus";
+    const RAT: &str = "rattus_norvegicus";
+    const TREES: &str = "vertebrates.GeneTree_content.default.e116.txt.gz";
+
+    fn orthology_options() -> OrthologyOptions {
+        OrthologyOptions {
+            gtfs: vec![
+                (HUMAN.to_owned(), "Homo_sapiens.GRCh38.116.gtf".into()),
+                (MOUSE.to_owned(), "Mus_musculus.GRCm39.116.gtf".into()),
+                (RAT.to_owned(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+            ],
+            dumps: [HUMAN, MOUSE, RAT]
+                .iter()
+                .map(|s| {
+                    format!("homologies/{s}/Compara.116.protein_default.homologies.tsv.gz").into()
+                })
+                .collect(),
+            gene_trees: TREES.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn orthology_sends_the_species_lines_then_the_dumps_on_stdin() {
+        let (args, stdin) = orthology_request("116", &orthology_options()).unwrap();
+        assert_eq!(
+            args,
+            [
+                "genes",
+                "orthology",
+                "--release",
+                "116",
+                "--gene-trees",
+                TREES
+            ]
+        );
+        assert_eq!(
+            stdin.unwrap(),
+            "homo_sapiens\tgtf\tHomo_sapiens.GRCh38.116.gtf\n\
+             mus_musculus\tgtf\tMus_musculus.GRCm39.116.gtf\n\
+             rattus_norvegicus\tgtf\tRattus_norvegicus.GRCr8.116.gtf\n\
+             --\n\
+             homologies/homo_sapiens/Compara.116.protein_default.homologies.tsv.gz\n\
+             homologies/mus_musculus/Compara.116.protein_default.homologies.tsv.gz\n\
+             homologies/rattus_norvegicus/Compara.116.protein_default.homologies.tsv.gz\n"
+        );
+        assert_eq!(OrthologyOptions::default().timeout, None);
+    }
+
+    #[test]
+    fn every_orthology_option_given_is_sent_in_its_wire_spelling() {
+        let options = OrthologyOptions {
+            restrict_gene_trees: true,
+            out: Some("compara-116".into()),
+            pair_status: Some((MOUSE.to_owned(), HUMAN.to_owned())),
+            ..orthology_options()
+        };
+        let (args, _) = orthology_request("116", &options).unwrap();
+        assert!(args.contains(&"--restrict-gene-trees".to_owned()));
+        let after = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(after("--out"), "compara-116");
+        assert_eq!(
+            after("--pair-status"),
+            "mus_musculus,homo_sapiens",
+            "from, then to"
+        );
+    }
+
+    #[test]
+    fn gene_sets_are_sent_as_gene_set_lines_beside_gtf_lines() {
+        let options = OrthologyOptions {
+            gtfs: vec![(HUMAN.to_owned(), "human.gtf.gz".into())],
+            gene_sets: vec![
+                (MOUSE.to_owned(), "mouse.genes.tsv".into()),
+                (RAT.to_owned(), "rat.genes.tsv".into()),
+            ],
+            ..orthology_options()
+        };
+        let (_, stdin) = orthology_request("116", &options).unwrap();
+        let stdin = stdin.unwrap();
+        let species: Vec<&str> = stdin.split("--\n").next().unwrap().lines().collect();
+        assert_eq!(
+            species,
+            [
+                "homo_sapiens\tgtf\thuman.gtf.gz",
+                "mus_musculus\tgene-set\tmouse.genes.tsv",
+                "rattus_norvegicus\tgene-set\trat.genes.tsv"
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_orthology_arguments_are_usage_errors_before_the_bridge_runs() {
+        let base = orthology_options;
+        let cases: Vec<(&str, OrthologyOptions, &str)> = vec![
+            (
+                "116",
+                OrthologyOptions {
+                    gtfs: Vec::new(),
+                    ..base()
+                },
+                "At least one species",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    gene_sets: vec![(HUMAN.to_owned(), "h.tsv".into())],
+                    ..base()
+                },
+                "'homo_sapiens' is given twice",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    gtfs: vec![("homo\tsapiens".to_owned(), "x.gtf".into())],
+                    ..base()
+                },
+                "cannot hold a tab",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    gtfs: vec![(String::new(), "x.gtf".into())],
+                    ..base()
+                },
+                "non-empty Ensembl production name",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    gtfs: vec![(HUMAN.to_owned(), "".into())],
+                    ..base()
+                },
+                "must be a non-empty path",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    dumps: Vec::new(),
+                    ..base()
+                },
+                "dumps is empty",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    dumps: vec!["--".into()],
+                    ..base()
+                },
+                "is not a usable homology dump path",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    gene_trees: PathBuf::new(),
+                    ..base()
+                },
+                "gene_trees is required",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    pair_status: Some((HUMAN.to_owned(), "mus,musculus".to_owned())),
+                    ..base()
+                },
+                "cannot hold a tab, line break or comma",
+            ),
+            (
+                "116",
+                OrthologyOptions {
+                    out: Some(PathBuf::from(" ")),
+                    ..base()
+                },
+                "out must be a non-empty path",
+            ),
+            ("", base(), "release must be an Ensembl release"),
+            ("11 6", base(), "release must be an Ensembl release"),
+        ];
+        for (release, options, message) in cases {
+            let error = orthology_request(release, &options).unwrap_err();
+            assert!(
+                matches!(&error, MzLibError::Usage(m) if m.contains(message)),
+                "{message}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_snapshot_says_what_went_in() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        assert_eq!(snap.release, "116");
+        assert_eq!(snap.species, [HUMAN, MOUSE, RAT]);
+        assert_eq!(snap.format, "ensembl-orthology-snapshot");
+        assert_eq!(snap.format_version, 1);
+        assert_eq!(snap.snapshot_id.len(), 64);
+        assert!(snap.snapshot_id.starts_with("5487ebcabe48"));
+        assert_eq!(snap.identical_duplicates_dropped, 0);
+        assert_eq!(snap.gene_sets[HUMAN].gene_count, 4);
+        assert_eq!(snap.gene_trees.source_file_name, TREES);
+        assert_eq!(snap.gene_trees.release.as_deref(), Some("116"));
+        assert_eq!(
+            snap.gene_sets[HUMAN].genome_build, None,
+            "the test GTFs carry no #!genome-build"
+        );
+        assert_eq!(snap.gene_trees.collection.as_deref(), Some("vertebrates"));
+        assert_eq!(snap.gene_trees.member_count, 9);
+        assert_eq!(snap.gene_trees.restricted_to_gene_sets, None);
+        assert!(snap.written.is_none());
+    }
+
+    #[test]
+    fn every_human_mouse_row_came_from_the_mouse_dump_and_none_was_lost() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        let kept: Vec<(&str, u64)> = snap
+            .dumps
+            .iter()
+            .map(|(s, d)| (s.as_str(), d.rows_kept))
+            .collect();
+        assert_eq!(kept, [(HUMAN, 1), (MOUSE, 5), (RAT, 1)]);
+        let counts: Vec<(&str, &str, u64, u64)> = snap
+            .pairs
+            .iter()
+            .map(|p| {
+                (
+                    p.species_a.as_str(),
+                    p.species_b.as_str(),
+                    p.ortholog_count,
+                    p.paralog_count,
+                )
+            })
+            .collect();
+        assert_eq!(
+            counts,
+            [
+                (HUMAN, HUMAN, 0, 0),
+                (HUMAN, MOUSE, 3, 0),
+                (HUMAN, RAT, 1, 0),
+                (MOUSE, MOUSE, 0, 1),
+                (MOUSE, RAT, 2, 0),
+                (RAT, RAT, 0, 0)
+            ]
+        );
+        assert_eq!(snap.pair(MOUSE, HUMAN).unwrap().row_count, 3);
+        assert_eq!(snap.pair(HUMAN, MOUSE).unwrap().row_count, 3);
+    }
+
+    #[test]
+    fn a_pair_of_a_species_not_in_the_snapshot_is_a_usage_error() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        let error = snap.pair(HUMAN, "danio_rerio").unwrap_err();
+        assert!(matches!(error, MzLibError::Usage(_)));
+    }
+
+    #[test]
+    fn pair_status_is_mzlibs_status_for_every_gene() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        let status = snap.pair_status.unwrap();
+        assert_eq!(
+            (status.from_species.as_str(), status.to_species.as_str()),
+            (HUMAN, MOUSE)
+        );
+        assert_eq!(status.row_count, 4);
+        assert_eq!(status.status_counts["has_ortholog"], 2);
+        assert_eq!(status.status_counts["not_in_gene_set"], 0);
+        assert_eq!(
+            status.status_counts.keys().count(),
+            ORTHOLOGY_STATUSES.len(),
+            "every status present, zeros included"
+        );
+        assert_eq!(
+            status.genes("has_ortholog").unwrap(),
+            ["ENSG00000000001", "ENSG00000000002"]
+        );
+        assert_eq!(
+            status.columns.names(),
+            ["gene_id", "gene_name", "gene_biotype", "status"]
+        );
+        assert_eq!(
+            status.columns.strings("gene_name").unwrap(),
+            [None, None, None, None],
+            "no gene_name in the GTF: None, not an empty string"
+        );
+        let error = status.genes("no_ortholog").unwrap_err();
+        assert!(matches!(&error, MzLibError::Usage(m) if m.contains("status must be one of")));
+    }
+
+    #[test]
+    fn the_orthology_caveats_name_the_shared_dump_name_and_the_unrestricted_trees() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        assert!(snap.caveats.iter().any(
+            |c| c.contains("share the file name Compara.116.protein_default.homologies.tsv.gz")
+        ));
+        assert!(snap
+            .caveats
+            .iter()
+            .any(|c| c.contains("read unrestricted: 9 genes")));
+        let names: std::collections::BTreeSet<&str> = snap
+            .dumps
+            .values()
+            .map(|d| d.source_file_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Compara.116.protein_default.homologies.tsv.gz"].into()
+        );
+    }
+
+    #[test]
+    fn a_written_snapshot_lists_every_file_but_the_manifest() {
+        let snap: OrthologySnapshot = recorded("genes_orthology_written.json");
+        let mut sets: Vec<String> = snap.gene_sets.values().map(|g| g.sha256.clone()).collect();
+        sets.sort();
+        assert_eq!(snap.gene_trees.restricted_to_gene_sets, Some(sets));
+        let written = snap.written.unwrap();
+        assert!(written.manifest().ends_with("manifest.json"));
+        assert!(written.files.iter().all(|f| f.path != "manifest.json"));
+        assert!(written
+            .files
+            .iter()
+            .all(|f| f.sha256.len() == 64 && f.bytes > 0));
+        let pairs: Vec<Option<u64>> = written
+            .files
+            .iter()
+            .filter(|f| f.path.starts_with("pairs/"))
+            .map(|f| f.rows)
+            .collect();
+        assert_eq!(pairs, [0, 3, 1, 1, 2, 0].map(Some));
+        assert_eq!(
+            written.files.last().map(|f| (f.path.as_str(), f.rows)),
+            Some(("views.sql", None))
+        );
+        assert_eq!(written.files.len(), 13);
+        let members = written
+            .files
+            .iter()
+            .find(|f| f.path == "members/homo_sapiens.parquet")
+            .unwrap();
+        assert_eq!(members.rows, Some(3), "ENSG00000000004 is in no tree");
+        assert!(written.manifest().starts_with(&written.directory));
+    }
+
+    #[test]
+    fn restricting_the_gene_trees_does_not_change_the_snapshot() {
+        let plain: OrthologySnapshot = recorded("genes_orthology_pair_status.json");
+        let restricted: OrthologySnapshot = recorded("genes_orthology_written.json");
+        assert_eq!(plain.snapshot_id, restricted.snapshot_id);
+        assert_eq!(plain.pairs, restricted.pairs);
+        assert_eq!(
+            (
+                plain.gene_trees.member_count,
+                restricted.gene_trees.member_count
+            ),
+            (9, 8)
+        );
+        assert!(!restricted
+            .caveats
+            .iter()
+            .any(|c| c.contains("unrestricted")));
+    }
+
+    #[test]
+    fn an_orthology_payload_without_optional_blocks_projects_to_none() {
+        let mut data: serde_json::Value = recorded("genes_orthology_written.json");
+        data["written"] = serde_json::Value::Null;
+        let snap: OrthologySnapshot = serde_json::from_value(data).unwrap();
+        assert!(snap.written.is_none() && snap.pair_status.is_none());
     }
 }

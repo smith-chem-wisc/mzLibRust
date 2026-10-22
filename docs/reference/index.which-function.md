@@ -11,7 +11,7 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Build an Ensembl Compara orthology snapshot for a set of species from their gene sets, the gene trees and every species' homology dump, and optionally write it as Parquet and say, gene by gene, how far Compara's inference got in another species. | `mzlib::proteins::build_orthology_with` (not yet) | `pymzlib.proteins.build_orthology` | `proteins_build_orthology` | `genes orthology` |
+| Build an Ensembl Compara orthology snapshot for a set of species from their gene sets, the gene trees and every species' homology dump, and optionally write it as Parquet and say, gene by gene, how far Compara's inference got in another species. | [`mzlib::proteins::build_orthology_with`](crate::proteins::build_orthology_with) | `pymzlib.proteins.build_orthology` | `proteins_build_orthology` | `genes orthology` |
 | Resolve every protein in the given databases to stable Ensembl gene ids, counted against a caller-supplied, release-pinned gene set, with one outcome per protein and the hash of every input. | [`mzlib::proteins::resolve_genes_with`](crate::proteins::resolve_genes_with) | `pymzlib.proteins.resolve_genes` | `proteins_resolve_genes` | `genes resolve` |
 
 ## `isobaric` · guide: [`isobaric`](crate::isobaric)
@@ -47,10 +47,10 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Align protein sequences pairwise with mzLib's global affine-gap aligner, and map every residue of each sequence to its counterpart in the other, or to none. | `mzlib::proteins::align_with` (not yet) | `pymzlib.proteins.align_many` | `proteins_align` | `proteins align` |
+| Align protein sequences pairwise with mzLib's global affine-gap aligner, and map every residue of each sequence to its counterpart in the other, or to none. | [`mzlib::proteins::align_with`](crate::proteins::align_with) | `pymzlib.proteins.align_many` | `proteins_align` | `proteins align` |
 | Annotate a stored MetaMorpheus protein-group table with Gene Ontology terms: one row per (group, term) that any member holds, directly or through an ancestor, with no member privileged. | [`mzlib::proteins::annotate_go_with`](crate::proteins::annotate_go_with) | `pymzlib.proteins.annotate_go` | `proteins_annotate_go` | `proteins annotate-go` |
 | Classify peptides as unique to one sequence, shared within a gene, shared across genes, or not in the databases, treating I and L as the same residue. | [`mzlib::proteins::classify_peptides_with`](crate::proteins::classify_peptides_with) | `pymzlib.proteins.classify_peptides` | `proteins_classify_peptides` | `proteins classify-peptides` |
-| Read protein accessions back into their entry, isoform or version, and applied sequence variants, with mzLib's accession grammars, never repairing one that does not fit. | `mzlib::proteins::parse_accessions` (not yet) | `pymzlib.proteins.parse_accessions` | `proteins_parse_accessions` | `proteins parse-accession` |
+| Read protein accessions back into their entry, isoform or version, and applied sequence variants, with mzLib's accession grammars, never repairing one that does not fit. | [`mzlib::proteins::parse_accessions`](crate::proteins::parse_accessions) | `pymzlib.proteins.parse_accessions` | `proteins_parse_accessions` | `proteins parse-accession` |
 | Read protein databases (UniProt XML or FASTA) into one row per protein, with GO terms and Ensembl gene links as long tables on request. | [`mzlib::proteins::read_with`](crate::proteins::read_with) | `pymzlib.proteins.read` | `proteins_read` | `proteins read` |
 | Download the current Gene Ontology release (go.obo) to a path, on purpose, keeping any different file already there as a timestamped backup. | [`mzlib::proteins::update_go`](crate::proteins::update_go) | `pymzlib.proteins.update_go` | `proteins_update_go` | `proteins update-go` |
 

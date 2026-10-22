@@ -41,6 +41,10 @@ the reason it is not portable. Nothing was silently dropped.
 | sdrf isobaric design live | `test_sdrf_isobaric_design.py` 2 live | `tests/live_sdrf.rs` 2 | 1:1: the recording and `TmtDesign.txt` against the 0.6.0 bridge, and an unknown kit is `isobaric kits`' own usage error |
 | sdrf restrict | `test_sdrf_restrict.py` 7 offline (two parametrized over 9 and 3 refused arguments) | `src/sdrf.rs` 5, and `written_sdrf_reads_the_path_mzlib_reports` for `pool` | 1:1 by function. A bare string, a number and an empty mapping cannot reach `&[SearchedFile]`; a negative window cannot reach `u64` |
 | sdrf restrict live | `test_sdrf_restrict.py` 4 live | `tests/live_sdrf.rs` 4, and `pool_out_reports_the_file_mzlib_wrote` | 1:1: the recording, `out`'s `.sdrf.tsv` rename, restrict then design with native paths (SDRF-B5), and no `comment[data file]` is `ArgumentException` |
+| proteins align and parse-accession | `test_proteins_align.py` 17 offline (three parametrized over 6, 8 and 7 cases) | `src/proteins.rs` 15 | 1:1 by function. A non-int position, a non-string pair or accession, and a bare string cannot reach `usize`, `&[(S, T)]` or `&[S]`; the verb guard is `bridge.rs`'s |
+| proteins align and parse-accession live | `test_proteins_live.py` 6 (one parametrized over 4 refusals) | `tests/live_proteins.rs` 6 | 1:1 |
+| genes orthology | `test_proteins_orthology.py` 15 offline (two parametrized over 15 and 5 cases) | `src/proteins.rs` 12 | 1:1 by function. An int release, a dict instead of a list and a non-bool flag cannot be expressed in Rust (`&str`, `Vec<(String, PathBuf)>`, `bool`) |
+| genes orthology live | `test_proteins_live.py` 5 | `tests/live_proteins.rs` 5 | 1:1: the snapshot id over the byte-exact inputs, Parquet written once, mzLib's three refusals |
 | PRIDE checksums live | `test_pride_live.py` 3 | `tests/live_pride.rs` 3 | 1:1: the list covers the FTP root's deposits, one download's length and MD5 match its row, an unknown accession is `ProjectNotFound`. Skip on a bridge older than pyMzLib 0.6.0 |
 
 ## Tests eliminated by Rust's type system

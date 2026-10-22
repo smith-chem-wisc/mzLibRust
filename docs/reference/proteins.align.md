@@ -20,7 +20,7 @@
 | `gap_extend` (wire `--gap-extend`) | `int` | `1` | half-bits (BLOSUM62 score units) | `>= 1 (mzLib refuses 0 or less)` | The cost of each residue in a gap, the first included. Absent: mzLib's default, 1 at d10017ce. |
 | `end_gaps` (wire `--end-gaps`) | `string` | `free` | — | `free \| charged (case-insensitive)` | free: a gap at either end of either sequence costs nothing, so one sequence may overhang the other (a signal peptide, a longer C-terminus) without penalty, as EMBOSS needle scores end gaps by default. charged: every gap costs. mzLib's PairwiseAligner.FreeEndGaps, true or false. Absent: mzLib's default, free (true) at d10017ce. The spelling is mzLib's own, from its aligner id. |
 | `max_cells` (wire `--max-cells`) | `int` | `200000000` | cells | `1 to 2147483591 (Array.MaxLength; mzLib refuses anything outside)` | The largest dynamic-programming table mzLib will build, (source length + 1) x (target length + 1) cells of one byte each. A larger pair is refused rather than allowed to exhaust memory. Absent: mzLib's default, 200,000,000 cells (about 200 MB) at d10017ce. |
-| `no_residue_map` (wire `--no-residue-map`) | `flag` | `false` | — | — | Leave out the residue map (residue\_map is then null). The pairs table is unchanged. For a batch where only the scores and counts are wanted: the map has one row per residue of both sequences. |
+| `residue_map` (wire `--no-residue-map`) | `flag` | `false` | — | — | Leave out the residue map (residue\_map is then null). The pairs table is unchanged. For a batch where only the scores and counts are wanted: the map has one row per residue of both sequences. |
 
 # Returns
 
