@@ -10,6 +10,24 @@ Each entry names the mzLib pull request it comes from, so you can read the chang
 `mzlib::bridge_version()?.mzlib`. pyMzLib keeps the same page, entry for entry, because both
 bindings drive the same bridge.
 
+## The pyMzLib 0.6.0 bridge (still built from mzLib 1.0.595)
+
+mzLib did not move. These are the bridge's own.
+
+### Same file, different value
+
+- **`stats::fit` and `fit_with` on fewer than 3 features report no shared prior variance.** With
+  so few features mzLib fits no prior ([mzLib#1398](https://github.com/smith-chem-wisc/mzLib/pull/1398),
+  as limma's `squeezeVar` does): `VariancePrior::df` is 0 and each feature keeps its own variance.
+  `VariancePrior::scale` used to report the first feature's variance as though it were the prior;
+  it is now `None`, and each feature's value is in `FitRow::prior_variance`. Tables of 3 or more
+  features are unchanged.
+- **`stats::fit_with`'s caveats name the variance-prior estimator.** The first caveat now begins
+  `moments_legacy:` (or `marginal_likelihood:` when you choose it with `FitOptions::estimator`), and
+  the `residual_df_differ` caveat names `marginal_likelihood` as mzLib's estimator for that case.
+  The `bh_adjusted` caveat says "per coefficient and per contrast". Every number is unchanged;
+  only code that matches caveat text needs a look.
+
 ## The pyMzLib 0.5.0 bridge (built from mzLib 1.0.595)
 
 This bridge moves mzLib from 1.0.593 to 1.0.595, so it carries 1.0.594's changes too. Three of the
@@ -83,8 +101,8 @@ stopped adding a PRIDE time limit on top of mzLib's.
   mzLib fits no prior, as limma does: `VariancePrior::df` is 0, each feature keeps its own
   variance, and `t` and `p_value` are ordinary per-feature t-tests. They used to borrow a prior
   fitted to the two features. **On this bridge `VariancePrior::scale` still reports the first
-  feature's own variance there**, as though it were the prior; bridges from pyMzLib 0.5.1 report
-  `None`. Read each feature's value from `FitRow::prior_variance`.
+  feature's own variance there**, as though it were the prior; the pyMzLib 0.6.0 bridge reports
+  `None` (above). Read each feature's value from `FitRow::prior_variance`.
 - **`peptidoform::fragments_with` with a `|P` protease** ([mzLib#1320](https://github.com/smith-chem-wisc/mzLib/pull/1320)).
   `protease: Some("trypsin|P".into())` cut a protein that begins `RP` or `KP` after its first
   residue; it no longer does, and the other `|P` proteases change the same way. mzLib's default

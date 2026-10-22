@@ -26,9 +26,16 @@ the reason it is not portable. Nothing was silently dropped.
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
 | transport live | — | `tests/live_bridge.rs` 2 | new: the M0 end-to-end proof |
-| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `` is refused beside `
+| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `
+` is refused beside `
 ` |
 | peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
+| stats, pyMzLib 0.6.0 verbs | `test_stats.py` 25, `test_stats_combine_correlate.py` 10, `test_stats_models.py` 13 | `src/stats.rs` 26 | by behaviour, not by function: every request shape (options sent only when given), every refusal before spawning, every recording parse and the old-bridge guard for `contrasts` and `estimator` has a test; one Rust test often holds several pyMzLib ones. The type checks and `__all__` are eliminated (below) |
+| diff | `test_diff.py` 16 | `src/diff.rs` 11 | by behaviour, as stats; `test_the_example_inputs_are_vendored` is the doctests themselves, which fail without the inputs |
+| ptmqtl | `test_ptmqtl.py` 16 | `src/ptmqtl.rs` 9 | by behaviour, as stats |
+| stats live, pyMzLib 0.6.0 | `test_stats_live.py` 10, `test_stats_combine_correlate_live.py` 3, `test_stats_models_live.py` 5 | `tests/live_stats.rs` 20 | every parametrized recording case, every R comparison (limma, metafor, `pchisq`/`qnorm`, `glm`, `nlme`, the entrapment reference script) and every refusal; +1: a fit of fewer than three features fits no prior (`scale` is `None`) |
+| diff live | `test_diff_live.py` 5 | `tests/live_diff.rs` 5 | 1:1 |
+| ptmqtl live | `test_ptmqtl_live.py` 4 | `tests/live_ptmqtl.rs` 4 | 1:1 |
 
 ## Tests eliminated by Rust's type system
 
@@ -49,6 +56,9 @@ accounted for, not quietly missing.
 | `test_boolean_max_threads_raises` | `i32` is not `bool`. |
 | `test_non_integer_max_length_is_refused` | `Option<u32>`. |
 | `test_mz_rejects_charges_that_are_not_positive_whole_numbers` (partial) | `i32` excludes `1.5`, `"2"`, `True`, `None`; `0` and `-1` are tested. |
+| `test_combine_p_has_no_default_method`, `test_entrapment_fdp_has_no_default_ratio`, `test_pairs_requires_a_type`, `test_trait_effects_needs_both_paths` | `method`, `ratio`, `pair_type` and both paths are positional arguments, so leaving one out is a compile error. `observations_with`'s `basis` is a `QuantBasis` for the same reason. |
+| `test_module_lists_only_its_public_api`, `test_the_module_is_exported`, `test_module_is_exported` (stats, diff, ptmqtl) | Rust's `pub` is the public API; `lib.rs` declares the modules, and the doctests use them by path. |
+| the stats, diff and ptmqtl `test_*_refuses_*` cases for a wrong type (a bare string for a list, a bool for an int, `threads=True`, a non-path) | The arguments are `&[S: AsRef<str>]`, `&[PValueTest]`, `&[ObservationRun]`, `Option<u32>`, `i32`, `f64` and `impl AsRef<Path>`: the confusion cannot be expressed. The reachable cases (an empty list, a blank or tab-holding name, a non-finite number, an unknown estimator or grouping, both filters) each have a test. |
 
 ## Deliberately not ported
 
