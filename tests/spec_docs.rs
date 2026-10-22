@@ -69,6 +69,7 @@ const DEVIATIONS: &[&[Deviation]] = &[
     QUANT,
     STATS,
     DIFF,
+    PTMQTL,
 ];
 
 /// Deviations: conventions that hold for every verb.
@@ -236,6 +237,13 @@ const DIFF: &[Deviation] = &[
     ),
 ];
 
+/// Deviations: ptmqtl.
+const PTMQTL: &[Deviation] = &[dev(
+    "ptmqtl pairs",
+    "param.type",
+    Some("pair_type"),
+    "type is a Rust keyword, so pairs_with's argument is pair_type, a PairType",
+)];
 
 /// Deviations: proteins and genes.
 const PROTEINS: &[Deviation] = &[
@@ -1342,6 +1350,7 @@ fn guide_module(spec_module: &str) -> Option<&'static str> {
         "isobaric" => "isobaric",
         "stats" => "stats",
         "diff" => "diff",
+        "ptmqtl" => "ptmqtl",
         _ => return None,
     })
 }
