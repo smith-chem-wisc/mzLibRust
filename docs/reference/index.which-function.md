@@ -37,7 +37,7 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| List the MD5 and exact size PRIDE recorded for each file deposited in a project: the record a downloaded file is checked against. | `mzlib::pride::file_checksums_with` (not yet) | `pymzlib.pride.file_checksums` | `pride_file_checksums` | `pride checksums` |
+| List the MD5 and exact size PRIDE recorded for each file deposited in a project: the record a downloaded file is checked against. | [`mzlib::pride::file_checksums_with`](crate::pride::file_checksums_with) | `pymzlib.pride.file_checksums` | `pride_file_checksums` | `pride checksums` |
 | Download a PRIDE project's files, all of them or a selection, into a directory and report the paths written. | [`mzlib::pride::download`](crate::pride::download) | `pymzlib.pride.download` | `pride_download` | `pride download` |
 | List a PRIDE Archive project's files as PRIDE's REST API publishes them, with every page already fetched: name, size, checksum, category and download locations. | [`mzlib::pride::list_files_with`](crate::pride::list_files_with) | `pymzlib.pride.list_files` | `pride_list_files` | `pride files` |
 | List every file a PRIDE project holds by walking its FTP directory tree, subdirectories included, with approximate sizes. | [`mzlib::pride::list_ftp_files_with`](crate::pride::list_ftp_files_with) | `pymzlib.pride.list_ftp_files` | `pride_list_ftp_files` | `pride ftp-files` |

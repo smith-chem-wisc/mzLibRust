@@ -36,6 +36,8 @@ the reason it is not portable. Nothing was silently dropped.
 | stats live, pyMzLib 0.6.0 | `test_stats_live.py` 10, `test_stats_combine_correlate_live.py` 3, `test_stats_models_live.py` 5 | `tests/live_stats.rs` 20 | every parametrized recording case, every R comparison (limma, metafor, `pchisq`/`qnorm`, `glm`, `nlme`, the entrapment reference script) and every refusal; +1: a fit of fewer than three features fits no prior (`scale` is `None`) |
 | diff live | `test_diff_live.py` 5 | `tests/live_diff.rs` 5 | 1:1 |
 | ptmqtl live | `test_ptmqtl_live.py` 4 | `tests/live_ptmqtl.rs` 4 | 1:1 |
+| PRIDE checksums | `test_pride.py` 10 checksum tests, and `file_checksums` in the no-timeout parametrization | `src/pride.rs` 11 | 1:1 by function, plus the manifest-versus-checksum size. The verb guard's `("pride checksums", "0.6.0")` is held by `bridge.rs`'s `require_verb` tests, not per verb; a non-string accession cannot reach `&str` (above) |
+| PRIDE checksums live | `test_pride_live.py` 3 | `tests/live_pride.rs` 3 | 1:1: the list covers the FTP root's deposits, one download's length and MD5 match its row, an unknown accession is `ProjectNotFound`. Skip on a bridge older than pyMzLib 0.6.0 |
 
 ## Tests eliminated by Rust's type system
 

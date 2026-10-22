@@ -110,6 +110,18 @@ A wire verb's first appearance here is the version its spec in the bridge record
   caveat now names its estimator). The replay bridge carries pyMzLib's whole `RECORDED_WITH`
   table, flags included. `stats fit`'s contrasts and estimator are `PENDING` in
   `tests/spec_docs.rs` until they are projected.
+- **`pride::file_checksums`, `pride::file_checksums_with`: the MD5 and exact size PRIDE recorded for
+  each file deposited in a project** (`pride checksums`, mzLib #1427; spec `pride.checksums.yaml`).
+  It is what a download is checked against, and `download` and `download_files` check neither
+  yet. A `BTreeMap<String, PrideFileChecksum>` keyed by file name, in the wire's file-name order,
+  as pyMzLib's dict is; each row is read strictly, so a row missing its MD5 or size is
+  `MzLibError::Protocol`, not a blank that blames the download later. An unknown or unpublished
+  accession is `MzLibError::ProjectNotFound`; an existing project with no checksums is an empty
+  map; a list mzLib cannot read stays `MzLibError::Bridge` (`MzLibException`). No time limit of
+  the crate's own, as for every PRIDE call. The `pride` guide gains *Checking a download against
+  PRIDE's checksums*: the check itself (size, then MD5, with the `md-5` crate, now a
+  dev-dependency), what the list covers (not `generated/`, files the manifest omits, non-deposits)
+  and its two traps. The tests' `spec_docs` lint reads a map return as a list of its values.
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.
