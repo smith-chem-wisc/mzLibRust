@@ -107,14 +107,133 @@ const ECHOED_AS: &[(&str, &str)] = &[
 
 /// Verbs whose input travels on stdin and is echoed in the recording, so a recording answers only a
 /// call that sent the same input. stdin is read only for these.
-const STDIN_ECHO: &[&str] = &["quant flashlfq", "peptidoform convert"];
+const STDIN_ECHO: &[&str] = &[
+    "quant flashlfq",
+    "peptidoform convert",
+    "stats combine-p",
+    "stats fit",
+    "stats fit-logistic",
+    "stats fit-mixed",
+    "diff design",
+    "diff observations",
+];
 
 /// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
 /// that leaves the option out takes a default (mzLib's) that the replay does not know, and the echo
 /// of a value that was given looks the same as the echo of a default. So a call without `--max-mods`
 /// cannot be answered from the max-mods 1 albumin digest. pyMzLib's `RECORDED_WITH`.
-const RECORDED_WITH: &[(&str, &[(&str, &str)])] =
-    &[("peptidoform_P02768_small.json", &[("max-mods", "1")])];
+const RECORDED_WITH: &[(&str, &[(&str, &str)])] = &[
+    ("peptidoform_P02768_small.json", &[("max-mods", "1")]),
+    ("stats_fit_mixed_lmm_ml.json", &[("estimator", "ml")]),
+    (
+        "stats_fit_malat_marginal.json",
+        &[("estimator", "marginal_likelihood")],
+    ),
+    (
+        "diff_observations_spike_in_normalized.json",
+        &[("min-peptides", "50")],
+    ),
+    // ptmqtl: an option left out takes mzLib's default, which the echo cannot tell apart.
+    ("ptmqtl_trait_effects_strict.json", &[("min-replicates", "6")]),
+];
+
+/// `RECORDED_WITH` for flags: recordings made with a flag the call must send as well. pyMzLib's
+/// `RECORDED_WITH` entries whose value is `True`.
+const RECORDED_WITH_FLAGS: &[(&str, &[&str])] = &[
+    ("diff_observations_spike_in_normalized.json", &["normalize"]),
+    ("ptmqtl_pairs_batch_run_level.json", &["remove-run-level"]),
+];
+
+/// Why this recording cannot answer a call that does not send a flag it was recorded with, or
+/// `None`.
+fn recorded_with_flag_mismatch(
+    recording: &Recording,
+    options: &[(String, Option<String>)],
+) -> Option<String> {
+    let (_, required) = RECORDED_WITH_FLAGS
+        .iter()
+        .find(|(fixture, _)| *fixture == recording.fixture)?;
+    required.iter().find_map(|name| {
+        option(options, name)
+            .is_none()
+            .then(|| format!("recorded with --{name}, which the call does not send"))
+    })
+}
+
+/// Optional input files a verb echoes as `<name>_file`, null when the option was not given (stats
+/// correlate --given, diff observations --protein-groups and --samples, ptmqtl --samples and
+/// --run-level-groups, stats fit --contrasts). A recording made with one answers only a call that
+/// gives one, and the reverse. pyMzLib's `OPTIONAL_FILES`.
+const OPTIONAL_FILES: &[&str] = &[
+    "given",
+    "protein-groups",
+    "samples",
+    "run-level-groups",
+    "contrasts",
+];
+
+/// Options a verb echoes inside an object rather than at the top level (stats fit --estimator as
+/// prior.estimator, --confidence as contrasts.confidence_level), flattened by `build.rs` as
+/// `outer.inner`. pyMzLib's `NESTED_ECHOES`.
+const NESTED_ECHOES: &[(&str, &str)] = &[
+    ("estimator", "prior.estimator"),
+    ("confidence", "contrasts.confidence_level"),
+];
+
+/// Optional output files a verb reports in its own field, null when the option was not given
+/// (diff observations --responses-out). pyMzLib's `OPTIONAL_OUTPUTS`.
+const OPTIONAL_OUTPUTS: &[(&str, &str)] = &[("responses-out", "responses_written")];
+
+/// Echoes that say whether an option was given, when its value echo cannot (stats entrapment-fdp
+/// echoes the thresholds it used, which are mzLib's default when --thresholds was absent).
+/// pyMzLib's `GIVEN_ECHOES`.
+const GIVEN_ECHOES: &[(&str, &str)] = &[("thresholds_given", "thresholds")];
+
+/// A numeric echo against an option's text: JSON writes 1.0 as 1, Rust sends `1.0`. pyMzLib's
+/// `same_number`.
+fn same_number(recorded: &str, value: &str) -> bool {
+    match (recorded.parse::<f64>(), value.parse::<f64>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// pyMzLib's `NESTED_ECHOES`, `GIVEN_ECHOES`, `OPTIONAL_FILES` and `OPTIONAL_OUTPUTS` checks: why
+/// this recording cannot answer the call, or `None`.
+fn echo_mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Option<String> {
+    for (name, key) in NESTED_ECHOES {
+        if let (Some(Some(value)), Some(V::Text(echo))) = (option(options, name), recording.get(key))
+        {
+            if echo != value && !same_number(echo, value) {
+                return Some(format!("recorded with {key}='{echo}', not '{value}'"));
+            }
+        }
+    }
+    for (key, name) in GIVEN_ECHOES {
+        if let Some(V::Bool(given)) = recording.get(key) {
+            if option(options, name).is_some() != *given {
+                let with = if *given { "with" } else { "without" };
+                return Some(format!("recorded {with} --{name}"));
+            }
+        }
+    }
+    let optional_files = OPTIONAL_FILES
+        .iter()
+        .map(|name| (*name, format!("{}_file", name.replace('-', "_"))));
+    let optional_outputs = OPTIONAL_OUTPUTS
+        .iter()
+        .map(|(name, key)| (*name, (*key).to_owned()));
+    for (name, key) in optional_files.chain(optional_outputs) {
+        if let Some(echo) = recording.get(&key) {
+            let recorded_with = !matches!(echo, V::Null);
+            if option(options, name).is_some() != recorded_with {
+                let with = if recorded_with { "with" } else { "without" };
+                return Some(format!("recorded {with} --{name}"));
+            }
+        }
+    }
+    None
+}
 
 /// Why this recording cannot answer a call that does not send what it was recorded with, or `None`.
 fn recorded_with_mismatch(
@@ -185,7 +304,7 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
                     base(value)
                 ));
             }
-        } else if recorded != *value {
+        } else if recorded != *value && !same_number(&recorded, value) {
             return Some(format!("recorded with {key}='{recorded}', not '{value}'"));
         }
     }
@@ -309,6 +428,9 @@ fn describe(options: &[(String, Option<String>)]) -> String {
 /// same runs (the first tab-separated cell of each stdin line), compared by file name.
 /// `peptidoform convert`: the same sequences, in the same order, as the recording's `input` column.
 fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<String> {
+    if let Some(why) = model_stdin_mismatch(recording, stdin, verb) {
+        return why;
+    }
     if verb == "peptidoform convert" {
         let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();
         return (sent != recording.inputs)
@@ -327,6 +449,146 @@ fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Stri
     (sent != recorded).then(|| format!("recorded for runs {recorded:?}, not {sent:?}"))
 }
 
+/// The non-blank stdin lines, each split into trimmed tab-separated fields.
+fn stdin_fields(stdin: &str) -> Vec<Vec<&str>> {
+    stdin
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split('\t').map(str::trim).collect())
+        .collect()
+}
+
+fn recorded_text<'a>(recording: &'a Recording, key: &str) -> &'a str {
+    match recording.get(key) {
+        Some(V::Text(text)) => text,
+        _ => "",
+    }
+}
+
+/// A `diff design` call's stdin in `build.rs`'s `recorded_model` form. pyMzLib's `diff_model`.
+fn canonical_model(stdin: &str) -> String {
+    let number = |text: &str| {
+        text.parse::<f64>()
+            .map_or_else(|_| String::new(), |n| format!("{n:?}"))
+    };
+    let field = |fields: &[&str], i: usize| fields.get(i).copied().unwrap_or("").to_owned();
+    let mut kinds: [Vec<String>; 5] = Default::default();
+    for f in stdin_fields(stdin) {
+        let (kind, line) = match f[0] {
+            "factor" => (0, format!("factor\t{}\t{}", field(&f, 1), field(&f, 2))),
+            "covariate" => (
+                1,
+                format!(
+                    "covariate\t{}\t{}\t{}\t{}\t{}",
+                    field(&f, 1),
+                    field(&f, 2),
+                    number(&field(&f, 3)),
+                    field(&f, 4),
+                    number(&field(&f, 5))
+                ),
+            ),
+            "interaction" => (2, format!("interaction\t{}\t{}", field(&f, 1), field(&f, 2))),
+            "stratum" => (3, format!("stratum\t{}", field(&f, 1))),
+            "batch" => (4, format!("batch\t{}", field(&f, 1))),
+            _ => continue,
+        };
+        kinds[kind].push(line);
+    }
+    kinds.concat().join("\n")
+}
+
+/// The stdin echoes of the stats and diff verbs, or `None` for another verb. pyMzLib's
+/// `stdin_mismatch` branches for them:
+///
+/// * stats fit, fit-logistic and fit-mixed: the same coefficients, in the same order, as the
+///   recording's `tested_coefficients` (none, for a stats fit of contrasts alone);
+/// * stats combine-p: the same features in the same first-appearance order, the same number of
+///   tests, and weights and effects given or not as the recording's `weighted` and `signed` say;
+/// * diff design: the same model;
+/// * diff observations: the same runs, or, with `--samples`, runs among those sent.
+fn model_stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Option<String>> {
+    let why = match verb {
+        "stats fit" | "stats fit-logistic" | "stats fit-mixed" => {
+            let sent: Vec<&str> = stdin
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect();
+            let recorded = recorded_text(recording, "@tested_coefficients");
+            (sent.join("\n") != recorded)
+                .then(|| format!("recorded for coefficients {recorded:?}, not {sent:?}"))
+        }
+        "stats combine-p" => {
+            let lines = stdin_fields(stdin);
+            let mut features: Vec<&str> = Vec::new();
+            for fields in &lines {
+                if !features.contains(&fields[0]) {
+                    features.push(fields[0]);
+                }
+            }
+            let weighted = lines.iter().any(|f| {
+                f.len() >= 3 && !["", "na", "nan"].contains(&f[2].to_lowercase().as_str())
+            });
+            let signed = lines.iter().any(|f| f.len() == 4);
+            let flag = |key: &str| matches!(recording.get(key), Some(V::Bool(true)));
+            if features.join("\n") != recorded_text(recording, "@features") {
+                Some(format!("recorded for other features, not {features:?}"))
+            } else if lines.len().to_string() != recorded_text(recording, "line_count") {
+                Some(format!(
+                    "recorded for {} tests, not {}",
+                    recorded_text(recording, "line_count"),
+                    lines.len()
+                ))
+            } else if (weighted, signed) != (flag("weighted"), flag("signed")) {
+                Some(format!(
+                    "recorded with weighted={} signed={}, not weighted={weighted} signed={signed}",
+                    flag("weighted"),
+                    flag("signed")
+                ))
+            } else {
+                None
+            }
+        }
+        "diff design" => {
+            let sent = canonical_model(stdin);
+            let recorded = recorded_text(recording, "@model");
+            (sent != recorded).then(|| format!("recorded for the model {recorded:?}, not {sent:?}"))
+        }
+        "diff observations" => {
+            let mut sent: Vec<String> = stdin_fields(stdin)
+                .iter()
+                .map(|f| {
+                    let whole = |i: usize| f.get(i).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        f[0],
+                        f.get(1).copied().unwrap_or(""),
+                        whole(2),
+                        whole(3)
+                    )
+                })
+                .collect();
+            sent.sort();
+            sent.dedup();
+            let recorded: Vec<&str> = recorded_text(recording, "@runs")
+                .split('\n')
+                .filter(|l| !l.is_empty())
+                .collect();
+            // --samples narrows the recorded runs to one stratum's, so they need only be among
+            // those sent.
+            let narrowed = !matches!(recording.get("samples_file"), None | Some(V::Null));
+            let fits = if narrowed {
+                recorded.iter().all(|r| sent.iter().any(|s| s == r))
+            } else {
+                recorded == sent
+            };
+            (!fits).then(|| format!("recorded for other runs, not {:?}", &sent[..sent.len().min(3)]))
+        }
+        _ => return None,
+    };
+    Some(why)
+}
+
 fn answer(argv: &[String], stdin: &str) -> (bool, String) {
     let (verb, options) = parse(argv);
     let Some((_, candidates)) = TABLE.iter().find(|(name, _)| *name == verb) else {
@@ -339,8 +601,10 @@ fn answer(argv: &[String], stdin: &str) -> (bool, String) {
     let mut fits = Vec::new();
     let mut reasons = Vec::new();
     for recording in *candidates {
-        let why = mismatch(recording, &options)
+        let why = echo_mismatch(recording, &options)
+            .or_else(|| mismatch(recording, &options))
             .or_else(|| recorded_with_mismatch(recording, &options))
+            .or_else(|| recorded_with_flag_mismatch(recording, &options))
             .or_else(|| {
                 if STDIN_ECHO.contains(&verb.as_str()) {
                     stdin_mismatch(recording, stdin, &verb)

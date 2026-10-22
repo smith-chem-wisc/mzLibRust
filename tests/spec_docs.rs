@@ -68,6 +68,7 @@ const DEVIATIONS: &[&[Deviation]] = &[
     PEPTIDOFORM,
     QUANT,
     STATS,
+    DIFF,
 ];
 
 /// Deviations: conventions that hold for every verb.
@@ -193,7 +194,48 @@ const STATS: &[Deviation] = &[
         Some("studies"),
         "one tab-separated stdin line per Study in meta_with's studies",
     ),
+    dev(
+        "stats combine-p",
+        "param.stdin",
+        Some("tests"),
+        "one tab-separated stdin line per PValueTest in combine_p's tests",
+    ),
+    dev(
+        "stats correlate",
+        "param.trait",
+        Some("trait_table"),
+        "trait is a Rust keyword, so correlate_with's argument is trait_table",
+    ),
+    dev(
+        "stats fit-logistic",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_logistic_with's coefficients",
+    ),
+    dev(
+        "stats fit-mixed",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_mixed_with's coefficients",
+    ),
 ];
+
+/// Deviations: diff.
+const DIFF: &[Deviation] = &[
+    dev(
+        "diff design",
+        "param.stdin",
+        Some("factors"),
+        "one stdin line per term of DesignOptions' factors, covariates, interactions, strata and batch",
+    ),
+    dev(
+        "diff observations",
+        "param.stdin",
+        Some("runs"),
+        "one tab-separated stdin line per ObservationRun in observations_with's runs",
+    ),
+];
+
 
 /// Deviations: proteins and genes.
 const PROTEINS: &[Deviation] = &[
@@ -1299,6 +1341,7 @@ fn guide_module(spec_module: &str) -> Option<&'static str> {
         "peptidoform" => "peptidoform",
         "isobaric" => "isobaric",
         "stats" => "stats",
+        "diff" => "diff",
         _ => return None,
     })
 }
