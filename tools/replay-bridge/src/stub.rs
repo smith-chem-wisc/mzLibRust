@@ -121,44 +121,46 @@ const STDIN_ECHO: &[&str] = &[
 /// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
 /// that leaves the option out takes a default (mzLib's) that the replay does not know, and the echo
 /// of a value that was given looks the same as the echo of a default. So a call without `--max-mods`
-/// cannot be answered from the max-mods 1 albumin digest. pyMzLib's `RECORDED_WITH`.
-const RECORDED_WITH: &[(&str, &[(&str, &str)])] = &[
-    ("peptidoform_P02768_small.json", &[("max-mods", "1")]),
-    ("stats_fit_mixed_lmm_ml.json", &[("estimator", "ml")]),
+/// cannot be answered from the max-mods 1 albumin digest. pyMzLib's `RECORDED_WITH`, entry for
+/// entry; `None` is a flag, sent without a value.
+const RECORDED_WITH: &[(&str, &[(&str, Option<&str>)])] = &[
+    ("peptidoform_P02768_small.json", &[("max-mods", Some("1"))]),
+    (
+        "proteins_align_charged.json",
+        &[("end-gaps", Some("charged"))],
+    ),
+    // library read echoes both, but a call that leaves them out takes the defaults, and the echo
+    // would not stop a recording made with them from answering it.
+    ("library_read_fragments.json", &[("fragments", None)]),
+    (
+        "library_read_index_only.json",
+        &[("index-only-threshold", Some("0"))],
+    ),
+    ("stats_fit_mixed_lmm_ml.json", &[("estimator", Some("ml"))]),
     (
         "stats_fit_malat_marginal.json",
-        &[("estimator", "marginal_likelihood")],
+        &[("estimator", Some("marginal_likelihood"))],
     ),
     (
         "diff_observations_spike_in_normalized.json",
-        &[("min-peptides", "50")],
+        &[("min-peptides", Some("50")), ("normalize", None)],
     ),
-    // ptmqtl: an option left out takes mzLib's default, which the echo cannot tell apart.
-    ("ptmqtl_trait_effects_strict.json", &[("min-replicates", "6")]),
+    // ptmqtl: a flag or an option left out takes mzLib's default, which the echo cannot tell apart.
+    (
+        "ptmqtl_pairs_batch_run_level.json",
+        &[("remove-run-level", None)],
+    ),
+    (
+        "ptmqtl_trait_effects_strict.json",
+        &[("min-replicates", Some("6"))],
+    ),
+    // sdrf isobaric-design echoes the plex source, but a call that declares none must get the
+    // refusal recorded without one, not the design read with the pattern.
+    (
+        "sdrf_isobaric_design_PXD008841.json",
+        &[("plex-file-name-pattern", Some(r"TMT_?pool(?<plex>\d+)"))],
+    ),
 ];
-
-/// `RECORDED_WITH` for flags: recordings made with a flag the call must send as well. pyMzLib's
-/// `RECORDED_WITH` entries whose value is `True`.
-const RECORDED_WITH_FLAGS: &[(&str, &[&str])] = &[
-    ("diff_observations_spike_in_normalized.json", &["normalize"]),
-    ("ptmqtl_pairs_batch_run_level.json", &["remove-run-level"]),
-];
-
-/// Why this recording cannot answer a call that does not send a flag it was recorded with, or
-/// `None`.
-fn recorded_with_flag_mismatch(
-    recording: &Recording,
-    options: &[(String, Option<String>)],
-) -> Option<String> {
-    let (_, required) = RECORDED_WITH_FLAGS
-        .iter()
-        .find(|(fixture, _)| *fixture == recording.fixture)?;
-    required.iter().find_map(|name| {
-        option(options, name)
-            .is_none()
-            .then(|| format!("recorded with --{name}, which the call does not send"))
-    })
-}
 
 /// Optional input files a verb echoes as `<name>_file`, null when the option was not given (stats
 /// correlate --given, diff observations --protein-groups and --samples, ptmqtl --samples and
@@ -244,8 +246,15 @@ fn recorded_with_mismatch(
         .iter()
         .find(|(fixture, _)| *fixture == recording.fixture)?;
     required.iter().find_map(|(name, value)| {
-        (option(options, name).and_then(|v| v.as_deref()) != Some(*value))
-            .then(|| format!("recorded with --{name} {value}, which the call does not send"))
+        let sent = option(options, name);
+        let fits = match value {
+            Some(value) => sent.and_then(|v| v.as_deref()) == Some(*value),
+            None => matches!(sent, Some(None)),
+        };
+        (!fits).then(|| {
+            let shown = value.map_or_else(String::new, |value| format!(" {value}"));
+            format!("recorded with --{name}{shown}, which the call does not send")
+        })
     })
 }
 
@@ -604,7 +613,6 @@ fn answer(argv: &[String], stdin: &str) -> (bool, String) {
         let why = echo_mismatch(recording, &options)
             .or_else(|| mismatch(recording, &options))
             .or_else(|| recorded_with_mismatch(recording, &options))
-            .or_else(|| recorded_with_flag_mismatch(recording, &options))
             .or_else(|| {
                 if STDIN_ECHO.contains(&verb.as_str()) {
                     stdin_mismatch(recording, stdin, &verb)
