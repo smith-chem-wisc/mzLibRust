@@ -404,7 +404,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `sdrf isobaric-design` · `mzlib::sdrf::isobaric_design_with` (not yet)
+### `sdrf isobaric-design` · [`mzlib::sdrf::isobaric_design_with`](crate::sdrf::isobaric_design_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -453,7 +453,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `sdrf restrict` · `mzlib::sdrf::restrict_with` (not yet)
+### `sdrf restrict` · [`mzlib::sdrf::restrict_with`](crate::sdrf::restrict_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

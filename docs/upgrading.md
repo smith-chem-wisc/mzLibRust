@@ -10,6 +10,18 @@ Each entry names the mzLib pull request it comes from, so you can read the chang
 `mzlib::bridge_version()?.mzlib`. pyMzLib keeps the same page, entry for entry, because both
 bindings drive the same bridge.
 
+## The pyMzLib 0.6.0 bridge (still built from mzLib 1.0.595)
+
+mzLib did not move. These are the bridge's own.
+
+### Same file, different value
+
+- **`sdrf::pool_with` with `PoolOptions::out` names the file it wrote.** mzLib adds `.sdrf.tsv`
+  to a name that does not already end in it, so an `out` of `x.tsv` writes `x.tsv.sdrf.tsv`.
+  `PooledSdrf::written`'s `WrittenSdrf::path` used to say `x.tsv`, a file that does not exist; it
+  now says `x.tsv.sdrf.tsv`. The file written is the same. An `out` already ending in `.sdrf.tsv`
+  is unchanged. `sdrf::restrict_with`, new in this bridge, reports its `out` the same way.
+
 ## The pyMzLib 0.5.0 bridge (built from mzLib 1.0.595)
 
 This bridge moves mzLib from 1.0.593 to 1.0.595, so it carries 1.0.594's changes too. Three of the

@@ -171,6 +171,25 @@ const SDRF: &[Deviation] = &[
         Some("searched_files"),
         "DesignOptions::searched_files is the list; giving it sets the flag and sends one per line",
     ),
+    dev(
+        "sdrf isobaric-design",
+        "param.searched-files-stdin",
+        Some("searched_files"),
+        "IsobaricDesignOptions::searched_files is the list; giving it sets the flag and sends one \
+         per line",
+    ),
+    dev(
+        "sdrf restrict",
+        "param.stdin",
+        Some("searched_files"),
+        "one stdin line per SearchedFile in restrict_with's searched_files: searched[TAB acquired]",
+    ),
+    dev(
+        "sdrf restrict",
+        "field.column_names",
+        Some("columns"),
+        "SDRF column names repeat, so the header is a Vec<String> named columns, not a Table",
+    ),
 ];
 
 /// Deviations: stats.

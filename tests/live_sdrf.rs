@@ -350,3 +350,318 @@ fn searched_files_restrict_the_design_and_replace_the_paths() {
         "two factor columns and none declared is a refusal"
     );
 }
+
+// ---- pyMzLib 0.6.0: isobaric design, restrict, and pool --out's real path ---------------------
+//
+// mzLib's own isobaric design files, copied into tests/fixtures/ byte for byte from pyMzLib. They
+// need the bridge from pyMzLib 0.6.0, and skip on an older one.
+
+const POOL1: &str = "HJOS2U_20140410_TMTpool1_300ugIPG37-49_7of15ul_fr0";
+const POOL5: &str = "HJOSLO2U_QEHF_20150329_TMT_pool5_300ugIPG37-49_7of15ul_fr0";
+const POOL_PATTERN: &str = r"TMT_?pool(?<plex>\d+)";
+
+/// The messy search of the restrict recording: a calibrated run under a Windows folder, a second
+/// calibrated run and its raw file, a renamed file whose acquisition is named, a file the SDRF lacks.
+fn messy() -> Vec<sdrf::SearchedFile> {
+    vec![
+        sdrf::SearchedFile::from(format!(r"D:\search\{POOL1}1-calib.mzML")),
+        sdrf::SearchedFile::from(format!("{POOL1}2-calib.mzML")),
+        sdrf::SearchedFile::from(format!("{POOL1}2.raw")),
+        sdrf::SearchedFile::acquired_from("sample_A.mzML", format!("{POOL5}1.raw")),
+        sdrf::SearchedFile::from("not_in_sdrf.mzML"),
+    ]
+}
+
+/// The four calibrated runs, under this platform's own separator. restrict reduces either
+/// separator on any platform, but the design readers split only this platform's
+/// (`Path.GetFileName`), so a design given `D:\search\...` on Linux keys on the whole string
+/// (SDRF-B5 asks mzLib for one rule).
+fn native_clean() -> Vec<PathBuf> {
+    [POOL1, POOL5]
+        .iter()
+        .flat_map(|pool| {
+            (1..=2).map(move |i| {
+                std::path::Path::new(std::path::MAIN_SEPARATOR_STR)
+                    .join("search")
+                    .join(format!("{pool}{i}-calib.mzML"))
+            })
+        })
+        .collect()
+}
+
+fn tmt10_by_pattern() -> sdrf::IsobaricDesignOptions {
+    sdrf::IsobaricDesignOptions {
+        kit: Some("TMT10".to_owned()),
+        plex_file_name_pattern: Some(POOL_PATTERN.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("mzlib-live-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_restrict_recording_still_matches_the_live_bridge() {
+    let Some(()) = support::require_verb("sdrf restrict") else {
+        return;
+    };
+    let scoped = sdrf::restrict_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &messy(),
+        &sdrf::RestrictOptions {
+            limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .expect("the messy search restricts");
+    let text = std::fs::read_to_string(crate_fixture("sdrf_restrict_PXD008841.json")).unwrap();
+    let recorded: sdrf::RestrictedSdrf = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(scoped.document.rows, recorded.document.rows);
+    assert_eq!(scoped.document.columns, recorded.document.columns);
+    assert_eq!(scoped.searched_without_row, recorded.searched_without_row);
+    assert_eq!(scoped.dropped_data_files, recorded.dropped_data_files);
+    assert_eq!(scoped.ambiguous, recorded.ambiguous);
+    assert_eq!(scoped.shared_stem, recorded.shared_stem);
+}
+
+#[test]
+fn restrict_out_writes_the_whole_document_where_mzlib_says() {
+    let Some(()) = support::require_verb("sdrf restrict") else {
+        return;
+    };
+    let dir = scratch("restrict");
+    let clean: Vec<sdrf::SearchedFile> = native_clean()
+        .into_iter()
+        .map(sdrf::SearchedFile::from)
+        .collect();
+    let scoped = sdrf::restrict_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &clean,
+        &sdrf::RestrictOptions {
+            out: Some(dir.join("new").join("searched.tsv")),
+            limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .expect("a clean search restricts and writes");
+
+    let written = PathBuf::from(&scoped.written.as_ref().expect("written is reported").path);
+    assert_eq!(
+        written.file_name().unwrap(),
+        "searched.tsv.sdrf.tsv",
+        "mzLib adds .sdrf.tsv to a name not ending in it"
+    );
+    assert!(written.exists() && !dir.join("new").join("searched.tsv").exists());
+    let back = sdrf::read(&written).unwrap();
+    assert_eq!((back.row_count, scoped.document.returned_count), (40, 1));
+    assert_eq!(
+        back.rows,
+        sdrf::read(crate_fixture("PXD008841_searched.sdrf.tsv"))
+            .unwrap()
+            .rows
+    );
+
+    let error = sdrf::restrict_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &clean,
+        &sdrf::RestrictOptions {
+            out: Some(dir.join("searched.txt")),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, mzlib::MzLibError::Usage(m) if m.contains(".tsv")),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restrict_then_read_the_isobaric_design() {
+    let Some(()) = support::require_verb("sdrf restrict") else {
+        return;
+    };
+    let searched = native_clean();
+    let d = sdrf::isobaric_design_with(
+        crate_fixture("PXD008841_searched.sdrf.tsv"),
+        &sdrf::IsobaricDesignOptions {
+            searched_files: Some(searched.clone()),
+            ..tmt10_by_pattern()
+        },
+    )
+    .unwrap();
+    assert!(d.is_valid, "{}", d.report);
+    assert_eq!(
+        d.file_key_column.as_deref(),
+        Some(sdrf::SEARCHED_DATA_FILE_COLUMN)
+    );
+    let mut paths: Vec<String> = d
+        .channels()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.full_path)
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let mut expected: Vec<String> = searched
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    expected.sort();
+    assert_eq!(paths, expected);
+
+    let unrestricted = sdrf::isobaric_design_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &sdrf::IsobaricDesignOptions {
+            searched_files: Some(searched),
+            ..tmt10_by_pattern()
+        },
+    )
+    .unwrap();
+    assert!(!unrestricted.is_valid);
+    assert!(unrestricted
+        .refusals
+        .iter()
+        .any(|r| r.contains("has no SDRF row")));
+}
+
+#[test]
+fn a_document_without_a_data_file_column_cannot_be_restricted() {
+    let Some(()) = support::require_verb("sdrf restrict") else {
+        return;
+    };
+    let dir = scratch("bare");
+    let path = dir.join("bare.sdrf.tsv");
+    std::fs::write(&path, "source name\tassay name\nS1\trun 1\n").unwrap();
+    let error = sdrf::restrict(&path, &[sdrf::SearchedFile::from("X.raw")]).unwrap_err();
+    match error {
+        mzlib::MzLibError::Bridge {
+            error_type,
+            message,
+        } => {
+            assert_eq!(error_type, "ArgumentException");
+            assert!(message.contains("comment[data file]"), "{message}");
+        }
+        other => panic!("expected the bridge's ArgumentException, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_isobaric_design_matches_its_recording_and_writes_tmt_design() {
+    let Some(()) = support::require_verb("sdrf isobaric-design") else {
+        return;
+    };
+    let dir = scratch("isobaric");
+    let folder = dir.join("new").join("design");
+    let d = sdrf::isobaric_design_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &sdrf::IsobaricDesignOptions {
+            out: Some(folder.clone()),
+            ..tmt10_by_pattern()
+        },
+    )
+    .unwrap();
+    let text =
+        std::fs::read_to_string(crate_fixture("sdrf_isobaric_design_PXD008841.json")).unwrap();
+    let recorded: sdrf::SdrfIsobaricDesign = serde_json::from_str(&text).unwrap();
+    assert_eq!(d.columns, recorded.columns);
+    assert_eq!(d.plex_ids, recorded.plex_ids);
+    assert_eq!(d.caveats, recorded.caveats);
+
+    let written = d.written.as_ref().expect("a valid design with out writes");
+    assert_eq!(PathBuf::from(&written.path), folder.join("TmtDesign.txt"));
+    assert_eq!((written.file_count, written.record_count), (4, 40));
+    let file = std::fs::read_to_string(folder.join("TmtDesign.txt")).unwrap();
+    let mut lines = file.lines();
+    assert_eq!(
+        lines.next().unwrap().split('\t').collect::<Vec<_>>(),
+        [
+            "File",
+            "Plex",
+            "Sample Name",
+            "TMT Channel",
+            "Condition",
+            "Biological Replicate",
+            "Fraction",
+            "Technical Replicate"
+        ]
+    );
+    let first: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    let c = &d.channels().unwrap()[0];
+    let numbers = [
+        c.biological_replicate.to_string(),
+        c.fraction.to_string(),
+        c.technical_replicate.to_string(),
+    ];
+    assert_eq!(
+        first,
+        [
+            c.full_path.as_str(),
+            c.plex.as_str(),
+            c.sample_name.as_str(),
+            c.channel.as_str(),
+            c.condition.as_str(),
+            numbers[0].as_str(),
+            numbers[1].as_str(),
+            numbers[2].as_str(),
+        ],
+        "the file and the wire carry the same 1-based numbers"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_unknown_kit_is_the_isobaric_kits_usage_error() {
+    let Some(()) = support::require_verb("sdrf isobaric-design") else {
+        return;
+    };
+    let from_design = sdrf::isobaric_design_with(
+        crate_fixture("PXD008841.subset.sdrf.tsv"),
+        &sdrf::IsobaricDesignOptions {
+            kit: Some("TMT10plex".to_owned()),
+            ..tmt10_by_pattern()
+        },
+    )
+    .unwrap_err();
+    let from_kits = mzlib::isobaric::kits(Some("TMT10plex")).unwrap_err();
+    assert!(matches!(from_design, mzlib::MzLibError::Usage(_)));
+    assert_eq!(from_design.to_string(), from_kits.to_string());
+}
+
+#[test]
+fn pool_out_reports_the_file_mzlib_wrote() {
+    // pyMzLib 0.6.0's bridge: mzLib adds .sdrf.tsv to a name that does not end in it, and
+    // written.path now says so. Before, it named x.tsv, a file that does not exist. That bridge is
+    // the first with sdrf restrict, so an older one skips.
+    let Some(()) = support::require_verb("sdrf restrict") else {
+        return;
+    };
+    let dir = scratch("pool");
+    let pooled = sdrf::pool_with(
+        &sdrf::PoolInput::Labelled(vec![(
+            crate_fixture("PXD008841.subset.sdrf.tsv"),
+            "breast".to_owned(),
+        )]),
+        &sdrf::PoolOptions {
+            out: Some(dir.join("merged.tsv").to_string_lossy().into_owned()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let written = pooled.written.expect("written is reported");
+    assert_eq!(
+        PathBuf::from(&written.path).file_name().unwrap(),
+        "merged.tsv.sdrf.tsv"
+    );
+    assert!(PathBuf::from(&written.path).exists());
+    assert!(!dir.join("merged.tsv").exists());
+    assert_eq!(written.row_count, 40);
+    let _ = std::fs::remove_dir_all(&dir);
+}
