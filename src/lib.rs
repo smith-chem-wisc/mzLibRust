@@ -56,9 +56,12 @@
 //! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
 //! FlashLFQ, or every reason it cannot. The channels of the isobaric labelling kits mzLib can name
 //! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
-//! Differential abundance without R — limma's moderated t, Benjamini-Hochberg and
-//! DerSimonian-Laird meta-analysis, each held by mzLib to the R reference — is the [`stats`]
-//! module.
+//! Differential abundance without R — limma's moderated t with contrasts and confidence
+//! intervals, Benjamini-Hochberg and DerSimonian-Laird meta-analysis, p-value combination,
+//! Spearman correlation, logistic and mixed models per feature, and entrapment FDP estimates, each
+//! held by mzLib to the R reference — is the [`stats`] module. The design and contrasts files it
+//! reads, from a sample sheet, and every peptide in every sample, from a FlashLFQ or MetaMorpheus
+//! peptide table, are the [`diff`] module.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -120,6 +123,7 @@
 #![allow(rustdoc::redundant_explicit_links)]
 
 pub mod bridge;
+pub mod diff;
 pub mod flashlfq;
 pub mod install;
 pub mod isobaric;
