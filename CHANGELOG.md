@@ -171,6 +171,19 @@ A wire verb's first appearance here is the version its spec in the bridge record
   the three to the stdin it was recorded from, `proteins read` to its `--sequences` choice, and
   `genes orthology` to its `--pair-status` direction and `--restrict-gene-trees` choice, as
   pyMzLib's does; it reads one level into an echoed object (`pair_status.from_species`).
+- **A new module, `library`: mzLib's binary spectral libraries** (`library read`; spec
+  `library.read.yaml`). `library::read`, `library::read_with` and `library::read_many` read a
+  `.msl` with mzLib's `MslLibrary` into one row per precursor, in stored order (`precursor_index`,
+  not m/z), or with `LibraryReadOptions::fragments` one row per fragment ion; mzLib's "not
+  available" values (ion mobility 0.0, a NaN q-value, NCE 0, an empty protein) are `None`, and
+  `retention_time_unit` is per row, iRT or minutes. `index_only_threshold` is `None` by default and
+  sent only when set, so mzLib's own 1 GiB rule applies; `limit` and `offset` count precursors.
+  `LibraryRecords`, `LibraryBatch` and `LibraryFileReport` carry the counts, the load mode and the
+  format version; a skipped library's unknown facts are `None`, never 0. The module guide covers
+  every column, the iRT trap, targets and entrapment, fragment ions, index-only loading and batches,
+  every example replayed from pyMzLib's recordings of the two libraries vendored under
+  `tests/fixtures/library/` (marked binary in `.gitattributes`). `tests/live_library.rs` holds the
+  recordings to the live bridge.
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.

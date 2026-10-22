@@ -55,7 +55,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `library read` · `mzlib::library::read_with` (not yet)
+### `library read` · [`mzlib::library::read_with`](crate::library::read_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

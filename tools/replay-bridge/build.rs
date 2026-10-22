@@ -79,6 +79,15 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
         "sdrf assess",
         &["sdrf_assess_PXD000070.json", "sdrf_assess_skeleton.json"],
     ),
+    // The spectral-library guide: one precursor's fragment ions, and an index-only read.
+    // --fragments: the bridge's checker cannot hold a present_when column to a spec example yet.
+    (
+        "library read",
+        &[
+            "library_read_fragments.json",
+            "library_read_index_only.json",
+        ],
+    ),
     // The proteins guide: three databases and a contaminant, filtered to four accessions; and the
     // DYNC1I2 isoforms and both albumins with their sequences, which the alignment section aligns.
     (

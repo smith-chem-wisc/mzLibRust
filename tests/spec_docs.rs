@@ -1408,6 +1408,7 @@ fn guide_module(spec_module: &str) -> Option<&'static str> {
         "pride" => "pride",
         "peptidoform" => "peptidoform",
         "isobaric" => "isobaric",
+        "library" => "library",
         "stats" => "stats",
         "diff" => "diff",
         "ptmqtl" => "ptmqtl",

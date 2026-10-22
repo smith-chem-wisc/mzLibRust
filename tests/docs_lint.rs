@@ -25,6 +25,7 @@ const GUIDES: &[&str] = &[
     "diff",
     "flashlfq",
     "isobaric",
+    "library",
     "peptidoform",
     "pride",
     "proteins",

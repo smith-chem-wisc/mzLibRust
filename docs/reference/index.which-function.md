@@ -20,11 +20,11 @@
 |---|---|---|---|---|
 | List the isobaric labelling kits mzLib can name, with every channel's label and reporter-ion m/z. | [`mzlib::isobaric::kits`](crate::isobaric::kits) | `pymzlib.isobaric.kits` | `isobaric_kits` | `isobaric kits` |
 
-## `library`
+## `library` · guide: [`library`](crate::library)
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Read an mzLib spectral library (.msl) as one row per precursor, or with fragments one row per fragment ion, with mzLib's not-available sentinels as nulls. | `mzlib::library::read_with` (not yet) | `pymzlib.library.read` | `library_read` | `library read` |
+| Read an mzLib spectral library (.msl) as one row per precursor, or with fragments one row per fragment ion, with mzLib's not-available sentinels as nulls. | [`mzlib::library::read_with`](crate::library::read_with) | `pymzlib.library.read` | `library_read` | `library read` |
 
 ## `peptidoform` · guide: [`peptidoform`](crate::peptidoform)
 
