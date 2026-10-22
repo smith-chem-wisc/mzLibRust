@@ -391,6 +391,24 @@ const PRIDE: &[Deviation] = &[
         None,
         "search returns this list itself, as PrideProjectSearchResult values",
     ),
+    dev(
+        "pride checksums",
+        "field.accession",
+        None,
+        "the caller's own argument; each PrideFileChecksum also carries it as project_accession",
+    ),
+    dev(
+        "pride checksums",
+        "field.file_count",
+        None,
+        "file_checksums returns BTreeMap<String, PrideFileChecksum>; this is its len()",
+    ),
+    dev(
+        "pride checksums",
+        "field.files",
+        None,
+        "file_checksums returns these rows themselves, keyed by file_name, as pyMzLib's dict is",
+    ),
 ];
 
 /// Deviations: peptidoform.
@@ -1631,6 +1649,17 @@ fn returned(info: &FnInfo) -> Option<(String, bool)> {
     let inner_segment = last_segment(inner)?;
     if inner_segment.ident == "Vec" {
         Some((base_struct(generic_argument(inner_segment)?)?, true))
+    } else if inner_segment.ident == "BTreeMap" {
+        // A map keyed by one of the entry's own fields (pride::file_checksums, keyed by
+        // file_name) returns the entries, as a Vec does: its values are the list.
+        let syn::PathArguments::AngleBracketed(args) = &inner_segment.arguments else {
+            return None;
+        };
+        let value = args.args.iter().rev().find_map(|arg| match arg {
+            syn::GenericArgument::Type(ty) => Some(ty),
+            _ => None,
+        })?;
+        Some((base_struct(value)?, true))
     } else {
         Some((inner_segment.ident.to_string(), false))
     }

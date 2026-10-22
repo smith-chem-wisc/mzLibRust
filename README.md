@@ -28,6 +28,9 @@ let small: Vec<_> = files.iter()
     .cloned()
     .collect();
 mzlib::pride::download_files(&small, "downloads", &Default::default())?;
+// ... and check what landed against the MD5 and exact size PRIDE recorded for each file.
+let checksums = mzlib::pride::file_checksums("PXD000001")?;
+println!("{}", checksums["README.txt"].md5);                    // 492753137013825025e6729c8798664f
 
 // Peptidoforms — digest an annotated protein and fragment its peptides.
 let digest = mzlib::peptidoform::fragments("P02768")?;

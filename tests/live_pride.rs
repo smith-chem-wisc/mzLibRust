@@ -271,3 +271,116 @@ fn search_still_finds_the_first_project_and_says_why() {
     accessions.dedup();
     assert_eq!(accessions.len(), hits.len(), "no accession is repeated");
 }
+
+// ------------------------------------------------------------------- checksums (mzLib #1427)
+
+#[test]
+fn the_checksum_list_still_parses_and_covers_the_deposited_files() {
+    // Asserted as relations to the FTP tree rather than counts, so it survives PRIDE re-curating
+    // the project: every row names a file at the project's root, and none names one of PRIDE's
+    // generated/ files.
+    let Some(()) = support::require_verb("pride checksums") else {
+        return;
+    };
+    let Some(checksums) = external_service("PRIDE Archive", mzlib::pride::file_checksums(PROJECT))
+    else {
+        return;
+    };
+    let Some(ftp) = external_service("PRIDE Archive", mzlib::pride::list_ftp_files(PROJECT)) else {
+        return;
+    };
+
+    assert!(
+        !checksums.is_empty(),
+        "PRIDE has always listed checksums for the canary; an empty list means the route changed"
+    );
+    let root: Vec<&str> = ftp
+        .iter()
+        .map(|f| f.relative_path.as_str())
+        .filter(|path| !path.contains('/'))
+        .collect();
+    let outside: Vec<&String> = checksums
+        .keys()
+        .filter(|name| !root.contains(&name.as_str()))
+        .collect();
+    assert!(outside.is_empty(), "rows outside the FTP root: {outside:?}");
+    assert!(
+        ftp.iter()
+            .any(|f| f.relative_path.starts_with("generated/")),
+        "the canary should still hold generated/ files, which have no checksum row"
+    );
+    assert!(checksums
+        .values()
+        .all(|c| c.md5.len() == 32 && c.size_bytes > 0 && c.project_accession == PROJECT));
+}
+
+#[test]
+fn a_checksum_row_matches_the_bytes_a_download_delivers() {
+    // The point of the list: its size and MD5 are those of the file a download writes. A small
+    // file in both the REST manifest and the checksum list keeps this fast.
+    use md5::{Digest, Md5};
+
+    let Some(()) = support::require_verb("pride checksums") else {
+        return;
+    };
+    let Some(checksums) = external_service("PRIDE Archive", mzlib::pride::file_checksums(PROJECT))
+    else {
+        return;
+    };
+    let Some(files) = external_service("PRIDE Archive", mzlib::pride::list_files(PROJECT)) else {
+        return;
+    };
+    let Some(chosen) = files
+        .iter()
+        .filter(|f| f.downloadable() && checksums.contains_key(&f.file_name))
+        .min_by_key(|f| checksums[&f.file_name].size_bytes)
+        .cloned()
+    else {
+        support::skip("no downloadable file of the manifest has a checksum row");
+        return;
+    };
+
+    let destination = std::env::temp_dir().join("mzlibrust-live-pride-checksum");
+    let _ = std::fs::remove_dir_all(&destination);
+    let Some(written) = external_service(
+        "PRIDE Archive",
+        mzlib::pride::download_files(
+            std::slice::from_ref(&chosen),
+            &destination,
+            &Default::default(),
+        ),
+    ) else {
+        return;
+    };
+
+    let expected = &checksums[&chosen.file_name];
+    let bytes = std::fs::read(&written[0]).unwrap();
+    assert_eq!(
+        bytes.len() as u64,
+        expected.size_bytes,
+        "{}",
+        chosen.file_name
+    );
+    let mut md5 = Md5::new();
+    md5.update(&bytes);
+    assert_eq!(format!("{:x}", md5.finalize()), expected.md5.to_lowercase());
+
+    let _ = std::fs::remove_dir_all(&destination);
+}
+
+#[test]
+fn an_unknown_accession_raises_rather_than_reporting_no_checksums() {
+    // PRIDE answers an unknown accession with an empty list, as it does a project with no
+    // checksums. mzLib asks for the project to tell them apart, so a typo is not "0 files to check".
+    let Some(()) = support::require_verb("pride checksums") else {
+        return;
+    };
+    match mzlib::pride::file_checksums("PXD999999999") {
+        Err(mzlib::MzLibError::ProjectNotFound(_)) => {}
+        Err(mzlib::MzLibError::ServiceUnavailable { message, .. }) => {
+            support::skip(&format!("PRIDE Archive unavailable ({message})"));
+        }
+        Err(other) => panic!("expected ProjectNotFound, got {other:?}"),
+        Ok(rows) => panic!("an unknown accession returned {} checksums", rows.len()),
+    }
+}

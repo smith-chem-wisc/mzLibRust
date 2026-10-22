@@ -88,7 +88,7 @@ Never returned: `service_unavailable`.
 | `service_unavailable` | [`MzLibError::ServiceUnavailable`](crate::MzLibError::ServiceUnavailable) | UniProt unreachable by the bridge's own classification: a timeout (HttpClient 100 s), a socket or TLS failure, a request that never got a response, an HTTP 408, 429 or 5xx, or a body cut off in transit |
 | `correctness` | [`MzLibError::Bridge`](crate::MzLibError::Bridge) | any other UniProt status (e.g. 403); UniProt's ptmlist.txt or PSI-MOD.obo.xml missing from the bridge payload (FileNotFoundException: every protein would otherwise look unmodified or carry wrong charges); mzLib failing to parse the entry or to digest it |
 
-### `pride checksums` · `mzlib::pride::file_checksums_with` (not yet)
+### `pride checksums` · [`mzlib::pride::file_checksums_with`](crate::pride::file_checksums_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

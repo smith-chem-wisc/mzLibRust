@@ -30,6 +30,9 @@ mzlib-replay = { path = "tools/replay-bridge" }
 # render the reference facts and hold every documented field to its spec's unit.
 serde_yaml = "0.9"
 syn = { version = "2", default-features = false, features = ["full", "parsing", "clone-impls", "extra-traits"] }
+# The PRIDE guide's download check and its live canary hash a file the way the guide tells readers
+# to: PRIDE records an MD5 (pride::file_checksums), and std has no digest of its own.
+md-5 = "0.10"
 
 [features]
 default = []

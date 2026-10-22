@@ -29,6 +29,8 @@ the reason it is not portable. Nothing was silently dropped.
 | peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `` is refused beside `
 ` |
 | peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
+| PRIDE checksums | `test_pride.py` 10 checksum tests, and `file_checksums` in the no-timeout parametrization | `src/pride.rs` 11 | 1:1 by function, plus the manifest-versus-checksum size. The verb guard's `("pride checksums", "0.6.0")` is held by `bridge.rs`'s `require_verb` tests, not per verb; a non-string accession cannot reach `&str` (above) |
+| PRIDE checksums live | `test_pride_live.py` 3 | `tests/live_pride.rs` 3 | 1:1: the list covers the FTP root's deposits, one download's length and MD5 match its row, an unknown accession is `ProjectNotFound`. Skip on a bridge older than pyMzLib 0.6.0 |
 
 ## Tests eliminated by Rust's type system
 

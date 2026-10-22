@@ -20,9 +20,9 @@ Top-level fields:
 
 | Field | Type | Unit | Null? | Meaning |
 |---|---|---|---|---|
-| `accession` | `string` | — | never | The accession, echoed as given. |
-| `file_count` | `int` | files | never | Entries in files. 0 means the project exists and PRIDE holds no checksum for any of its files, so nothing can be checked. It is an answer, not a not-found: PRIDE answers an unknown accession with an empty list too, so mzLib then asks for the project and fails when there is none (see errors). |
-| `files` | `object[]` | — | never | One entry per file, sorted by file\_name in ordinal order. mzLib returns a map keyed by file name, which has no order, so the bridge sorts it to send the same list the same way on every run. Fields under result.columns. |
+| wire `accession` | `string` | — | never | The accession, echoed as given. |
+| wire `file_count` | `int` | files | never | Entries in files. 0 means the project exists and PRIDE holds no checksum for any of its files, so nothing can be checked. It is an answer, not a not-found: PRIDE answers an unknown accession with an empty list too, so mzLib then asks for the project and fails when there is none (see errors). |
+| wire `files` | `object[]` | — | never | One entry per file, sorted by file\_name in ordinal order. mzLib returns a map keyed by file name, which has no order, so the bridge sorts it to send the same list the same way on every run. Fields under result.columns. |
 
 Per-row fields (one value per record, in `columns` or each list entry):
 
