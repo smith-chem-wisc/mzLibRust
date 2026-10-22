@@ -64,6 +64,10 @@ let proteins = median_polish_with("QuantifiedPeptides.tsv", &MedianPolishOptions
 let scans = mzlib::readers::read_spectra("run.mzML")?;
 println!("{} scans", scans.scan_count);
 
+// Spectral libraries (.msl): every precursor, or every fragment ion, with "not available" as None.
+let library = mzlib::library::read("predicted.msl")?;
+println!("{:?}", library.columns.strings("retention_time_unit")?);   // iRT or minutes, per row
+
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 

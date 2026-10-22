@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 const GUIDES: &[&str] = &[
     "flashlfq",
     "isobaric",
+    "library",
     "peptidoform",
     "pride",
     "proteins",

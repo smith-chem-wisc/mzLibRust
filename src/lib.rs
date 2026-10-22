@@ -56,6 +56,8 @@
 //! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
 //! FlashLFQ, or every reason it cannot. The channels of the isobaric labelling kits mzLib can name
 //! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
+//! mzLib's binary spectral libraries (`.msl`), one row per precursor or per fragment ion, with
+//! mzLib's "not available" values as `None`, are the [`library`] module.
 //! Differential abundance without R — limma's moderated t, Benjamini-Hochberg and
 //! DerSimonian-Laird meta-analysis, each held by mzLib to the R reference — is the [`stats`]
 //! module.
@@ -123,6 +125,7 @@ pub mod bridge;
 pub mod flashlfq;
 pub mod install;
 pub mod isobaric;
+pub mod library;
 pub mod peptidoform;
 pub mod pride;
 pub mod proteins;
