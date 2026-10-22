@@ -15,6 +15,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **The bridge pin is pyMzLib v0.6.0** (still mzLib 1.0.595, `d10017ce`; bridge-watch's repin).
+  Its bridge dispatches 53 verbs. **Specs re-vendored in full at bridge `60b1d25`**: every spec
+  but `modifications resolve`, which has no verb (`not_vendored` in `docs/specs/SOURCE`), so the
+  verbs this crate has not built yet are listed on the front page as `(not yet)`. Every spec's
+  recorded examples are vendored byte for byte from pyMzLib 0.6.0, because the replay bridge
+  reads each spec's examples, and so are the three recordings that changed since 0.5.0
+  (`bridge_version.json`, `stats_fit_malat.json`, `stats_fit_limma.json`: `stats fit`'s first
+  caveat now names its estimator). The replay bridge carries pyMzLib's whole `RECORDED_WITH`
+  table, flags included. `stats fit`'s contrasts and estimator are `PENDING` in
+  `tests/spec_docs.rs` until they are projected.
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.

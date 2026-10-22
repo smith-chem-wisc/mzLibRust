@@ -1,3 +1,8 @@
 # Byte-exact fixtures: their sha256 is part of what the proteins tests pin (search_database_sha256),
 # so a CRLF checkout on Windows must not change them. The same rule as pyMzLib.
 tests/fixtures/proteins/** -text
+# The orthology inputs are mzLib's test world written to disk; their sha256 is part of what the
+# fixtures record (orthology/PROVENANCE.txt), as pyMzLib's .gitattributes says. The spectral
+# libraries are binary.
+tests/fixtures/orthology/** -text
+*.msl binary
