@@ -17,10 +17,16 @@
 //!   under another name (`ECHOED_AS`), must name the recording's file;
 //! * a `proteins read` recording made with an accession filter answers only a filtered call, and
 //!   the reverse; a recording for one isobaric `kit` answers only a call that names a kit;
+//! * a `proteins read` recording with a `sequence` column answers only a `--sequences` call, and
+//!   the reverse; a `proteins align` recording with a residue map answers only a call without
+//!   `--no-residue-map`; a `genes orthology` recording answers `--pair-status` only for the
+//!   direction it holds, and `--restrict-gene-trees` only when its gene trees were restricted;
 //! * for `quant flashlfq` (`STDIN_ECHO`), the runs sent on stdin must be the recording's runs, for
-//!   `peptidoform convert` the sequences sent must be the recording's `input` column, in order, and
-//!   for `sdrf restrict` the searched files must be its `searched_files`, in order, with as many
-//!   acquired names as its `acquired_name_count`;
+//!   `peptidoform convert` and `proteins parse-accession` the lines sent must be the recording's
+//!   `input` column, in order, for `proteins align` the pairs must be its aligned rows without
+//!   their gaps, for `sdrf restrict` the searched files must be its `searched_files`, in order,
+//!   with as many acquired names as its `acquired_name_count`, and for `genes orthology` the
+//!   species must be its `species`, with as many dumps;
 //! * a recording listed in `RECORDED_WITH` fits only a call that sends the options it was made with.
 //!
 //! No match, or more than one, is answered as a usage error naming the candidates, so the doctest
@@ -44,8 +50,12 @@ struct Recording {
     /// The file names of the recording's `spectra_files[].full_path`, for `STDIN_ECHO` verbs.
     runs: &'static [&'static str],
     /// What a `STDIN_ECHO` recording was made from, one entry per stdin line: the `input` column
-    /// of `peptidoform convert`, the `searched_files` of `sdrf restrict`.
+    /// of `peptidoform convert` and `proteins parse-accession`, the `searched_files` of
+    /// `sdrf restrict`, the gapless pairs of `proteins align`, and the species, `--` and one entry
+    /// per dump of `genes orthology`.
     inputs: &'static [&'static str],
+    /// The recording's `column_names`.
+    column_names: &'static [&'static str],
     /// (record_count or row_count, returned_count, offset) when the recording has a window.
     window: Option<(u64, u64, u64)>,
 }
@@ -110,7 +120,14 @@ const ECHOED_AS: &[(&str, &str)] = &[
 
 /// Verbs whose input travels on stdin and is echoed in the recording, so a recording answers only a
 /// call that sent the same input. stdin is read only for these.
-const STDIN_ECHO: &[&str] = &["quant flashlfq", "peptidoform convert", "sdrf restrict"];
+const STDIN_ECHO: &[&str] = &[
+    "quant flashlfq",
+    "peptidoform convert",
+    "sdrf restrict",
+    "proteins parse-accession",
+    "proteins align",
+    "genes orthology",
+];
 
 /// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
 /// that leaves the option out takes a default (mzLib's) that the replay does not know, and the echo
@@ -269,6 +286,51 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
         }
     }
 
+    // --sequences adds a sequence column: a recording with it and one without never stand in for
+    // each other, or an example would print sequences it did not ask for (or lack them).
+    if recording.get("accession_filter_count").is_some()
+        && option(options, "sequences").is_some() != recording.column_names.contains(&"sequence")
+    {
+        return Some("a recording with the other --sequences choice".to_owned());
+    }
+
+    // proteins align: --no-residue-map leaves residue_map null, and only then.
+    if let Some(map) = recording.get("residue_map") {
+        if option(options, "no-residue-map").is_some() != matches!(map, V::Null) {
+            return Some("a recording with the other --no-residue-map choice".to_owned());
+        }
+    }
+
+    // genes orthology: --pair-status FROM,TO fills pair_status for that direction, and only then;
+    // and only a --restrict-gene-trees call says which gene sets its gene trees were restricted to.
+    if let Some(status) = recording.get("pair_status") {
+        let given = option(options, "pair-status");
+        if given.is_some() == matches!(status, V::Null) {
+            return Some("a recording with the other --pair-status choice".to_owned());
+        }
+        if let Some(Some(sent)) = given {
+            let direction = format!(
+                "{},{}",
+                recording
+                    .get("pair_status.from_species")
+                    .map(python_str)
+                    .unwrap_or_default(),
+                recording
+                    .get("pair_status.to_species")
+                    .map(python_str)
+                    .unwrap_or_default()
+            );
+            if *sent != direction {
+                return Some(format!("recorded for --pair-status {direction}"));
+            }
+        }
+    }
+    if let Some(restricted) = recording.get("gene_trees.restricted_to_gene_sets") {
+        if option(options, "restrict-gene-trees").is_some() == matches!(restricted, V::Null) {
+            return Some("a recording with the other --restrict-gene-trees choice".to_owned());
+        }
+    }
+
     if let Some(kit) = recording.get("kit") {
         if !matches!(kit, V::Null) && option(options, "kit").is_none() {
             return Some(format!(
@@ -383,7 +445,49 @@ fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Stri
             )
         });
     }
-    if verb == "peptidoform convert" {
+    // proteins align: the same pairs, in the same order, as the recording's gapless aligned rows.
+    if verb == "proteins align" {
+        let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();
+        return (sent != recording.inputs).then(|| {
+            let short: Vec<String> = recording
+                .inputs
+                .iter()
+                .map(|pair| pair.chars().take(12).collect())
+                .collect();
+            format!("recorded for pairs starting {short:?}, not these")
+        });
+    }
+    // genes orthology: the same species (the first field of each line before `--`) as the
+    // recording's species, and as many dump paths after it as the recording has dumps.
+    if verb == "genes orthology" {
+        let lines: Vec<&str> = stdin
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        let cut = lines.iter().position(|line| *line == "--").unwrap_or(lines.len());
+        let mut species: Vec<&str> = lines[..cut]
+            .iter()
+            .map(|line| line.split('\t').next().unwrap_or("").trim())
+            .collect();
+        species.sort_unstable();
+        let recorded_cut = recording
+            .inputs
+            .iter()
+            .position(|line| *line == "--")
+            .unwrap_or(recording.inputs.len());
+        if species != recording.inputs[..recorded_cut] {
+            return Some(format!(
+                "recorded for species {:?}, not {species:?}",
+                &recording.inputs[..recorded_cut]
+            ));
+        }
+        let dumps = lines.len().saturating_sub(cut + 1);
+        let recorded_dumps = recording.inputs.len().saturating_sub(recorded_cut + 1);
+        return (dumps != recorded_dumps)
+            .then(|| format!("recorded with {recorded_dumps} dumps, not {dumps}"));
+    }
+    if verb == "peptidoform convert" || verb == "proteins parse-accession" {
         let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();
         return (sent != recording.inputs)
             .then(|| format!("recorded for sequences {:?}, not {sent:?}", recording.inputs));

@@ -284,6 +284,20 @@ const PROTEINS: &[Deviation] = &[
         None,
         "the wire accepts only fail, the default, so there is nothing to choose",
     ),
+    dev(
+        "proteins align",
+        "param.no-residue-map",
+        Some("residue_map"),
+        "stated positively, as pyMzLib's residue_map: AlignOptions::residue_map = false sends \
+         --no-residue-map",
+    ),
+    dev(
+        "genes orthology",
+        "param.species",
+        Some("gtfs"),
+        "the species lines are rendered from OrthologyOptions::gtfs and ::gene_sets, two lists of \
+         (production name, path), as pyMzLib renders them from its gtfs= and gene_sets=",
+    ),
 ];
 
 /// Deviations: pride.

@@ -22,7 +22,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `genes orthology` · `mzlib::proteins::build_orthology_with` (not yet)
+### `genes orthology` · [`mzlib::proteins::build_orthology_with`](crate::proteins::build_orthology_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -129,7 +129,7 @@ Never returned: `service_unavailable`.
 | `service_unavailable` | [`MzLibError::ServiceUnavailable`](crate::MzLibError::ServiceUnavailable) | the bridge's own classification (Program.ClassifyError; since mzLib 1.0.593 (\#1350) PRIDE raises every transport failure as an HttpRequestException carrying the cause or the status, and messages name the file and host, never the URL): a timeout or cancellation, a socket failure, a request that never got a response (refused connection, DNS, TLS), an HTTP 408, 429 or 5xx, or a body cut off in transit |
 | `correctness` | [`MzLibError::Bridge`](crate::MzLibError::Bridge) | any other HTTP status; a paging contract violation (MzLibException: an identical page while total\_records says more remain); the page limit (mzLib MaxPages) exceeded |
 
-### `proteins align` · `mzlib::proteins::align_with` (not yet)
+### `proteins align` · [`mzlib::proteins::align_with`](crate::proteins::align_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -160,7 +160,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `proteins parse-accession` · `mzlib::proteins::parse_accessions` (not yet)
+### `proteins parse-accession` · [`mzlib::proteins::parse_accessions`](crate::proteins::parse_accessions)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

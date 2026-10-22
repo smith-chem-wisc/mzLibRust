@@ -79,8 +79,15 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
         "sdrf assess",
         &["sdrf_assess_PXD000070.json", "sdrf_assess_skeleton.json"],
     ),
-    // The proteins guide: three databases and a contaminant, filtered to four accessions.
-    ("proteins read", &["proteins_read_accessions.json"]),
+    // The proteins guide: three databases and a contaminant, filtered to four accessions; and the
+    // DYNC1I2 isoforms and both albumins with their sequences, which the alignment section aligns.
+    (
+        "proteins read",
+        &[
+            "proteins_read_accessions.json",
+            "proteins_read_sequences.json",
+        ],
+    ),
 ];
 
 fn main() {
@@ -193,16 +200,24 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
     let empty = serde_json::Map::new();
     let map = data.as_object().unwrap_or(&empty);
 
+    let literal = |value: &Value| match value {
+        Value::Null => "V::Null".to_owned(),
+        Value::Bool(flag) => format!("V::Bool({flag})"),
+        Value::String(text) => format!("V::Text({text:?})"),
+        Value::Number(number) => format!("V::Text({:?})", number.to_string()),
+        Value::Array(_) | Value::Object(_) => "V::Compound".to_owned(),
+    };
     let mut fields = String::new();
     for (key, value) in map {
-        let literal = match value {
-            Value::Null => "V::Null".to_owned(),
-            Value::Bool(flag) => format!("V::Bool({flag})"),
-            Value::String(text) => format!("V::Text({text:?})"),
-            Value::Number(number) => format!("V::Text({:?})", number.to_string()),
-            Value::Array(_) | Value::Object(_) => "V::Compound".to_owned(),
-        };
-        write!(fields, "({key:?}, {literal}), ").unwrap();
+        write!(fields, "({key:?}, {}), ", literal(value)).unwrap();
+        // One level of an echoed object as `outer.inner`, for the rules that read inside one
+        // (`genes orthology`'s `pair_status.from_species`). A dotted key names no option, so the
+        // generic option check never meets it.
+        if let Value::Object(inner) = value {
+            for (sub, value) in inner {
+                write!(fields, "(\"{key}.{sub}\", {}), ", literal(value)).unwrap();
+            }
+        }
     }
 
     // BULK.md: a --paths-stdin call has its own envelope. A recording is bulk when it carries the
@@ -246,8 +261,11 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
     };
 
     // The input a STDIN_ECHO verb's recording was made from, one entry per stdin line (stub.rs):
-    // the sequences of a `peptidoform convert` recording, and the searched files of an
-    // `sdrf restrict` one (its `searched_files`, as sent).
+    // the `input` column of a `peptidoform convert` or `proteins parse-accession` recording; the
+    // searched files of an `sdrf restrict` one (its `searched_files`, as sent); the pairs of a
+    // `proteins align` one, `source<TAB>target`, from its aligned rows with the gaps removed
+    // (mzLib refuses a '-' in an input sequence, so removing them is exact); and for
+    // `genes orthology`, its `species`, a `--`, then one entry per dump.
     let strings = |value: Option<&Value>| -> Vec<String> {
         match value {
             Some(Value::Array(rows)) => rows
@@ -258,17 +276,37 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
             _ => Vec::new(),
         }
     };
-    let inputs: Vec<String> = if map.contains_key("source_format") {
-        strings(map.get("columns").and_then(|c| c.get("input")))
-    } else if map.contains_key("searched_without_row") {
-        strings(map.get("searched_files"))
-    } else {
-        Vec::new()
-    };
+    let column = |name: &str| strings(map.get("columns").and_then(|c| c.get(name)));
+    let inputs: Vec<String> =
+        if map.contains_key("source_format") || map.contains_key("namespace_counts") {
+            column("input")
+        } else if map.contains_key("searched_without_row") {
+            strings(map.get("searched_files"))
+        } else if map.contains_key("aligner_id") {
+            column("aligned_source")
+                .iter()
+                .zip(column("aligned_target"))
+                .map(|(s, t)| format!("{}\t{}", s.replace('-', ""), t.replace('-', "")))
+                .collect()
+        } else if map.contains_key("snapshot_id") {
+            let mut lines = strings(map.get("species"));
+            lines.push("--".to_owned());
+            if let Some(Value::Object(dumps)) = map.get("dumps") {
+                lines.extend(dumps.keys().cloned());
+            }
+            lines
+        } else {
+            Vec::new()
+        };
+
+    // The recording's column order, for the rules that ask whether a column is there
+    // (`proteins read --sequences`).
+    let column_names = strings(map.get("column_names"));
 
     format!(
         "        Recording {{ fixture: {name:?}, envelope: include_str!({path:?}), fields: &[{fields}], \
-         bulk: {bulk}, runs: &{runs:?}, inputs: &{inputs:?}, window: {window} }},\n",
+         bulk: {bulk}, runs: &{runs:?}, inputs: &{inputs:?}, column_names: &{column_names:?}, \
+         window: {window} }},\n",
         path = envelope.display().to_string(),
     )
 }

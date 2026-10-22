@@ -14,8 +14,9 @@ mod support;
 use std::path::PathBuf;
 
 use mzlib::proteins::{
-    self, string_lists, ClassifyOptions, GeneResolutions, GeneResolveOptions,
-    PeptideClassification, ProteinDatabase, ProteinReadOptions, ProteinTable,
+    self, string_lists, AlignOptions, Alignments, ClassifyOptions, EndGaps, GeneResolutions,
+    GeneResolveOptions, OrthologyOptions, OrthologySnapshot, PeptideClassification,
+    ProteinDatabase, ProteinReadOptions, ProteinTable,
 };
 use support::require_verb;
 
@@ -317,5 +318,400 @@ fn update_go_fetches_a_release_that_loads() {
     assert_eq!(update.url, "https://purl.obolibrary.org/obo/go.obo");
     assert!(update.go.term_count > 40_000, "{}", update.go.term_count);
     assert!(target.exists());
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+// ---- pyMzLib 0.6.0: align, parse-accession, genes orthology ---------------------------------
+//
+// They need the bridge from pyMzLib 0.6.0, and skip on an older one.
+
+fn sequences() -> std::collections::HashMap<String, String> {
+    let read = proteins::read_with(
+        &[db("human_extra.fasta")],
+        &ProteinReadOptions {
+            contaminants: vec![db("contaminants.fasta")],
+            sequences: true,
+            ..Default::default()
+        },
+    )
+    .expect("the human FASTA reads with its sequences");
+    read.columns
+        .strings("accession")
+        .unwrap()
+        .into_iter()
+        .zip(read.columns.strings("sequence").unwrap())
+        .filter_map(|(accession, sequence)| Some((accession?, sequence?)))
+        .collect()
+}
+
+#[test]
+fn align_leaves_every_option_to_mzlib_and_says_what_it_used() {
+    let Some(()) = require_verb("proteins align") else {
+        return;
+    };
+    let aln =
+        proteins::align_with(&[("MLLLPEPTIDE", "PEPTIDE")], &AlignOptions::default()).unwrap();
+    assert_eq!(
+        (
+            aln.matrix.as_str(),
+            aln.gap_open,
+            aln.gap_extend,
+            aln.end_gaps.as_str(),
+            aln.max_cells
+        ),
+        ("BLOSUM62", 11, 1, "free", 200_000_000)
+    );
+    assert_eq!(
+        aln.aligner_id,
+        "global-affine;BLOSUM62;open=11;extend=1;end-gaps=free"
+    );
+    assert_eq!(aln.columns.integers("score").unwrap(), [Some(39)]);
+}
+
+#[test]
+fn align_maps_canonical_dync1i2_onto_its_isoforms_as_recorded() {
+    let Some(()) = require_verb("proteins align") else {
+        return;
+    };
+    let seq = sequences();
+    let live = proteins::align_with(
+        &[
+            (&seq["Q13409"], &seq["Q13409-2"]),
+            (&seq["Q13409"], &seq["Q13409-3"]),
+        ],
+        &AlignOptions::default(),
+    )
+    .unwrap();
+    let want: Alignments = recorded(include_str!("fixtures/proteins_align_dync1i2.json"));
+    assert_eq!(live.columns, want.columns);
+    assert_eq!(
+        live.residue_map.as_ref().unwrap().columns,
+        want.residue_map.as_ref().unwrap().columns
+    );
+    assert_eq!(
+        live.alignments().unwrap()[0]
+            .map_source_to_target(82)
+            .unwrap(),
+        Some(76)
+    );
+}
+
+#[test]
+fn align_options_reach_mzlib() {
+    let Some(()) = require_verb("proteins align") else {
+        return;
+    };
+    let aln = proteins::align_with(
+        &[("MLLLPEPTIDE", "PEPTIDE")],
+        &AlignOptions {
+            gap_open: Some(5),
+            gap_extend: Some(2),
+            end_gaps: Some(EndGaps::Charged),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        aln.aligner_id,
+        "global-affine;BLOSUM62;open=5;extend=2;end-gaps=charged"
+    );
+    assert_eq!(aln.alignments().unwrap()[0].score, 39 - (5 + 4 * 2));
+    let one = proteins::align("MKTAYIAKQRQISFVKSHFSRQ", "MKTAYIAKISFVKSHFSRQ").unwrap();
+    assert_eq!(one.map_source_to_target(12).unwrap(), Some(9));
+}
+
+#[test]
+fn mzlibs_alignment_refusals_are_usage_errors() {
+    let Some(()) = require_verb("proteins align") else {
+        return;
+    };
+    /// The pairs, the options, and what mzLib's refusal says.
+    type Refused<'a> = (&'a [(&'a str, &'a str)], AlignOptions, &'a str);
+    let cases: [Refused; 4] = [
+        (
+            &[("PEP-TIDE", "PEPTIDE")],
+            AlignOptions::default(),
+            "gap character",
+        ),
+        (
+            &[("PEPTIDE", "PEPTIDE"), ("AAAA", "AAAC")],
+            AlignOptions {
+                max_cells: Some(1),
+                ..Default::default()
+            },
+            "Pair 1 was refused",
+        ),
+        (
+            &[("PEPTIDE", "PEPTIDE")],
+            AlignOptions {
+                gap_open: Some(-1),
+                ..Default::default()
+            },
+            "--gap-open was refused by mzLib",
+        ),
+        (
+            &[("PEPTIDE", "PEPTIDE")],
+            AlignOptions {
+                gap_extend: Some(0),
+                ..Default::default()
+            },
+            "--gap-extend was refused by mzLib",
+        ),
+    ];
+    for (pairs, options, message) in cases {
+        let error = proteins::align_with(pairs, &options).unwrap_err();
+        assert!(
+            matches!(&error, mzlib::MzLibError::Usage(m) if m.contains(message)),
+            "{message}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn parse_accessions_never_repairs_what_it_is_given() {
+    let Some(()) = require_verb("proteins parse-accession") else {
+        return;
+    };
+    let given = [
+        "P04637-2",
+        " P04637",
+        "P04637 ",
+        "NP_000537.3_R72P",
+        "P04637_2",
+    ];
+    let parsed = proteins::parse_accessions(&given).unwrap();
+    let text = |name: &str| parsed.columns.strings(name).unwrap();
+    assert_eq!(text("input"), given.map(|s| Some(s.to_owned())));
+    assert_eq!(
+        text("namespace"),
+        [
+            "uniprot",
+            "unrecognized",
+            "unrecognized",
+            "refseq",
+            "unrecognized"
+        ]
+        .map(|s| Some(s.to_owned()))
+    );
+    assert_eq!(
+        text("applied_variants"),
+        [None, None, None, Some("R72P".to_owned()), None]
+    );
+}
+
+#[test]
+fn parse_accessions_and_resolve_genes_share_one_namespace_vocabulary() {
+    let Some(()) = require_verb("proteins parse-accession") else {
+        return;
+    };
+    let genes = proteins::resolve_genes_with(
+        &[db("human_subset.xml")],
+        &GeneResolveOptions {
+            gtf: Some(db("Homo_sapiens.GRCh38.116.gtf")),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let accessions: Vec<String> = genes
+        .columns
+        .strings("accession")
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let parsed = proteins::parse_accessions(&accessions).unwrap();
+    for column in ["namespace", "entry_accession"] {
+        assert_eq!(
+            parsed.columns.strings(column).unwrap(),
+            genes.columns.strings(column).unwrap(),
+            "{column}"
+        );
+    }
+    assert_eq!(
+        parsed.columns.integers("isoform").unwrap(),
+        genes.columns.integers("isoform").unwrap()
+    );
+}
+
+fn orthology_input(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("orthology")
+        .join(name)
+}
+
+const SPECIES: [&str; 3] = ["homo_sapiens", "mus_musculus", "rattus_norvegicus"];
+
+/// mzLib's three-species test world, as committed (byte-exact, -text).
+fn orthology() -> OrthologyOptions {
+    OrthologyOptions {
+        gtfs: vec![
+            (
+                SPECIES[0].to_owned(),
+                orthology_input("Homo_sapiens.GRCh38.116.gtf"),
+            ),
+            (
+                SPECIES[1].to_owned(),
+                orthology_input("Mus_musculus.GRCm39.116.gtf"),
+            ),
+            (
+                SPECIES[2].to_owned(),
+                orthology_input("Rattus_norvegicus.GRCr8.116.gtf"),
+            ),
+        ],
+        dumps: SPECIES
+            .iter()
+            .map(|s| {
+                orthology_input("homologies")
+                    .join(s)
+                    .join("Compara.116.protein_default.homologies.tsv.gz")
+            })
+            .collect(),
+        gene_trees: orthology_input("vertebrates.GeneTree_content.default.e116.txt.gz"),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn orthology_matches_its_recording_over_the_committed_inputs() {
+    let Some(()) = require_verb("genes orthology") else {
+        return;
+    };
+    let live = proteins::build_orthology_with(
+        "116",
+        &OrthologyOptions {
+            pair_status: Some((SPECIES[0].to_owned(), SPECIES[1].to_owned())),
+            ..orthology()
+        },
+    )
+    .unwrap();
+    let want: OrthologySnapshot =
+        recorded(include_str!("fixtures/genes_orthology_pair_status.json"));
+    assert_eq!(
+        live.snapshot_id, want.snapshot_id,
+        "the inputs are byte-exact (-text), so the id is too"
+    );
+    assert_eq!(
+        live.pair_status.as_ref().unwrap().columns,
+        want.pair_status.as_ref().unwrap().columns
+    );
+    assert_eq!(live.pairs, want.pairs);
+    assert_eq!(live.caveats, want.caveats);
+}
+
+#[test]
+fn orthology_writes_parquet_once_and_refuses_to_overwrite() {
+    let Some(()) = require_verb("genes orthology") else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("mzlib-live-orthology-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let out = scratch.join("compara-116");
+    let snap = proteins::build_orthology_with(
+        "116",
+        &OrthologyOptions {
+            restrict_gene_trees: true,
+            out: Some(out.clone()),
+            ..orthology()
+        },
+    )
+    .unwrap();
+    let written = snap.written.as_ref().expect("out was given");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(written.manifest()).unwrap()).unwrap();
+    assert_eq!(manifest["snapshot_id"], snap.snapshot_id.as_str());
+    let listed: Vec<&str> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        written
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>()
+    );
+    for f in &written.files {
+        assert_eq!(
+            std::fs::metadata(out.join(&f.path)).unwrap().len(),
+            f.bytes,
+            "{}",
+            f.path
+        );
+    }
+
+    let again = proteins::build_orthology_with(
+        "116",
+        &OrthologyOptions {
+            out: Some(out.clone()),
+            ..orthology()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&again, mzlib::MzLibError::Usage(m) if m.contains("is not empty")),
+        "{again:?}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn orthology_without_every_dump_is_refused_by_mzlib() {
+    let Some(()) = require_verb("genes orthology") else {
+        return;
+    };
+    let mut options = orthology();
+    options.dumps.remove(1);
+    let error = proteins::build_orthology_with("116", &options).unwrap_err();
+    assert!(
+        matches!(&error, mzlib::MzLibError::Usage(m) if m.contains("No homology dump for mus_musculus")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn orthology_pair_status_outside_the_species_is_refused_before_reading() {
+    let Some(()) = require_verb("genes orthology") else {
+        return;
+    };
+    let error = proteins::build_orthology_with(
+        "116",
+        &OrthologyOptions {
+            pair_status: Some((SPECIES[0].to_owned(), "danio_rerio".to_owned())),
+            ..orthology()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, mzlib::MzLibError::Usage(m) if m.contains("not one of the species on stdin")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn orthology_a_malformed_dump_is_mzlibs_correctness_failure() {
+    let Some(()) = require_verb("genes orthology") else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("mzlib-live-bad-dump-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let bad = scratch.join("Compara.116.protein_default.homologies.tsv");
+    std::fs::write(&bad, "gene_stable_id\tspecies\n").unwrap();
+    let mut options = orthology();
+    options.dumps[2] = bad;
+    match proteins::build_orthology_with("116", &options).unwrap_err() {
+        mzlib::MzLibError::Bridge {
+            error_type,
+            message,
+        } => {
+            assert_eq!(error_type, "InvalidDataException");
+            assert!(message.contains("unexpected columns"), "{message}");
+        }
+        other => panic!("expected mzLib's InvalidDataException, got {other:?}"),
+    }
     let _ = std::fs::remove_dir_all(&scratch);
 }

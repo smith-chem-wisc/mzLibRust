@@ -57,6 +57,35 @@ A wire verb's first appearance here is the version its spec in the bridge record
   the SDRF-B5 trap: mzLib's design readers split a path on the running platform's separator only,
   so the live tests build native paths. The replay bridge holds a `sdrf restrict` call to the
   recording made from the same searched files, as pyMzLib's does.
+- **`proteins::align_with`, `proteins::align`: mzLib's global affine-gap aligner, and every
+  residue's counterpart** (`proteins align`, mzLib #1428; spec `proteins.align.yaml`). BLOSUM62,
+  Gotoh's Needleman-Wunsch; `Alignments` holds the pairs table and the residue map, and
+  `alignments()` gives one `Alignment` per pair with `map_source_to_target` and
+  `map_target_to_source` (1-based; `None` for a residue facing a gap, never a neighbour).
+  `AlignOptions`' `gap_open`, `gap_extend`, `end_gaps` (`EndGaps`) and `max_cells` are `None` by
+  default and sent only when set, so mzLib's defaults (11, 1, free, 200,000,000 cells) apply and
+  the result echoes them; `residue_map: false` sends `--no-residue-map`.
+- **`proteins::parse_accessions`: accessions read back into entry, isoform or version, and
+  applied variants, with mzLib's grammars** (`proteins parse-accession`, mzLib #1382; spec
+  `proteins.parse-accession.yaml`). Each accession is sent exactly as given, never trimmed; what
+  fits neither UniProt's nor RefSeq's protein grammar is `unrecognized`, never repaired.
+  `ParsedAccessions::entry_of` groups isoforms and variants under their entry; `NAMESPACES` is
+  `resolve_genes_with`'s vocabulary.
+- **`proteins::build_orthology_with`: an Ensembl Compara orthology snapshot, and optionally its
+  Parquet** (`genes orthology`, mzLib #1381; spec `genes.orthology.yaml`). `OrthologyOptions`
+  takes the species' GTFs (or compact gene sets), **every** species' homology dump, the gene
+  trees, and `pair_status` for every gene's status in one other species (`PairStatus`,
+  `ORTHOLOGY_STATUSES`). `OrthologySnapshot` says what went in (`GeneSet`, `GeneTrees`,
+  `HomologyDump`), what each pair holds (`SpeciesPair`), what was written (`WrittenSnapshot`,
+  `SnapshotFile`) and the `snapshot_id`. mzLib's three-species test world is vendored byte for
+  byte under `tests/fixtures/orthology/`, marked `-text` so its sha256s, and the snapshot id the
+  live test holds, survive a Windows checkout. The `proteins` guide gains *Map a residue from one
+  sequence onto another*, *Read an accession into entry, isoform and variants* and *Orthologs
+  across species*, each replayed from pyMzLib's recordings; the DuckDB queries over the Parquet
+  are shown as SQL, since this crate carries no Parquet reader. The replay bridge holds each of
+  the three to the stdin it was recorded from, `proteins read` to its `--sequences` choice, and
+  `genes orthology` to its `--pair-status` direction and `--restrict-gene-trees` choice, as
+  pyMzLib's does; it reads one level into an echoed object (`pair_status.from_species`).
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.
