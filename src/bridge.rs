@@ -627,7 +627,7 @@ impl BridgeVersion {
 /// # mzlib_replay::activate();
 /// let info = mzlib::bridge_version()?;
 /// assert_eq!(info.protocol, mzlib::PROTOCOL_VERSION);
-/// assert_eq!(info.mzlib.as_deref(), Some("1.0.0+0a808fec346e6e8f334e455490faab463ea65457"));
+/// assert_eq!(info.mzlib.as_deref(), Some("1.0.0+d10017ce499600a338bc7ba447db7cfb6ffce790"));
 /// # Ok::<(), mzlib::MzLibError>(())
 /// ```
 #[doc = include_str!("../docs/reference/version.see-also.md")]
