@@ -682,16 +682,7 @@ const QUANT: &[Deviation] = &[
 /// Spec facts this crate does not project **yet**: `(verb, key)`. Each is a gap, not a choice,
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
-const PENDING: &[(&str, &str)] = &[
-    // stats fit's contrasts and estimator (bridge specs of pyMzLib 0.6.0, mzLib #1452 and #1368):
-    // vendored with every other spec, and projected by the stats port, not by the data-verb one.
-    ("stats fit", "param.contrasts"),
-    ("stats fit", "param.confidence"),
-    ("stats fit", "param.estimator"),
-    ("stats fit", "field.contrasts"),
-    ("stats fit", "field.contrasts_file"),
-    ("stats fit", "table.prior.estimator"),
-];
+const PENDING: &[(&str, &str)] = &[];
 
 // =================================================================================================
 // The vendored specs

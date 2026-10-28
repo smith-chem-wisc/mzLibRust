@@ -108,8 +108,7 @@ A wire verb's first appearance here is the version its spec in the bridge record
   reads each spec's examples, and so are the three recordings that changed since 0.5.0
   (`bridge_version.json`, `stats_fit_malat.json`, `stats_fit_limma.json`: `stats fit`'s first
   caveat now names its estimator). The replay bridge carries pyMzLib's whole `RECORDED_WITH`
-  table, flags included. `stats fit`'s contrasts and estimator are `PENDING` in
-  `tests/spec_docs.rs` until they are projected.
+  table, flags included.
 - **`pride::file_checksums`, `pride::file_checksums_with`: the MD5 and exact size PRIDE recorded for
   each file deposited in a project** (`pride checksums`, mzLib #1427; spec `pride.checksums.yaml`).
   It is what a download is checked against, and `download` and `download_files` check neither
