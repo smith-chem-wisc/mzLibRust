@@ -682,7 +682,15 @@ const QUANT: &[Deviation] = &[
 /// Spec facts this crate does not project **yet**: `(verb, key)`. Each is a gap, not a choice,
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
-const PENDING: &[(&str, &str)] = &[];
+const PENDING: &[(&str, &str)] = &[
+    // pyMzLib 0.7.0's new ptmqtl options (bridge specs at 45833ca, mzLib #1464 and #1468): vendored
+    // with the repin, whose scope is the answers that changed; the options come with the 0.7.0
+    // verbs (genes map-residues, library calibrate-rt, stats fit-latent-mixed, stats fit-link).
+    // Their output echoes (include_bounds, min_untied_share, run_covariate_*, scale) are projected.
+    ("ptmqtl pairs", "param.include-bounds"),
+    ("ptmqtl pairs", "param.run-covariate"),
+    ("ptmqtl trait-effects", "param.scale"),
+];
 
 // =================================================================================================
 // The vendored specs
