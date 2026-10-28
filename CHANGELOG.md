@@ -15,6 +15,40 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **The bridge pin is pyMzLib v0.7.0** (mzLib 1.0.596, tag commit `cc67b7a2`; bridge-watch's
+  repin, mzLibRust #37). `install_bridge()` fetches it, and its bridge dispatches 57 verbs. Every
+  answer it changes for the same call is in `docs/upgrading.md`'s new pyMzLib 0.7.0 section:
+  `sdrf::design_with` keeps the SDRF's replicate numbers (mzLib #1426), `diff::design_with`
+  numbers contrast ids once over the analysis (#1476), `ptmqtl` reports more `not_detected` cells
+  and leaves `exclude_ceiling` to mzLib (#1468), `peptidoform::convert_with` fails malformed
+  modification text by row (#1457) and resolves some terminal modifications (#1442), a locked
+  `.parquet` is `MzLibError::Bridge` (#1478), TMT10's `TMT131` reads (#1467), and a peptide with
+  a permanently charged modification weighs one proton less (pyMzLib #99).
+- **New output fields of verbs the crate already has**, projected from the 0.7.0 bridge:
+  - `isobaric::ReporterChannel::sdrf_label` and `IsobaricKit::sdrf_labels()`: the SDRF
+    `comment[label]` of each channel, by mzLib's `SdrfIsobaricLabels` (#1467), `TMT131` for
+    TMT10's 131N. `None` only from an older bridge.
+  - `diff::NotRunContrast::id`: the default contrast's id a stratum skipped, the same in every
+    stratum (#1476).
+  - `ptmqtl::OccupancyRow::covering_peptidoforms` and `modified_peptidoforms`: the k of n of a
+    cell, counted in identifications (#1468); `None` from an older bridge.
+  - `ptmqtl::PtmPair::test_status` (`PAIR_TEST_STATUSES`: why a co-varying pair was not tested),
+    `bounds_included` and `run_covariate_removed`; and on `PtmPairs`, `include_bounds`,
+    `min_untied_share`, `run_covariate_file`, `run_covariate_name` and
+    `run_covariate_runs_missing` (#1468). Each echo is mzLib's default, or `None`, until the
+    crate sends the options.
+  - `ptmqtl::TraitEffects::scale`: the scale of every effect and variance, `natural_log_odds` by
+    mzLib's default (#1464).
+- **Specs re-vendored at bridge `45833ca`** (pyMzLib 0.7.0's specs, `4c9eb13`, plus the
+  `stats fit` Rust example that compiles), every spec but `modifications resolve` as before. The
+  four new verbs' specs come in with them, so the front page lists `genes map-residues`,
+  `library calibrate-rt`, `stats fit-latent-mixed` and `stats fit-link` as `(not yet)`, and the
+  three new options of verbs the crate has (`ptmqtl pairs --include-bounds` and
+  `--run-covariate`, `ptmqtl trait-effects --scale`) are `PENDING` in `tests/spec_docs.rs`. Every
+  recording a spec names is vendored byte for byte from pyMzLib 0.7.0, those of the not-yet
+  verbs and options included, because the replay bridge reads each spec's examples; the replay
+  bridge takes pyMzLib 0.7.0's new `RECORDED_WITH` and `OPTIONAL_FILES` entries.
+
 - **`stats` gains five verbs, ported from pyMzLib 0.6.0** (mzLib 1.0.595; mzLib #1367, #1385,
   #1446), each with its guide section, an executed example and live canaries against R:
   - **`stats::combine_p`**: one p-value per feature from several independent studies, by
@@ -363,6 +397,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Changed
 
+- **`PtmPairs::exclude_ceiling` is `None` when you did not choose** (the pyMzLib 0.7.0 bridge,
+  mzLib #1468). mzLib made `CoVarying`'s `excludeCeiling` nullable and resolves it itself, and the
+  bridge does not restate the rule to name the value; it was `Some(true)`. `Some(false)` still
+  means `PairsOptions::keep_ceiling`, and ceilings are still left out by default.
+- **`sdrf::design_with`'s `DesignedFile::biological_replicate` is the SDRF's own number** (the
+  pyMzLib 0.7.0 bridge, mzLib #1426), gaps included, where it was ranked within each condition;
+  `SdrfDesign::notes` flags the gaps. The guide's example and the offline test now hold the kept
+  numbers (22, 23, 24 stay 21, 22, 23 0-based) instead of the ranked design.
+- **`diff::DefaultContrast::contrast_id` is one comparison in every stratum** (mzLib #1476), and the
+  `diff` and `stats` guides say so; they told you to match strata by label.
 - **`sdrf::pool_with(.., PoolOptions { out, .. })` reports the file mzLib wrote** (the pyMzLib
   0.6.0 bridge). mzLib adds `.sdrf.tsv` to a name that does not already end in it, so an `out` of
   `x.tsv` writes `x.tsv.sdrf.tsv`; `WrittenSdrf::path` said `x.tsv`, a file that does not exist,
@@ -448,6 +492,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
   `read_matches`. `Table` now implements `Deserialize` from the wire's `column_names` and `columns`.
   Their fields are unchanged.
 
+### Deprecated
+
+- **`peptidoform::Peptide::fixed_charges` and `Modification::formal_charge`** are always 0 from
+  the pyMzLib 0.7.0 bridge on, and will be removed when the bridge's protocol next changes
+  (pyMzLib #99). mzLib's corrected UniProt modifications carry each permanent charge in their
+  mass, so `Peptide::monoisotopic_mass`, `Modification::mass` and `Fragment::neutral_mass` are one
+  proton lower per charge for such a peptide, and `Peptide::mz` gives the same value as before.
+  The docs say so; `Fragment::neutral_mass` no longer warns that a charged fragment's m/z cannot be
+  computed, since `(neutral_mass + z * PROTON_MASS) / z` is now right for every fragment.
+
 ### Fixed
 
 - Stale caveats: `QuantifyOptions::max_threads` warned that FlashLFQ's roll-up changed results
@@ -466,6 +520,16 @@ A wire verb's first appearance here is the version its spec in the bridge record
   rather than failing on the newest `thiserror`, which needs 1.77.
 
 ### Documentation
+
+- **`docs/upgrading.md` has a pyMzLib 0.7.0 section** (mzLib 1.0.596), entry for entry with
+  pyMzLib's, naming each changed answer by its Rust function and field. The `ptmqtl` guide
+  describes `not_detected` as mzLib's covered-zero, the peptidoform counts and `test_status`; the
+  `sdrf` guide keeps the SDRF's replicate numbers and reads `TMT131`; the `isobaric` guide shows
+  the SDRF labels. The 0.7.0 recordings the repin changed are re-vendored from pyMzLib 0.7.0, byte
+  for byte: `bridge_version.json`, the five `diff_design_*`, both `isobaric_kits*`, the three
+  `ptmqtl_occupancy_*`, the three `ptmqtl_pairs_*`, both `ptmqtl_trait_effects*`,
+  `ptmqtl/trait_occupancy.tsv` and the three `sdrf_design_*`, and `bridge_version`'s example
+  names mzLib `cc67b7a2`.
 
 - **Every result mzLib 1.0.594 and 1.0.595 changed is now documented** (as pyMzLib #87 does), in
   `docs/upgrading.md`'s pyMzLib 0.5.0 bridge section and on the reference pages: ProForma input
