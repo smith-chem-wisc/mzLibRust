@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | Which peptides and fragments a protein gives | [`fragments`], [`fragments_with`] | `Protein.Digest`, `PeptideWithSetModifications.Fragment` |
 //! | Which UniProt modifications were used, and which were not | [`Digest::modification_census`] | the UniProt XML reader and its PTM list |
-//! | A peptide's m/z at a charge | [`Peptide::mz`] | `ClassExtensions.ToMz`, with fixed charges accounted for |
+//! | A peptide's m/z at a charge | [`Peptide::mz`] | `ClassExtensions.ToMz`, on mzLib's charge-corrected masses |
 //! | Whether the list is complete | [`Digest::truncated`] | `DigestionParams.MaxModificationIsoforms` |
 //! | A MetaMorpheus full sequence in Unimod accessions | [`convert`], [`convert_with`] | `SequenceConversionService.Convert`, Unimod serializer |
 //! | The same sequence in ProForma | [`convert_with`] with `target: "ProForma"` | `SequenceConversionService.Convert`, ProForma serializer |
@@ -257,13 +257,9 @@ pub struct Fragment {
     pub fragment_number: i32,
     /// Monoisotopic neutral mass in daltons.
     ///
-    /// **Not** an m/z: no proton has been added and no charge assumed. Fragments deliberately
-    /// expose no `mz()`. Converting one correctly requires the fixed charge *within this
-    /// fragment's span* — a c or z ion carries only the permanently charged modifications on the
-    /// residues it contains, not the whole peptide's [`Peptide::fixed_charges`]. For an unmodified
-    /// or neutrally-modified peptide, `(neutral_mass + z * PROTON_MASS) / z` is correct; for a
-    /// fragment bearing a quaternary-ammonium modification it is not, and per-fragment charge
-    /// accounting is not yet provided.
+    /// **Not** an m/z: no proton has been added and no charge assumed. A permanently charged
+    /// modification (e.g. trimethyllysine) is included at mzLib's charge-corrected mass, so
+    /// `(neutral_mass + z * PROTON_MASS) / z` is the fragment's m/z at charge `z`.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub neutral_mass: f64,
     /// Neutral loss in daltons, `0.0` when there is none.
@@ -292,10 +288,14 @@ pub struct Modification {
     /// The modification's identifier with its motif, e.g. `"N6-succinyllysine on K"`.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub id: String,
-    /// The monoisotopic mass delta, if the modification has one.
+    /// The monoisotopic mass delta in Da (daltons), if the modification has one. A permanently
+    /// charged modification is at mzLib's charge-corrected mass, as for
+    /// [`Peptide::monoisotopic_mass`].
     #[serde(default)]
     pub mass: Option<f64>,
-    /// Charges the modification leaves permanently on the residue. See [`Peptide::fixed_charges`].
+    /// **Deprecated: always 0**, and removed when the bridge's protocol next changes. mzLib folds
+    /// each permanently charged modification's charge into [`Self::mass`], so none is left over.
+    /// In elementary charges. See [`Peptide::fixed_charges`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub formal_charge: i32,
 }
@@ -310,6 +310,11 @@ pub struct Peptide {
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub full_sequence: String,
     /// The neutral monoisotopic mass in Da (daltons), modifications included.
+    ///
+    /// A permanently charged modification counts at mzLib's charge-corrected mass, the neutral
+    /// convention Unimod and MetaMorpheus use: trimethyllysine is C₃H₆, 42.046951, not UniProt's
+    /// 43.054227. Since pyMzLib 0.7.0's bridge; earlier bridges reported UniProt's charged mass
+    /// here and a [`Self::fixed_charges`] of 1.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub monoisotopic_mass: f64,
     /// The peptide's length in residues.
@@ -324,13 +329,13 @@ pub struct Peptide {
     /// How many missed cleavage sites the peptide spans.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub missed_cleavages: i32,
-    /// Charges (elementary charges) the peptide carries **before any protonation**, from modifications that leave a
-    /// permanently charged residue.
+    /// **Deprecated: always 0** (elementary charges), and removed when the bridge's protocol next
+    /// changes.
     ///
-    /// Trimethylation of a lysine ε-amine gives a quaternary ammonium, and UniProt records the
-    /// delta as 43.054227 — C₃H₇ *minus an electron* — rather than the neutral 43.054775. So
-    /// [`Peptide::monoisotopic_mass`] already carries that charge, and [`Peptide::mz`] accounts for
-    /// it.
+    /// mzLib loads each permanently charged modification at its neutral-convention mass, so no
+    /// peptide carries a charge on top of [`Peptide::monoisotopic_mass`]. Until pyMzLib 0.7.0's
+    /// bridge, this counted the charges the bridge inferred from UniProt's charged masses, and
+    /// [`Peptide::mz`] still subtracts it, which now changes nothing.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub fixed_charges: i32,
     /// Each applied modification.
@@ -357,17 +362,17 @@ impl Peptide {
     /// which on an Orbitrap is a match versus a miss. Libraries differ on this and rarely say which
     /// they used. See [`PROTON_MASS`].
     ///
-    /// **Fixed charges are not double-counted.** A mass that already carries a charge needs fewer
-    /// protons added, not the same number — so only `charge - fixed_charges` protons are added.
-    /// Adding a full complement would put a 2+ trimethylated peptide half a Thomson high, on the
-    /// most important histone modification there is.
-    ///
-    /// A peptide with a fixed charge is therefore observable at that charge with no protonation at
-    /// all, which is why `charge` may not be below [`Peptide::fixed_charges`].
+    /// **Permanently charged modifications are not double-counted.** Trimethylation of a lysine
+    /// ε-amine gives a quaternary ammonium, which carries its charge with no proton. UniProt
+    /// records the delta as 43.054227 (C₃H₇ *minus an electron*); mzLib loads it one proton
+    /// lighter, at 42.046951 (C₃H₆), so adding `charge` protons to [`Peptide::monoisotopic_mass`]
+    /// gives the right m/z. Adding a full complement to UniProt's mass would put a 2+
+    /// trimethylated peptide half a Thomson high. ([`Peptide::fixed_charges`], deprecated and
+    /// always 0, is still subtracted, for a digest an older bridge returned.)
     ///
     /// # Errors
     ///
-    /// [`MzLibError::Usage`] if `charge` is below 1, or below this peptide's fixed charge.
+    /// [`MzLibError::Usage`] if `charge` is below 1, or below [`Peptide::fixed_charges`].
     pub fn mz(&self, charge: i32) -> Result<f64> {
         if charge < 1 {
             return Err(MzLibError::Usage(format!(
@@ -1405,8 +1410,9 @@ mod tests {
 
     #[test]
     fn mz_does_not_double_count_a_fixed_charge() {
-        // Trimethyllysine: the recorded mass already carries the charge, so only charge − fixed
-        // protons are added. Adding a full complement puts a 2+ peptide half a Thomson high.
+        // A bridge before pyMzLib 0.7.0 reported trimethyllysine at UniProt's charged mass with
+        // fixed_charges 1, so only charge − fixed protons are added. Adding a full complement put
+        // a 2+ peptide half a Thomson high. From 0.7.0 fixed_charges is always 0.
         let peptide = Peptide {
             monoisotopic_mass: 1000.0,
             fixed_charges: 1,

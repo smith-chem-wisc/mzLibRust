@@ -14,8 +14,9 @@
 //! a modified form that was identified but not quantified is not a zero, a site seen only in its
 //! modified form is not truly 100%, and two sites read off one peptide are correlated by
 //! construction. mzLib's `Quantification.PtmQtl` engine (mzLib #1369, #1430, #1446) keeps those
-//! cases apart. This crate sends your table to the bridge and types what comes back; it does no
-//! arithmetic of its own.
+//! cases apart (mzLib #1464 and #1468 added the peptidoform counts, the reason a pair was not
+//! tested, and the log2 scale). This crate sends your table to the bridge and types what comes
+//! back; it does no arithmetic of its own.
 //!
 //! The examples on this page read mzLib's own hand-computed test cases, so each number below is
 //! one mzLib's tests assert.
@@ -105,15 +106,20 @@
 //! | `quantified` | the modified form was quantified | a measured fraction in (0, 1] |
 //! | `floor` | the modified form was identified but not quantified, while forms covering the site were | low, **not zero** |
 //! | `count_only` | the modified form was identified, but nothing covering the site was quantified | present, amount unknown |
-//! | `not_detected` | the site was covered, but no modified form was identified | unknown, **not zero** |
+//! | `not_detected` | peptidoforms covering the site were identified in the run, and none carried the modification | a bound below what the run could detect, **not zero** |
 //!
 //! Neither a floor nor an undetected cell has a fraction, so neither can be averaged in as 0 by
-//! accident. Two modifications at one position share a denominator: on `SHARED_POSITION`, 20 units
-//! carry phosphorylation, 30 HexNAc and 50 neither, so they are two sites, at 0.2 and 0.3.
-//! **Positions count from 1, in the protein**: a protein N-terminal modification sits at the residue
-//! it is on, residue 2 when the initiator methionine was removed. So **do not join this table with
-//! [`crate::readers::read_occupancy`] on position**: MetaMorpheus's occupancy file puts the
-//! N-terminus at position 0.
+//! accident. Since mzLib #1468 a `not_detected` cell is mzLib's covered-zero: the forms covering
+//! the site need only be identified, not quantified. Each row also counts identifications, not
+//! intensity: [`OccupancyRow::covering_peptidoforms`] distinct peptidoforms covered the position in
+//! that run, and [`OccupancyRow::modified_peptidoforms`] of them carried the modification there —
+//! the k of n of a cell with no fraction. A `count_only` cell with k = n was seen only modified;
+//! with k < n both forms were identified. Two modifications at one position share a denominator: on
+//! `SHARED_POSITION`, 20 units carry phosphorylation, 30 HexNAc and 50 neither, so they are two
+//! sites, at 0.2 and 0.3. **Positions count from 1, in the protein**: a protein N-terminal
+//! modification sits at the residue it is on, residue 2 when the initiator methionine was removed.
+//! So **do not join this table with [`crate::readers::read_occupancy`] on position**:
+//! MetaMorpheus's occupancy file puts the N-terminus at position 0.
 //!
 //! **What mzLib leaves out.** mzLib always skips the `Common Variable` and `Common Fixed`
 //! categories, peptide-terminal modifications and every C-terminal modification (the table does not
@@ -184,8 +190,9 @@
 //! use mzlib::ptmqtl::{pairs, pairs_with, PairType, PairsOptions, PtmPairs};
 //!
 //! let plain = pairs("batch.tsv", PairType::Covarying)?;
-//! // mzLib's defaults, reported because none was set.
-//! assert_eq!((plain.covarying_run_count, plain.min_quantified_fraction, plain.exclude_ceiling), (Some(12), Some(0.7), Some(true)));
+//! // mzLib's default guard, reported because none was set. Ceilings are left out by mzLib's own
+//! // rule, which the crate does not restate: exclude_ceiling is None unless you chose.
+//! assert_eq!((plain.covarying_run_count, plain.min_quantified_fraction, plain.exclude_ceiling), (Some(12), Some(0.7), None));
 //!
 //! let given = pairs_with(
 //!     "batch.tsv",
@@ -223,6 +230,9 @@
 //! adjusted within it, and is not a target-decoy q-value. [`PairsOptions::keep_ceiling`] keeps runs
 //! where a site was seen only modified: two unrelated sites that both read 1 in low-load runs then
 //! correlate through detection alone, which is why mzLib leaves them out by default.
+//! [`PtmPair::test_status`] says why a co-varying pair has no statistic: `not_estimable` (too few
+//! complete runs, or a site constant over them) or `too_few_shared_runs` (with the run level
+//! removed, fewer than [`PtmPairs::min_runs_for_run_level`] runs), one of [`PAIR_TEST_STATUSES`].
 //!
 //! ## Does occupancy change with a trait?
 //!
@@ -270,11 +280,13 @@
 //!
 //! `TRAIT_SITE` recovers the 0.5 it was built with. **`effect` is in logit units per unit of the
 //! trait**, so `0.5_f64.exp()` = 1.65: each dose unit multiplies the odds of the modified form by
-//! about 1.65. The degrees of freedom are between replicates (six replicates, less the intercept and
-//! the dose), because the dose never varies within a replicate. `CENSORED_SITE` is the same site
-//! with one replicate's two runs replaced by a floor and a ceiling. Both leave the fit — only
-//! quantified, non-ceiling cells are responses — so it rests on five replicates and three degrees
-//! of freedom. What it does not tell you:
+//! about 1.65. [`TraitEffects::scale`] names the scale, `natural_log_odds` by mzLib's default
+//! (mzLib #1464 added `log2_odds`, which this crate does not request yet). The degrees of freedom
+//! are between replicates (six replicates, less the intercept and the dose), because the dose never
+//! varies within a replicate. `CENSORED_SITE` is the same site with one replicate's two runs
+//! replaced by a floor and a ceiling. Both leave the fit — only quantified, non-ceiling cells are
+//! responses — so it rests on five replicates and three degrees of freedom. What it does not tell
+//! you:
 //!
 //! - **Only the modified share.** Floors, count-only and undetected cells are left out, never
 //!   entered as 0. Whether the modification is *detected* more often with the trait is a separate
@@ -317,6 +329,15 @@ pub const PAIR_TYPES: [&str; 3] = ["physical", "covarying", "both"];
 /// The named rules [`PairsOptions::run_level_group`] takes. For any other grouping, map each
 /// modification to a group in a file and pass it as [`PairsOptions::run_level_groups`].
 pub const RUN_LEVEL_GROUPS: [&str; 2] = ["category", "modification"];
+
+/// Every value of the [`pairs_with`] `test_status` column (mzLib's `PairTestStatus`, #1468), for
+/// co-varying pairs; a physical pair has `None`. Only a `"tested"` pair carries a statistic.
+pub const PAIR_TEST_STATUSES: [&str; 4] = [
+    "tested",
+    "not_estimable",
+    "too_few_shared_runs",
+    "both_sites_mostly_bounds",
+];
 
 /// Every value of the [`trait_effects_with`] `status` column. Only `"fitted"` rows carry
 /// statistics.
@@ -571,6 +592,15 @@ pub struct OccupancyRow {
     pub fraction: Option<f64>,
     /// `false` with a fraction of 1 is a **ceiling**: the site was seen only modified.
     pub unmodified_quantified: bool,
+    /// Distinct peptidoforms covering the position identified in this run (or sample), quantified
+    /// or not, in peptidoforms: mzLib's `SiteRunOccupancy.CoveringPeptidoforms` (#1468), the n of a
+    /// cell's k of n. It counts identifications, not intensity. `None`: not supplied (mzLib always
+    /// supplies it; a bridge before pyMzLib 0.7.0 has no such column).
+    pub covering_peptidoforms: Option<i64>,
+    /// Of [`Self::covering_peptidoforms`], those carrying this modification at the position, in
+    /// peptidoforms: the k. 0 for `not_detected`. `None`: not supplied, as
+    /// [`Self::covering_peptidoforms`].
+    pub modified_peptidoforms: Option<i64>,
 }
 
 impl SiteOccupancy {
@@ -597,6 +627,8 @@ impl SiteOccupancy {
         let covering_intensity = t.floats("covering_intensity")?;
         let fraction = t.floats("fraction")?;
         let unmodified_quantified = t.booleans("unmodified_quantified")?;
+        let covering_peptidoforms = optional_integers(t, "covering_peptidoforms", site_key.len())?;
+        let modified_peptidoforms = optional_integers(t, "modified_peptidoforms", site_key.len())?;
         Ok((0..site_key.len())
             .map(|i| OccupancyRow {
                 site_key: site_key[i].clone().unwrap_or_default(),
@@ -611,8 +643,37 @@ impl SiteOccupancy {
                 covering_intensity: covering_intensity[i].unwrap_or_default(),
                 fraction: fraction[i],
                 unmodified_quantified: unmodified_quantified[i].unwrap_or_default(),
+                covering_peptidoforms: covering_peptidoforms[i],
+                modified_peptidoforms: modified_peptidoforms[i],
             })
             .collect())
+    }
+}
+
+/// A column a bridge before pyMzLib 0.7.0 (mzLib 1.0.596) does not write: all `None` when absent.
+fn optional_integers(t: &Table, name: &str, rows: usize) -> Result<Vec<Option<i64>>> {
+    if t.has(name) {
+        t.integers(name)
+    } else {
+        Ok(vec![None; rows])
+    }
+}
+
+/// As [`optional_integers`], for a text column.
+fn optional_strings(t: &Table, name: &str, rows: usize) -> Result<Vec<Option<String>>> {
+    if t.has(name) {
+        t.strings(name)
+    } else {
+        Ok(vec![None; rows])
+    }
+}
+
+/// As [`optional_integers`], for a true/false column.
+fn optional_booleans(t: &Table, name: &str, rows: usize) -> Result<Vec<Option<bool>>> {
+    if t.has(name) {
+        t.booleans(name)
+    } else {
+        Ok(vec![None; rows])
     }
 }
 
@@ -652,9 +713,31 @@ pub struct PtmPairs {
     /// [`PairType::Physical`].
     #[serde(default)]
     pub min_quantified_fraction: Option<f64>,
-    /// Whether ceilings were left out; `None` for [`PairType::Physical`].
+    /// `Some(false)` with [`PairsOptions::keep_ceiling`]. `None` when you did not choose: mzLib's
+    /// `CoVarying` then resolves its own default (ceilings left out) since mzLib #1468, and the
+    /// crate does not restate that rule to name the value. Also `None` for [`PairType::Physical`].
     #[serde(default)]
     pub exclude_ceiling: Option<bool>,
+    /// Whether runs where a site was seen in only one form entered as tied bounds: mzLib's default
+    /// (`false`) until the crate sends `--include-bounds`. `None` for [`PairType::Physical`].
+    #[serde(default)]
+    pub include_bounds: Option<bool>,
+    /// mzLib's `PtmPairEngine.MinUntiedShare`, a fraction of the shared runs (0 to 1): with bounds,
+    /// a pair is tested only if one of its sites has at least this share of the shared runs outside
+    /// its largest tie. `None` when bounds were not included (or for [`PairType::Physical`]).
+    #[serde(default)]
+    pub min_untied_share: Option<f64>,
+    /// Absolute path of the run covariate table, or `None` without one (the crate does not send
+    /// `--run-covariate` yet).
+    #[serde(default)]
+    pub run_covariate_file: Option<String>,
+    /// The covariate's name, the run covariate table's second header, or `None` without one.
+    #[serde(default)]
+    pub run_covariate_name: Option<String>,
+    /// Runs (or samples) with no value in the run covariate table, in ordinal order: mzLib left
+    /// them out of every pair. Empty when every run has one; `None` without a run covariate.
+    #[serde(default)]
+    pub run_covariate_runs_missing: Option<Vec<String>>,
     /// Whether the run level was removed; `None` for [`PairType::Physical`].
     #[serde(default)]
     pub remove_run_level: Option<bool>,
@@ -666,8 +749,9 @@ pub struct PtmPairs {
     /// [`PairsOptions::run_level_groups`].
     #[serde(default)]
     pub run_level_groups_file: Option<String>,
-    /// mzLib's `MinRunsForRunLevel`, in runs: with the run level removed, a pair sharing fewer runs
-    /// with a level is not estimable. `None` when the run level was not removed.
+    /// mzLib's `MinRunsForRunLevel`, in runs: with the run level or a run covariate removed, a pair
+    /// sharing fewer runs is not tested ([`PtmPair::test_status`] `"too_few_shared_runs"`). `None`
+    /// when neither was removed.
     #[serde(default)]
     pub min_runs_for_run_level: Option<u64>,
     /// mzLib's `MinSitesForRunLevel`, in sites: a run whose group has fewer other sites there has no
@@ -696,7 +780,7 @@ pub struct PtmPairs {
     #[serde(flatten)]
     pub columns: Table,
     /// What each pair type means, and the run level when it was removed, plus any that apply to
-    /// this input.
+    /// this input, among them one counting untested pairs by [`PtmPair::test_status`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub caveats: Vec<String>,
 }
@@ -730,10 +814,22 @@ pub struct PtmPair {
     pub n: i64,
     /// Runs [`Self::statistic`] was computed on, in runs.
     pub statistic_n: i64,
-    /// `"exact"`, `"asymptotic"` or `"not_estimable"`; `None` for a physical pair.
+    /// `"exact"`, `"asymptotic"` or `"not_estimable"` (not tested, for the reason
+    /// [`Self::test_status`] gives); `None` for a physical pair.
     pub spearman_method: Option<String>,
     /// Whether rho is partial given the run level.
     pub run_level_removed: bool,
+    /// One of [`PAIR_TEST_STATUSES`], mzLib's `PairTestStatus` (#1468): `"tested"` (statistic,
+    /// p-value and, unless overlapping, `q` are set) or why not — `"not_estimable"` (too few
+    /// complete runs, a site constant over them, or a covariate that carries a site entirely),
+    /// `"too_few_shared_runs"` (partial on the run level or a run covariate, on fewer than
+    /// [`PtmPairs::min_runs_for_run_level`] runs) or `"both_sites_mostly_bounds"`. `None` for a
+    /// physical pair, which has no test, and from a bridge before pyMzLib 0.7.0.
+    pub test_status: Option<String>,
+    /// Whether one-form cells entered as tied bounds. Always `false` for a physical pair.
+    pub bounds_included: bool,
+    /// Whether rho is partial given the run covariate. Always `false` for a physical pair.
+    pub run_covariate_removed: bool,
 }
 
 impl PtmPairs {
@@ -760,6 +856,9 @@ impl PtmPairs {
         let statistic_n = t.integers("statistic_n")?;
         let spearman_method = t.strings("spearman_method")?;
         let run_level_removed = t.booleans("run_level_removed")?;
+        let test_status = optional_strings(t, "test_status", site_a.len())?;
+        let bounds_included = optional_booleans(t, "bounds_included", site_a.len())?;
+        let run_covariate_removed = optional_booleans(t, "run_covariate_removed", site_a.len())?;
         Ok((0..site_a.len())
             .map(|i| PtmPair {
                 result_type: result_type[i].clone().unwrap_or_default(),
@@ -775,6 +874,9 @@ impl PtmPairs {
                 statistic_n: statistic_n[i].unwrap_or_default(),
                 spearman_method: spearman_method[i].clone(),
                 run_level_removed: run_level_removed[i].unwrap_or_default(),
+                test_status: test_status[i].clone(),
+                bounds_included: bounds_included[i].unwrap_or_default(),
+                run_covariate_removed: run_covariate_removed[i].unwrap_or_default(),
             })
             .collect())
     }
@@ -822,6 +924,12 @@ pub struct TraitEffects {
     /// Whether ceiling cells were left out.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub exclude_ceiling: bool,
+    /// The scale every effect, standard error and variance is in: `"natural_log_odds"` (mzLib's
+    /// default, `SiteTraitOptions.Scale`; the logit, so `effect.exp()` is the odds ratio) or
+    /// `"log2_odds"` (an effect of +1 doubles the odds; mzLib #1464). The crate does not send
+    /// `--scale` yet, so this is mzLib's default. Empty from a bridge before pyMzLib 0.7.0.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub scale: String,
     /// Sites per status, in sites, keyed by [`TRAIT_STATUSES`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub status_counts: BTreeMap<String, u64>,
@@ -856,9 +964,10 @@ pub struct TraitEffect {
     pub modification: String,
     /// One of [`TRAIT_STATUSES`].
     pub status: String,
-    /// The change in logit(occupancy) per trait unit; `effect.exp()` is the odds ratio.
+    /// The change in the log odds of occupancy per trait unit, on [`TraitEffects::scale`]:
+    /// natural-log odds (the logit; `effect.exp()` is the odds ratio) by default.
     pub effect: Option<f64>,
-    /// Its standard error, in logit occupancy per trait unit.
+    /// Its standard error, in log odds of occupancy per trait unit (as [`TraitEffects::scale`]).
     pub standard_error: Option<f64>,
     /// Degrees of freedom by the containment rule: between-replicate for a trait constant within
     /// each replicate.
@@ -874,12 +983,14 @@ pub struct TraitEffect {
     pub replicates: i64,
     /// Median occupancy over those runs, a fraction (0 to 1).
     pub median_fraction: Option<f64>,
-    /// One per covariate, in [`TraitEffects::covariate_names`] order, in logit occupancy per
-    /// covariate unit; each `None` when not fitted.
+    /// One per covariate, in [`TraitEffects::covariate_names`] order, in log odds of occupancy per
+    /// covariate unit (as [`TraitEffects::scale`]); each `None` when not fitted.
     pub covariate_effects: Vec<Option<f64>>,
-    /// The between-replicate variance (random intercept), in squared logit occupancy.
+    /// The between-replicate variance (random intercept), in squared log odds of occupancy (as
+    /// [`TraitEffects::scale`]).
     pub replicate_variance: Option<f64>,
-    /// The within-replicate, run-to-run variance, in squared logit occupancy.
+    /// The within-replicate, run-to-run variance, in squared log odds of occupancy (as
+    /// [`TraitEffects::scale`]).
     pub residual_variance: Option<f64>,
 }
 
@@ -1239,7 +1350,7 @@ pub fn trait_effects(occupancy: impl AsRef<Path>, runs: impl AsRef<Path>) -> Res
     trait_effects_with(occupancy, runs, &TraitEffectsOptions::default())
 }
 
-/// Fit, per site, the effect of a per-run trait on logit occupancy, with mzLib's
+/// Fit, per site, the effect of a per-run trait on the log odds of occupancy, with mzLib's
 /// `SiteTraitEffects`.
 ///
 /// The model, per site, is logit(occupancy) = b0 + b_trait x trait + covariates + a random
@@ -1267,6 +1378,7 @@ pub fn trait_effects(occupancy: impl AsRef<Path>, runs: impl AsRef<Path>) -> Res
 /// let fit = trait_effects("trait_occupancy.tsv", "trait_runs.tsv")?;
 /// assert_eq!(fit.status_counts["fitted"], 2);
 /// assert_eq!((fit.logit_epsilon, fit.exclude_ceiling), (5e-5, true)); // mzLib's defaults
+/// assert_eq!(fit.scale, "natural_log_odds"); // the logit
 /// let site = &fit.rows()?[1];
 /// assert_eq!(site.protein_accession, "TRAIT_SITE");
 /// assert_eq!(site.covariate_effects.len(), fit.covariate_names.len());
@@ -1372,6 +1484,45 @@ mod tests {
         let fractions: SiteOccupancy = serde_json::from_str(FRACTIONS).unwrap();
         assert_eq!(fractions.sample_count, Some(2));
         assert!(fractions.samples_file.is_some());
+    }
+
+    #[test]
+    fn occupancy_carries_mzlibs_peptidoform_counts() {
+        // mzLib #1468: each cell counts the peptidoforms covering the site, and those modified.
+        let occ: SiteOccupancy = serde_json::from_str(CASES).unwrap();
+        let rows = occ.rows().unwrap();
+        let ratio = rows
+            .iter()
+            .find(|r| r.protein_accession == "RATIO")
+            .unwrap();
+        assert_eq!(
+            (ratio.covering_peptidoforms, ratio.modified_peptidoforms),
+            (Some(3), Some(1))
+        );
+        let undetected = rows.iter().find(|r| r.state == "not_detected").unwrap();
+        assert_eq!(undetected.modified_peptidoforms, Some(0));
+        // A count_only cell seen only modified: k = n.
+        for row in rows.iter().filter(|r| r.state == "count_only") {
+            assert_eq!(row.modified_peptidoforms, row.covering_peptidoforms);
+        }
+        assert!(occ
+            .caveats
+            .iter()
+            .any(|c| c.starts_with("covering_peptidoforms and modified_peptidoforms")));
+
+        // A table without the columns (a bridge before pyMzLib 0.7.0) reads them as not supplied.
+        let mut wire: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        let columns = wire["columns"].as_object_mut().unwrap();
+        columns.remove("covering_peptidoforms");
+        columns.remove("modified_peptidoforms");
+        let names = wire["column_names"].as_array_mut().unwrap();
+        names.retain(|n| !n.as_str().unwrap().ends_with("_peptidoforms"));
+        let old: SiteOccupancy = serde_json::from_value(wire).unwrap();
+        assert!(old
+            .rows()
+            .unwrap()
+            .iter()
+            .all(|r| r.covering_peptidoforms.is_none() && r.modified_peptidoforms.is_none()));
     }
 
     #[test]
@@ -1484,9 +1635,32 @@ mod tests {
             (Some(0.25), None, None)
         );
 
+        assert_eq!(physical.include_bounds, None);
+        assert_eq!(
+            (pair.test_status.as_deref(), pair.bounds_included),
+            (None, false)
+        );
+
         let plain: PtmPairs = serde_json::from_str(BATCH).unwrap();
         assert_eq!(plain.min_quantified_fraction, Some(0.7));
-        assert_eq!(plain.exclude_ceiling, Some(true));
+        // mzLib #1468: mzLib resolves its own nullable excludeCeiling; nothing is restated here.
+        assert_eq!(plain.exclude_ceiling, None);
+        assert_eq!(
+            (plain.include_bounds, plain.min_untied_share),
+            (Some(false), None)
+        );
+        assert_eq!(
+            (
+                plain.run_covariate_file.as_deref(),
+                plain.run_covariate_runs_missing.as_deref()
+            ),
+            (None, None)
+        );
+        assert!(plain
+            .rows()
+            .unwrap()
+            .iter()
+            .all(|r| r.test_status.as_deref() == Some("tested") && !r.run_covariate_removed));
         assert_eq!(
             (plain.remove_run_level, plain.run_level_group.as_deref()),
             (Some(false), None)
@@ -1496,6 +1670,15 @@ mod tests {
         let given: PtmPairs = serde_json::from_str(RUN_LEVEL).unwrap();
         assert_eq!(given.run_level_group.as_deref(), Some("none"));
         assert!(given.rows().unwrap().iter().all(|r| r.run_level_removed));
+        // Every untested pair says why; spearman_method still reads not_estimable for each.
+        for pair in given.rows().unwrap() {
+            let status = pair.test_status.as_deref().unwrap();
+            assert!(PAIR_TEST_STATUSES.contains(&status));
+            assert_eq!(
+                status == "tested",
+                pair.spearman_method.as_deref() != Some("not_estimable")
+            );
+        }
         // An overlapping pair is reported but never tested.
         for pair in given.rows().unwrap() {
             if pair.overlapping {
@@ -1560,6 +1743,7 @@ mod tests {
         let fit: TraitEffects = serde_json::from_str(EFFECTS).unwrap();
         assert_eq!((fit.min_runs, fit.min_replicates), (6, 4));
         assert!(fit.exclude_ceiling);
+        assert_eq!(fit.scale, "natural_log_odds"); // mzLib's default
         let rows = fit.rows().unwrap();
         assert!(rows
             .iter()

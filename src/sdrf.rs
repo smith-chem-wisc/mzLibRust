@@ -192,10 +192,12 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! **Replicate numbers are ranked within each condition**, and [`SdrfDesign::notes`] is the only
-//! record of the renumbering. A drafted SDRF often copies the study-wide run index from the file
-//! names (WT_DMSO1-3, CA_DMSO4-6, … CA_FA22-24); mzLib ranks them back, and the result is the
-//! hand-numbered design exactly:
+//! **Replicate numbers are the SDRF's own.** A drafted SDRF often copies the study-wide run index
+//! from the file names (WT_DMSO1-3, CA_DMSO4-6, … CA_FA22-24). mzLib keeps those numbers exactly as
+//! written, gaps included (mzLib #1426). It never ranks them or closes them up, because replicate 4
+//! of one condition can be the same subject as replicate 4 of another, and a gap can be a lost
+//! sample. Instead [`SdrfDesign::notes`] flags every condition whose numbers are not 1..N, so you
+//! can decide:
 //!
 //! ```
 //! # mzlib_replay::activate();
@@ -204,12 +206,21 @@
 //! #     condition_columns: vec!["factor value[genotype]".into(), "factor value[treatment]".into()],
 //! #     ..Default::default()
 //! # };
-//! let ranked = design_with("PXD067622_studywide.sdrf.tsv", &both)?;
-//! assert_eq!(ranked.notes.len(), 7);
-//! assert!(ranked.notes[1].ends_with("biological replicates renumbered 22 -> 1, 23 -> 2, 24 -> 3."));
-//! assert_eq!(ranked.columns, design_with("PXD067622.sdrf.tsv", &both)?.columns);
+//! let kept = design_with("PXD067622_studywide.sdrf.tsv", &both)?;
+//! assert_eq!((kept.is_valid, kept.notes.len()), (true, 7));
+//! assert!(kept.notes[1].contains("biological replicates 22, 23, 24, kept as the SDRF numbers them"));
+//! let highest = kept.files()?.iter().map(|f| f.biological_replicate).max();
+//! assert_eq!(highest, Some(23)); // 0-based: the SDRF's 24
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
+//!
+//! (`PXD067622_studywide.sdrf.tsv` is PXD067622 with each biological replicate replaced by the
+//! number in its file name.) mzLib adds a number only where the SDRF gives none (no column, or
+//! `not available`), after the highest number the condition already uses, and says so in `notes`.
+//! MetaMorpheus refuses a design file whose replicate numbers have gaps until a release carries
+//! [smith-chem-wisc/MetaMorpheus#2928](https://github.com/smith-chem-wisc/MetaMorpheus/pull/2928),
+//! which quantifies it with a warning instead; check your MetaMorpheus before handing it a file
+//! written with [`DesignOptions::out`].
 //!
 //! Without condition columns, mzLib uses the document's only factor column; PXD067622 has two, so
 //! leaving them undeclared is itself a refusal. When the SDRF names files without the directory
@@ -366,8 +377,13 @@
 //! experiment, not something mzLib can read from the file; that is why it makes you declare it.
 //! Note two more things about the rows. `condition` is the factor cell as written, key=value
 //! grammar and all. And the biological replicate is the SDRF's own number (here, a tissue's female
-//! and male samples are replicates 1 and 2): an isobaric design never ranks replicates the way
-//! [`design_with`] does.
+//! and male samples are replicates 1 and 2), as [`design_with`] keeps it too.
+//!
+//! The `comment[label]` cells are read by mzLib's one channel/label rule (`SdrfIsobaricLabels`,
+//! mzLib #1467): `TMT127N`, `ITRAQ114` and `DiLeu115a`, bare or accessioned, in any case. TMT10's
+//! last channel reads from `TMT131`, PRIDE's term, or from `TMT131N`; `TMT131` is still refused for
+//! TMT11, where `131N` and `131C` are both channels. To write a label, take it from
+//! [`crate::isobaric::ReporterChannel::sdrf_label`].
 //!
 //! **The traps.**
 //!
@@ -2185,7 +2201,8 @@ pub struct DesignedFile {
     pub file_name: String,
     /// The condition columns' values joined with `_`.
     pub condition: String,
-    /// 0-based, ranked within the condition.
+    /// 0-based: the SDRF's own number minus 1, gaps included and never ranked (since mzLib #1426).
+    /// Where the SDRF gives none, the number mzLib added, after the highest the condition uses.
     pub biological_replicate: u32,
     /// 0-based.
     pub technical_replicate: u32,
@@ -2234,9 +2251,11 @@ pub struct SdrfDesign {
     /// Every reason the design was refused, in mzLib's words. Empty when valid.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub refusals: Vec<String>,
-    /// Every relabelling on the way to a valid design: biological replicates ranked within a
-    /// condition, with the `old -> new` mapping, and rows dropped because the search does not
-    /// read their file. **The only record of a renumbering — read it.**
+    /// What mzLib added, dropped or wants checked on the way to a valid design: biological
+    /// replicates it added where the SDRF gives none, with the numbers; rows dropped because the
+    /// search does not read their file; conditions whose numbers are not 1..N; and sample names
+    /// whose one number disagrees with their replicate. **The only record of a number mzLib
+    /// added — read it.**
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub notes: Vec<String>,
     /// mzLib's human-readable account of all of the above (`SdrfLabelFreeDesign.Report`). Print
@@ -2388,9 +2407,10 @@ pub fn design(path: impl AsRef<Path>) -> Result<SdrfDesign> {
 /// Calls mzLib's `SdrfLabelFreeDesign.Read` (mzLib #1363). It runs every check MetaMorpheus's own
 /// design validator runs and **refuses rather than repairs**: a factor written `not available`,
 /// two files claiming the same replicate and fraction, a document with several factor columns and
-/// none declared — each is a refusal, and all are reported at once. It relabels in only two ways,
-/// both recorded in [`SdrfDesign::notes`]: study-wide biological replicate numbers are ranked
-/// within each condition (`22 -> 1`), and rows for files the search does not read are dropped.
+/// none declared — each is a refusal, and all are reported at once. Replicate and fraction numbers
+/// are the SDRF's own, gaps included (mzLib #1426); [`SdrfDesign::notes`] flags the gaps, names any
+/// replicate number mzLib added where the SDRF gives none, and lists rows dropped because the
+/// search does not read their file.
 ///
 /// **Label-free only.** An isobaric (TMT, iTRAQ, DiLeu) SDRF needs a channel design: read it
 /// with [`isobaric_design_with`]. A search that read `X-calib.mzML` for an SDRF naming `X.raw`
@@ -3793,14 +3813,24 @@ mod tests {
     }
 
     #[test]
-    fn a_renumbering_is_recorded_and_lands_on_the_hand_numbered_design() {
-        let ranked: SdrfDesign =
+    fn the_sdrfs_replicate_numbers_are_kept_and_the_gaps_noted() {
+        let kept: SdrfDesign =
             fixture(include_str!("../tests/fixtures/sdrf_design_studywide.json"));
         let hand: SdrfDesign =
             fixture(include_str!("../tests/fixtures/sdrf_design_PXD067622.json"));
-        assert_eq!(ranked.notes.len(), 7);
-        assert!(ranked.notes[1].contains("22 -> 1, 23 -> 2, 24 -> 3"));
-        assert_eq!(ranked.columns, hand.columns);
+        // mzLib #1426: the SDRF's numbers are written as given, never ranked; notes flags the gaps.
+        assert!(kept.is_valid);
+        assert_eq!(kept.notes.len(), 7);
+        assert!(kept.notes[1]
+            .contains("biological replicates 22, 23, 24, kept as the SDRF numbers them"));
+        let highest = kept
+            .files()
+            .unwrap()
+            .iter()
+            .map(|f| f.biological_replicate)
+            .max();
+        assert_eq!(highest, Some(23));
+        assert_ne!(kept.columns, hand.columns);
     }
 
     #[test]
