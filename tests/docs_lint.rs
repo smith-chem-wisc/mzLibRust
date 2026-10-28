@@ -22,11 +22,14 @@ use std::path::{Path, PathBuf};
 /// The modules whose `//!` documentation is a guide. `tests/spec_docs.rs::guide_module` maps each
 /// spec module onto one of these.
 const GUIDES: &[&str] = &[
+    "diff",
     "flashlfq",
     "isobaric",
+    "library",
     "peptidoform",
     "pride",
     "proteins",
+    "ptmqtl",
     "readers",
     "sdrf",
     "stats",

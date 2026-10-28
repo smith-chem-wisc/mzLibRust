@@ -79,8 +79,35 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
         "sdrf assess",
         &["sdrf_assess_PXD000070.json", "sdrf_assess_skeleton.json"],
     ),
-    // The proteins guide: three databases and a contaminant, filtered to four accessions.
-    ("proteins read", &["proteins_read_accessions.json"]),
+    // The spectral-library guide: one precursor's fragment ions, and an index-only read.
+    // --fragments: the bridge's checker cannot hold a present_when column to a spec example yet.
+    (
+        "library read",
+        &[
+            "library_read_fragments.json",
+            "library_read_index_only.json",
+        ],
+    ),
+    // The proteins guide: three databases and a contaminant, filtered to four accessions; and the
+    // DYNC1I2 isoforms and both albumins with their sequences, which the alignment section aligns.
+    (
+        "proteins read",
+        &[
+            "proteins_read_accessions.json",
+            "proteins_read_sequences.json",
+        ],
+    ),
+    // The diff and stats guides: stats fit on the design file diff design wrote for the MALAT1
+    // dilution series, without and with its contrasts file; and that series' design with no
+    // reference level (every pair of loads a contrast), which the contrasts example reads.
+    (
+        "stats fit",
+        &[
+            "stats_fit_malat_diff_design.json",
+            "stats_fit_malat_diff_design_contrasts.json",
+        ],
+    ),
+    ("diff design", &["diff_design_malat_pairs.json"]),
 ];
 
 fn main() {
@@ -193,16 +220,27 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
     let empty = serde_json::Map::new();
     let map = data.as_object().unwrap_or(&empty);
 
+    let literal = |value: &Value| match value {
+        Value::Null => "V::Null".to_owned(),
+        Value::Bool(flag) => format!("V::Bool({flag})"),
+        Value::String(text) => format!("V::Text({text:?})"),
+        Value::Number(number) => format!("V::Text({:?})", number.to_string()),
+        Value::Array(_) | Value::Object(_) => "V::Compound".to_owned(),
+    };
     let mut fields = String::new();
     for (key, value) in map {
-        let literal = match value {
-            Value::Null => "V::Null".to_owned(),
-            Value::Bool(flag) => format!("V::Bool({flag})"),
-            Value::String(text) => format!("V::Text({text:?})"),
-            Value::Number(number) => format!("V::Text({:?})", number.to_string()),
-            Value::Array(_) | Value::Object(_) => "V::Compound".to_owned(),
-        };
-        write!(fields, "({key:?}, {literal}), ").unwrap();
+        write!(fields, "({key:?}, {}), ", literal(value)).unwrap();
+        // One level of an echoed object as `outer.inner`, for the rules that read inside one
+        // (`genes orthology`'s `pair_status.from_species`). A dotted key names no option, so the
+        // generic option check never meets it.
+        if let Value::Object(inner) = value {
+            for (sub, value) in inner {
+                write!(fields, "(\"{key}.{sub}\", {}), ", literal(value)).unwrap();
+            }
+        }
+    }
+    for (key, text) in derived_fields(map) {
+        write!(fields, "({key:?}, V::Text({text:?})), ").unwrap();
     }
 
     // BULK.md: a --paths-stdin call has its own envelope. A recording is bulk when it carries the
@@ -245,19 +283,170 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
         _ => Vec::new(),
     };
 
-    // The sequences a `peptidoform convert` recording was made from (stub.rs STDIN_ECHO).
-    let inputs: Vec<&str> = match map.get("columns").and_then(|c| c.get("input")) {
-        Some(Value::Array(rows)) if map.contains_key("source_format") => {
-            rows.iter().filter_map(Value::as_str).collect()
+    // The input a STDIN_ECHO verb's recording was made from, one entry per stdin line (stub.rs):
+    // the `input` column of a `peptidoform convert` or `proteins parse-accession` recording; the
+    // searched files of an `sdrf restrict` one (its `searched_files`, as sent); the pairs of a
+    // `proteins align` one, `source<TAB>target`, from its aligned rows with the gaps removed
+    // (mzLib refuses a '-' in an input sequence, so removing them is exact); and for
+    // `genes orthology`, its `species`, a `--`, then one entry per dump.
+    let strings = |value: Option<&Value>| -> Vec<String> {
+        match value {
+            Some(Value::Array(rows)) => rows
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
         }
-        _ => Vec::new(),
     };
+    let column = |name: &str| strings(map.get("columns").and_then(|c| c.get(name)));
+    let inputs: Vec<String> =
+        if map.contains_key("source_format") || map.contains_key("namespace_counts") {
+            column("input")
+        } else if map.contains_key("searched_without_row") {
+            strings(map.get("searched_files"))
+        } else if map.contains_key("aligner_id") {
+            column("aligned_source")
+                .iter()
+                .zip(column("aligned_target"))
+                .map(|(s, t)| format!("{}\t{}", s.replace('-', ""), t.replace('-', "")))
+                .collect()
+        } else if map.contains_key("snapshot_id") {
+            let mut lines = strings(map.get("species"));
+            lines.push("--".to_owned());
+            if let Some(Value::Object(dumps)) = map.get("dumps") {
+                lines.extend(dumps.keys().cloned());
+            }
+            lines
+        } else {
+            Vec::new()
+        };
+
+    // The recording's column order, for the rules that ask whether a column is there
+    // (`proteins read --sequences`).
+    let column_names = strings(map.get("column_names"));
 
     format!(
         "        Recording {{ fixture: {name:?}, envelope: include_str!({path:?}), fields: &[{fields}], \
-         bulk: {bulk}, runs: &{runs:?}, inputs: &{inputs:?}, window: {window} }},\n",
+         bulk: {bulk}, runs: &{runs:?}, inputs: &{inputs:?}, column_names: &{column_names:?}, \
+         window: {window} }},\n",
         path = envelope.display().to_string(),
     )
+}
+
+/// Facts `stub.rs` checks that are not top-level scalars, flattened into text under keys no wire
+/// option can produce (they start with `@`). One level of an echoed object, `outer.inner`, is
+/// written by `recording` itself: pyMzLib's `NESTED_ECHOES` reads stats fit's `--estimator` as
+/// `prior.estimator` and `--confidence` as `contrasts.confidence_level` there.
+///
+/// * `@tested_coefficients`, one per line: the coefficients a `stats fit`, `fit-logistic` or
+///   `fit-mixed` recording was made with (empty for a fit of contrasts alone);
+/// * `@features`, one per line, for a `stats combine-p` recording: its features in order;
+/// * `@model`, a `diff design` recording's model, in the canonical form `stub.rs` also builds from a
+///   call's stdin;
+/// * `@runs`, a `diff observations` recording's runs as sorted `file, sample, fraction, technical
+///   replicate` lines.
+fn derived_fields(map: &serde_json::Map<String, Value>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let strings = |value: Option<&Value>| -> Option<Vec<String>> {
+        value?
+            .as_array()?
+            .iter()
+            .map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    };
+    if let Some(coefficients) = strings(map.get("tested_coefficients")) {
+        out.push(("@tested_coefficients".to_owned(), coefficients.join("\n")));
+    }
+    if map.contains_key("weighted") && map.contains_key("signed") {
+        let features =
+            strings(map.get("columns").and_then(|c| c.get("feature"))).unwrap_or_default();
+        out.push(("@features".to_owned(), features.join("\n")));
+    }
+    if map.contains_key("factors") && map.contains_key("stratum_columns") {
+        out.push(("@model".to_owned(), recorded_model(map)));
+    }
+    if let Some(Value::Array(runs)) = map.get("runs") {
+        let mut lines: Vec<String> = runs
+            .iter()
+            .filter_map(|run| {
+                let text = |key: &str| {
+                    run.get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let whole = |key: &str| run.get(key).and_then(Value::as_i64).unwrap_or(0);
+                run.get("file_name")?;
+                Some(format!(
+                    "{}\t{}\t{}\t{}",
+                    text("file_name"),
+                    text("sample_id"),
+                    whole("fraction"),
+                    whole("technical_replicate")
+                ))
+            })
+            .collect();
+        lines.sort();
+        lines.dedup();
+        out.push(("@runs".to_owned(), lines.join("\n")));
+    }
+    out
+}
+
+/// A `diff design` recording's model as `stub.rs`'s `canonical_model` writes a call's stdin: one
+/// line per term, factors, then covariates, interactions, strata and batch, numbers as Rust's
+/// shortest round-trip form. pyMzLib's `diff_model`, as text.
+fn recorded_model(map: &serde_json::Map<String, Value>) -> String {
+    let text = |item: &Value, key: &str| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let number = |item: &Value, key: &str| {
+        item.get(key)
+            .and_then(Value::as_f64)
+            .map_or_else(String::new, |n| format!("{n:?}"))
+    };
+    let list = |key: &str| {
+        map.get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut lines = Vec::new();
+    for f in list("factors") {
+        lines.push(format!(
+            "factor\t{}\t{}",
+            text(&f, "name"),
+            text(&f, "reference_level")
+        ));
+    }
+    for c in list("covariates") {
+        lines.push(format!(
+            "covariate\t{}\t{}\t{}\t{}\t{}",
+            text(&c, "name"),
+            text(&c, "unit"),
+            number(&c, "scale"),
+            text(&c, "scaled_unit"),
+            number(&c, "centre")
+        ));
+    }
+    for i in list("interactions") {
+        lines.push(format!(
+            "interaction\t{}\t{}",
+            text(&i, "first"),
+            text(&i, "second")
+        ));
+    }
+    for s in list("stratum_columns") {
+        lines.push(format!("stratum\t{}", s.as_str().unwrap_or("")));
+    }
+    if let Some(batch) = map.get("batch_column").and_then(Value::as_str) {
+        lines.push(format!("batch\t{batch}"));
+    }
+    lines.join("\n")
 }
 
 fn compile_stub(source: &Path, table: &Path, out: &Path) {

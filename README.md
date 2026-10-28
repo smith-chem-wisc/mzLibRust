@@ -28,6 +28,9 @@ let small: Vec<_> = files.iter()
     .cloned()
     .collect();
 mzlib::pride::download_files(&small, "downloads", &Default::default())?;
+// ... and check what landed against the MD5 and exact size PRIDE recorded for each file.
+let checksums = mzlib::pride::file_checksums("PXD000001")?;
+println!("{}", checksums["README.txt"].md5);                    // 492753137013825025e6729c8798664f
 
 // Peptidoforms — digest an annotated protein and fragment its peptides.
 let digest = mzlib::peptidoform::fragments("P02768")?;
@@ -61,6 +64,10 @@ let proteins = median_polish_with("QuantifiedPeptides.tsv", &MedianPolishOptions
 let scans = mzlib::readers::read_spectra("run.mzML")?;
 println!("{} scans", scans.scan_count);
 
+// Spectral libraries (.msl): every precursor, or every fragment ion, with "not available" as None.
+let library = mzlib::library::read("predicted.msl")?;
+println!("{:?}", library.columns.strings("retention_time_unit")?);   // iRT or minutes, per row
+
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
 
@@ -91,6 +98,12 @@ let design = mzlib::sdrf::design_with("PXD067622.sdrf.tsv", &mzlib::sdrf::Design
 })?;
 let spectra = design.spectra()?;          // Vec<SpectraFile>, 0-based, for flashlfq::quantify_with
 
+// A TMT design (1-based, as the SDRF writes it), after cutting the SDRF to the files a search read.
+let scoped = mzlib::sdrf::restrict("PXD008841.sdrf.tsv", &["X-calib.mzML".into()])?;
+let tmt = mzlib::sdrf::isobaric_design_with("PXD008841_searched.sdrf.tsv",
+    &mzlib::sdrf::IsobaricDesignOptions { kit: Some("TMT10".into()),
+                                          plex_column: Some("comment[plex]".into()), ..Default::default() })?;
+
 // Isobaric kits — every TMT, TMTpro, iTRAQ and DiLeu channel with its reporter-ion m/z, from mzLib.
 let tmtpro = mzlib::isobaric::kits(Some("TMT18"))?;
 
@@ -99,11 +112,40 @@ let db = mzlib::proteins::read(&["human.xml"])?;
 println!("{:?}", db.taxonomy()?.get("P04406"));                            // Some(Some("9606"))
 let calls = mzlib::proteins::classify_peptides(&["YLYEIAR"], &["human.xml", "bovine.fasta"])?;
 
+// Where is canonical residue 82 in the isoform? And what entry, isoform and variants is this?
+let aln = mzlib::proteins::align(&canonical, &isoform)?;
+println!("{:?}", aln.map_source_to_target(82)?);                          // Some(76), or None at a gap
+let parsed = mzlib::proteins::parse_accessions(&["P04637-2", "NP_000537.3_R72P"])?;
+
+// Orthologs across species, exactly as Ensembl Compara states them, from every species' dump.
+let snap = mzlib::proteins::build_orthology_with("116", &orthology_options)?;
+
 // Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
 let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
 // Differential abundance with no R — limma's moderated t, held by mzLib to limma itself.
 let fit = mzlib::stats::fit("log2_intensities.tsv", "design.tsv", &["treated"])?;
 let q = mzlib::stats::adjust(&[Some(0.0002), None, Some(0.031)])?;   // None: not in the family
+
+// The design and its contrasts from a sample sheet, then every contrast with a 95% interval.
+let design = mzlib::diff::design_with("samples.tsv", &mzlib::diff::DesignOptions {
+    factors: vec![mzlib::diff::FactorSpec::new("condition", Some("control"))],
+    out: Some("design".into()),
+    ..Default::default()
+})?;
+let stratum = &design.strata[0];
+let pairs = mzlib::stats::fit_with("log2_intensities.tsv", stratum.design_file.as_deref().unwrap(),
+    &["condition=treated"], &mzlib::stats::FitOptions {
+        contrasts: stratum.contrasts_file.as_deref().map(Into::into),
+        ..Default::default()
+    })?;
+
+// Every peptide in every sample, log2 or None with the reason; MBR values in or out, your call.
+let runs = [mzlib::diff::ObservationRun::new("run1", "ctrl_1"), mzlib::diff::ObservationRun::new("run2", "drug_1")];
+let table = mzlib::diff::observations("QuantifiedPeptides.tsv", &runs, mzlib::diff::QuantBasis::MsmsOnly)?;
+
+// PTM site occupancy per run, a floor never read as 0; then pairs of sites across runs.
+let occ = mzlib::ptmqtl::occupancy("observations.tsv")?;
+let pairs = mzlib::ptmqtl::pairs("observations.tsv", mzlib::ptmqtl::PairType::Covarying)?;
 ```
 
 ### Reading: one universal function, four typed views
@@ -164,7 +206,25 @@ in. Nothing in the table is typed in on this side.
 `eBayes(legacy = TRUE)` on a feature-by-sample table and a design, one moderated t per feature and
 coefficient with Benjamini-Hochberg; `adjust` adjusts p-values from anywhere else; `meta` pools
 effect sizes across studies with DerSimonian-Laird. mzLib holds each to the R reference (limma,
-metafor) to 1e-8, and the crate ships that reference so the check can be re-run.
+metafor) to 1e-8, and the crate ships that reference so the check can be re-run. `fit_with` also
+tests contrasts with confidence intervals, and takes mzLib's marginal-likelihood prior;
+`combine_p` combines p-values across studies by Fisher or Stouffer, signed by each effect;
+`correlate_with` is Spearman against a per-sample trait, partial on request; `fit_logistic_with`
+and `fit_mixed_with` fit a logistic regression (a detection table) and a random-intercept mixed
+model per feature; and `entrapment_fdp_with` checks a search's FDR claim from its entrapment hits.
+Each is held to its R reference (`glm`, `nlme`, `pchisq`, `cor.test`, ppcor) in the live tests.
+
+**The design and the observations have their own module**, `diff`: `design_with` turns a sample
+sheet and a model into mzLib's design matrix per stratum, which equals R's `model.matrix`, says
+which comparisons these samples cannot answer and why, and writes the design and contrasts files
+`stats::fit_with` reads; `observations_with` turns a FlashLFQ or MetaMorpheus peptide table into
+every peptide in every sample, as log2 intensity or `None` with the reason, and measures the
+shared-peptide normalization shifts.
+
+**PTM site occupancy has its own module**, `ptmqtl`: `occupancy_with` computes every site's
+occupancy per run with its censoring state, `pairs_with` finds modifications on one molecule or
+co-varying across runs, and `trait_effects_with` fits the effect of a per-run trait on each site's
+logit occupancy with a random intercept per biological replicate.
 
 **Protein databases have their own module**, `proteins`: `read` gives one row per protein —
 organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;

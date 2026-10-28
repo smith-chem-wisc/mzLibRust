@@ -26,9 +26,26 @@ the reason it is not portable. Nothing was silently dropped.
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
 | transport live | — | `tests/live_bridge.rs` 2 | new: the M0 end-to-end proof |
-| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `` is refused beside `
-` |
+| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `\r` is refused beside `\n` |
 | peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
+| stats, pyMzLib 0.6.0 verbs | `test_stats.py` 25, `test_stats_combine_correlate.py` 10, `test_stats_models.py` 13 | `src/stats.rs` 26 | by behaviour, not by function: every request shape (options sent only when given), every refusal before spawning, every recording parse and the old-bridge guard for `contrasts` and `estimator` has a test; one Rust test often holds several pyMzLib ones. The type checks and `__all__` are eliminated (below) |
+| diff | `test_diff.py` 16 | `src/diff.rs` 11 | by behaviour, as stats; `test_the_example_inputs_are_vendored` is the doctests themselves, which fail without the inputs |
+| ptmqtl | `test_ptmqtl.py` 16 | `src/ptmqtl.rs` 9 | by behaviour, as stats |
+| stats live, pyMzLib 0.6.0 | `test_stats_live.py` 10, `test_stats_combine_correlate_live.py` 3, `test_stats_models_live.py` 5 | `tests/live_stats.rs` 20 | every parametrized recording case, every R comparison (limma, metafor, `pchisq`/`qnorm`, `glm`, `nlme`, the entrapment reference script) and every refusal; +1: a fit of fewer than three features fits no prior (`scale` is `None`) |
+| diff live | `test_diff_live.py` 5 | `tests/live_diff.rs` 5 | 1:1 |
+| ptmqtl live | `test_ptmqtl_live.py` 4 | `tests/live_ptmqtl.rs` 4 | 1:1 |
+| PRIDE checksums | `test_pride.py` 10 checksum tests, and `file_checksums` in the no-timeout parametrization | `src/pride.rs` 11 | 1:1 by function, plus the manifest-versus-checksum size. The verb guard's `("pride checksums", "0.6.0")` is held by `bridge.rs`'s `require_verb` tests, not per verb; a non-string accession cannot reach `&str` (above) |
+| sdrf isobaric design | `test_sdrf_isobaric_design.py` 11 offline (one parametrized over 10 refused arguments) | `src/sdrf.rs` 9 | 1:1 by function; the blank path is one of the refused arguments here, and the older-bridge refusal is `bridge.rs`'s `require_verb` test. `kit=10` and a bare-string `condition_columns` cannot be expressed in Rust; an empty `condition_columns` is this crate's "not sent", as for `design_with` |
+| sdrf isobaric design live | `test_sdrf_isobaric_design.py` 2 live | `tests/live_sdrf.rs` 2 | 1:1: the recording and `TmtDesign.txt` against the 0.6.0 bridge, and an unknown kit is `isobaric kits`' own usage error |
+| sdrf restrict | `test_sdrf_restrict.py` 7 offline (two parametrized over 9 and 3 refused arguments) | `src/sdrf.rs` 5, and `written_sdrf_reads_the_path_mzlib_reports` for `pool` | 1:1 by function. A bare string, a number and an empty mapping cannot reach `&[SearchedFile]`; a negative window cannot reach `u64` |
+| sdrf restrict live | `test_sdrf_restrict.py` 4 live | `tests/live_sdrf.rs` 4, and `pool_out_reports_the_file_mzlib_wrote` | 1:1: the recording, `out`'s `.sdrf.tsv` rename, restrict then design with native paths (SDRF-B5), and no `comment[data file]` is `ArgumentException` |
+| proteins align and parse-accession | `test_proteins_align.py` 17 offline (five of them parametrized) | `src/proteins.rs` 15 | 1:1 by function. A non-int position, a non-string pair or accession, and a bare string cannot reach `usize`, `&[(S, T)]` or `&[S]`; the verb guard is `bridge.rs`'s |
+| proteins align and parse-accession live | `test_proteins_live.py` 6 (one parametrized over 4 refusals) | `tests/live_proteins.rs` 6 | 1:1 |
+| genes orthology | `test_proteins_orthology.py` 15 offline (two parametrized over 15 and 5 cases) | `src/proteins.rs` 12 | 1:1 by function. An int release, a dict instead of a list and a non-bool flag cannot be expressed in Rust (`&str`, `Vec<(String, PathBuf)>`, `bool`) |
+| genes orthology live | `test_proteins_live.py` 5 | `tests/live_proteins.rs` 5 | 1:1: the snapshot id over the byte-exact inputs, Parquet written once, mzLib's three refusals |
+| library read | `test_library.py` 18 offline (two parametrized over refused arguments) | `src/library.rs` 14 | By function, with three exceptions: a list passed to `read` cannot reach `impl AsRef<Path>` (nor a bool or negative threshold, limit or offset reach `Option<u64>`/`u64`), the `__dir__` test has no Rust counterpart (a module's `pub` items are its API), and the per-row labels and retention-time units are pinned by the module guide's doctests |
+| library read live | `test_library_live.py` 9 (one parametrized over 4 recordings) | `tests/live_library.rs` 8 | 1:1; the verb-list check is `require_verb` itself |
+| PRIDE checksums live | `test_pride_live.py` 3 | `tests/live_pride.rs` 3 | 1:1: the list covers the FTP root's deposits, one download's length and MD5 match its row, an unknown accession is `ProjectNotFound`. Skip on a bridge older than pyMzLib 0.6.0 |
 
 ## Tests eliminated by Rust's type system
 
@@ -49,6 +66,9 @@ accounted for, not quietly missing.
 | `test_boolean_max_threads_raises` | `i32` is not `bool`. |
 | `test_non_integer_max_length_is_refused` | `Option<u32>`. |
 | `test_mz_rejects_charges_that_are_not_positive_whole_numbers` (partial) | `i32` excludes `1.5`, `"2"`, `True`, `None`; `0` and `-1` are tested. |
+| `test_combine_p_has_no_default_method`, `test_entrapment_fdp_has_no_default_ratio`, `test_pairs_requires_a_type`, `test_trait_effects_needs_both_paths` | `method`, `ratio`, `pair_type` and both paths are positional arguments, so leaving one out is a compile error. `observations_with`'s `basis` is a `QuantBasis` for the same reason. |
+| `test_module_lists_only_its_public_api`, `test_the_module_is_exported`, `test_module_is_exported` (stats, diff, ptmqtl) | Rust's `pub` is the public API; `lib.rs` declares the modules, and the doctests use them by path. |
+| the stats, diff and ptmqtl `test_*_refuses_*` cases for a wrong type (a bare string for a list, a bool for an int, `threads=True`, a non-path) | The arguments are `&[S: AsRef<str>]`, `&[PValueTest]`, `&[ObservationRun]`, `Option<u32>`, `i32`, `f64` and `impl AsRef<Path>`: the confusion cannot be expressed. The reachable cases (an empty list, a blank or tab-holding name, a non-finite number, an unknown estimator or grouping, both filters) each have a test. |
 
 ## Deliberately not ported
 
