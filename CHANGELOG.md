@@ -102,8 +102,9 @@ A wire verb's first appearance here is the version its spec in the bridge record
   vendored byte for byte under `tests/fixtures/` (`stats/`, `diff/`, `ptmqtl/`).
 - **The bridge pin is pyMzLib v0.6.0** (still mzLib 1.0.595, `d10017ce`; bridge-watch's repin).
   Its bridge dispatches 53 verbs. **Specs re-vendored in full at bridge `60b1d25`**: every spec
-  but `modifications resolve`, which has no verb (`not_vendored` in `docs/specs/SOURCE`), so the
-  verbs this crate has not built yet are listed on the front page as `(not yet)`. Every spec's
+  but `modifications resolve`, which has no verb (`not_vendored` in `docs/specs/SOURCE`). With
+  the stats and data ports, this crate builds every one of them, so the front page lists no verb
+  as `(not yet)`. Every spec's
   recorded examples are vendored byte for byte from pyMzLib 0.6.0, because the replay bridge
   reads each spec's examples, and so are the three recordings that changed since 0.5.0
   (`bridge_version.json`, `stats_fit_malat.json`, `stats_fit_limma.json`: `stats fit`'s first
