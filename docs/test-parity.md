@@ -26,9 +26,7 @@ the reason it is not portable. Nothing was silently dropped.
 | PRIDE live | `test_pride_live.py` 7 | `tests/live_pride.rs` 7 | 1:1 (protocol handshake moved to `live_bridge.rs`) |
 | peptidoform live | `test_peptidoform_live.py` 9 | `tests/live_peptidoform.rs` 9 | 1:1; 2 histone tests `#[ignore]` for slowness |
 | transport live | — | `tests/live_bridge.rs` 2 | new: the M0 end-to-end proof |
-| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `
-` is refused beside `
-` |
+| peptidoform convert | `test_peptidoform_convert.py` 18 (8 functions; one parametrized over 11 refused arguments) | `src/peptidoform.rs` 8 | 1:1 by function; 4 of the 11 refused arguments cannot be expressed in Rust (below), and `\r` is refused beside `\n` |
 | peptidoform convert live | — | `tests/live_peptidoform.rs` 5 | new: the recordings against the live bridge, the four modes, format names, thread-count invariance. Skip on a bridge without the verb (older than pyMzLib 0.4.0) |
 | stats, pyMzLib 0.6.0 verbs | `test_stats.py` 25, `test_stats_combine_correlate.py` 10, `test_stats_models.py` 13 | `src/stats.rs` 26 | by behaviour, not by function: every request shape (options sent only when given), every refusal before spawning, every recording parse and the old-bridge guard for `contrasts` and `estimator` has a test; one Rust test often holds several pyMzLib ones. The type checks and `__all__` are eliminated (below) |
 | diff | `test_diff.py` 16 | `src/diff.rs` 11 | by behaviour, as stats; `test_the_example_inputs_are_vendored` is the doctests themselves, which fail without the inputs |
