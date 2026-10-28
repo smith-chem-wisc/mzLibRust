@@ -15,6 +15,175 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **`stats` gains five verbs, ported from pyMzLib 0.6.0** (mzLib 1.0.595; mzLib #1367, #1385,
+  #1446), each with its guide section, an executed example and live canaries against R:
+  - **`stats::combine_p`**: one p-value per feature from several independent studies, by
+    Fisher's or Stouffer's method (`COMBINATION_METHODS`; no default, you choose), optionally
+    weighted and optionally signed by each test's effect (`PValueTest::weight`,
+    `PValueTest::effect`), so opposite effects cancel instead of reinforcing. Held to R's
+    `pchisq` and `qnorm` to 1e-8. Returns `CombinedPValues`, with `p_values()`. Wire verb
+    `stats combine-p`.
+  - **`stats::correlate` / `correlate_with`**: Spearman's rho of every feature with a per-sample
+    trait, optionally partial given covariates (`CorrelateOptions::given`), as R's `cor.test` and
+    ppcor's `pcor.test`. Returns `Correlations`, with typed `rows()` (`Correlation`); the
+    argument is `trait_table` because `trait` is a Rust keyword. Wire verb `stats correlate`.
+  - **`stats::fit_logistic` / `fit_logistic_with`**: one logistic regression per feature of a 0/1
+    table, such as a detection table, as R's `glm(family = binomial)`, with a Wald z.
+    `FitLogisticOptions::max_iterations` and `tolerance` are `None` (mzLib's) unless you set
+    them. A separated feature is reported, with `None` statistics, never dropped.
+    `LogisticModelFit::rows` gives `LogisticRow`s; `LOGISTIC_STATUSES`. Wire verb
+    `stats fit-logistic`.
+  - **`stats::fit_mixed` / `fit_mixed_with`**: one linear mixed model per feature with a random
+    intercept per group of samples, as `nlme::lme`, tested on nlme's containment df.
+    `FitMixedOptions::estimator` is `None` (mzLib's REML) unless you set it; `MIXED_ESTIMATORS`,
+    `MIXED_STATUSES`. `MixedModelFit::rows` gives `MixedRow`s. Wire verb `stats fit-mixed`.
+  - **`stats::entrapment_fdp` / `entrapment_fdp_with`**: a search's false discovery proportion
+    from its entrapment hits, as the lower bound, the combined upper bound and the paired upper
+    bound of Wen et al. 2025, at each q-value threshold. `ratio` is required (mzLib has no
+    default); `EntrapmentFdpOptions::thresholds` is `None` for mzLib's default sweep.
+    `EntrapmentFdpEstimates::rows` and `at(threshold)` give `FdpRow`s. Wire verb
+    `stats entrapment-fdp`.
+- **`stats::fit_with` tests contrasts, with confidence intervals, and takes mzLib's prior
+  estimator** (mzLib #1452, #1368). `FitOptions::contrasts` names a contrasts file — the one
+  `diff::design_with` writes beside the design, or your own — and each contrast is moderated with
+  the same prior as the coefficients, has its own Benjamini-Hochberg family, and carries
+  `confidence_low` and `confidence_high`: limma's `contrasts.fit`, `eBayes` and
+  `topTable(confint = ...)`. The answers are a second table, `ModeratedFit::contrasts` (a
+  `ModeratedContrasts`, with `rows()` giving `ContrastRow`s and `weights` per contrast), so the
+  coefficient table is unchanged; `coefficients` may now be empty when contrasts are given, and
+  `ModeratedFit::contrasts_file` echoes the file. `FitOptions::confidence` sets the level, as a
+  fraction; `None` is mzLib's 0.95. `FitOptions::estimator` takes `"moments_legacy"` or
+  `"marginal_likelihood"` (`PRIOR_ESTIMATORS`); `None` is mzLib's default, and the new
+  `VariancePrior::estimator` reports which was used. On the MALAT1 dilution series the
+  marginal-likelihood prior lowers the prior df from 19.6 to 11.0 and drops the false FLuc call
+  at half load. A bridge before pyMzLib 0.6.0 lists `stats fit` but ignores the three options;
+  `fit_with` then returns `MzLibError::Usage` naming the 0.6.0 bridge instead of a fit that
+  ignored them.
+- **A new module, `diff`: the design and the observations, set up by mzLib** (mzLib #1450,
+  #1455), with a guide that runs:
+  - **`diff::design_with`**: a sample sheet and a model (`FactorSpec`, `CovariateSpec` with its
+    unit, interactions, strata, batch, in `DesignOptions`) into mzLib's design per stratum — the
+    matrix, equal to R's `model.matrix`, its rank and aliased terms, and the default contrasts
+    with their estimability (`ESTIMABILITIES`), as `Design`, `DesignStratum` and
+    `Design::contrasts()` (`DefaultContrast`). `DesignOptions::out` writes `design_<i>.tsv` and
+    `contrasts_<i>.tsv`, which `stats::fit_with` reads as they are. Wire verb `diff design`.
+  - **`diff::observations` / `observations_with`**: every peptide in every biological sample of a
+    FlashLFQ or MetaMorpheus peptide table, as a log2 intensity or `None` with the reason
+    (`OBSERVATION_STATES`), fractions summed and technical replicates averaged by mzLib's rules
+    from the `ObservationRun`s you give, with the shared-peptide normalization shifts
+    (`NormalizationResult`). `QuantBasis` decides whether match-between-runs values enter; there
+    is no default. `ObservationsOptions::responses_out` writes the peptide-by-sample table
+    `stats::fit_with` reads. Wire verb `diff observations`.
+- **A new module, `ptmqtl`: PTM site occupancy and PTM-QTL statistics, computed by mzLib's
+  `Quantification.PtmQtl`** (mzLib #1369, #1430, #1446), with a guide that runs on mzLib's own
+  hand-computed cases:
+  - **`ptmqtl::occupancy` / `occupancy_with`**: every site's intensity occupancy in every run (or
+    sample, with `OccupancyOptions::samples`), each cell with its censoring state
+    (`OCCUPANCY_STATES`): a floor or an undetected cell has no fraction, never 0.
+    `OccupancyOptions::out` writes the table `trait_effects` reads. `SiteOccupancy::rows` gives
+    `OccupancyRow`s. Wire verb `ptmqtl occupancy`.
+  - **`ptmqtl::pairs` / `pairs_with`**: PTM-PTM pairs, physical (both on one peptidoform) or
+    co-varying (Spearman across runs, with a Benjamini-Hochberg `q` per family), chosen with
+    `PairType` (no default). `PairsOptions::remove_run_level` correlates given each run's level,
+    for a batch shift. Every co-varying threshold is `None` (mzLib's) unless you set it, and the
+    result reports the value used. `PtmPairs::rows` gives `PtmPair`s. Wire verb `ptmqtl pairs`.
+  - **`ptmqtl::trait_effects` / `trait_effects_with`**: per site, the effect of a per-run trait on
+    logit occupancy, from a mixed model with a random intercept per biological replicate.
+    `TraitEffectsOptions`' thresholds are `None` (mzLib's) unless you set them.
+    `TraitEffects::rows` gives `TraitEffect`s; `TRAIT_STATUSES`. Wire verb
+    `ptmqtl trait-effects`.
+- **The replay bridge learns pyMzLib 0.6.0's matching rules for these verbs**: `NESTED_ECHOES`
+  (`stats fit`'s estimator and confidence level), `OPTIONAL_FILES` (`--contrasts`, `--given`,
+  `--samples`, `--protein-groups`, `--run-level-groups`), `OPTIONAL_OUTPUTS`
+  (`--responses-out`), `GIVEN_ECHOES` (`--thresholds`), a numeric echo matching a call by value
+  (`--ratio 1.0` fits a recorded `1`), the new `RECORDED_WITH` entries (flags included), and the
+  stdin echoes of `stats fit`, `fit-logistic`, `fit-mixed`, `combine-p`, `diff design` and
+  `diff observations`. The pyMzLib 0.6.0 recordings and inputs these examples replay are
+  vendored byte for byte under `tests/fixtures/` (`stats/`, `diff/`, `ptmqtl/`).
+- **The bridge pin is pyMzLib v0.6.0** (still mzLib 1.0.595, `d10017ce`; bridge-watch's repin).
+  Its bridge dispatches 53 verbs. **Specs re-vendored in full at bridge `60b1d25`**: every spec
+  but `modifications resolve`, which has no verb (`not_vendored` in `docs/specs/SOURCE`). With
+  the stats and data ports, this crate builds every one of them, so the front page lists no verb
+  as `(not yet)`. Every spec's
+  recorded examples are vendored byte for byte from pyMzLib 0.6.0, because the replay bridge
+  reads each spec's examples, and so are the three recordings that changed since 0.5.0
+  (`bridge_version.json`, `stats_fit_malat.json`, `stats_fit_limma.json`: `stats fit`'s first
+  caveat now names its estimator). The replay bridge carries pyMzLib's whole `RECORDED_WITH`
+  table, flags included.
+- **`pride::file_checksums`, `pride::file_checksums_with`: the MD5 and exact size PRIDE recorded for
+  each file deposited in a project** (`pride checksums`, mzLib #1427; spec `pride.checksums.yaml`).
+  It is what a download is checked against, and `download` and `download_files` check neither
+  yet. A `BTreeMap<String, PrideFileChecksum>` keyed by file name, in the wire's file-name order,
+  as pyMzLib's dict is; each row is read strictly, so a row missing its MD5 or size is
+  `MzLibError::Protocol`, not a blank that blames the download later. An unknown or unpublished
+  accession is `MzLibError::ProjectNotFound`; an existing project with no checksums is an empty
+  map; a list mzLib cannot read stays `MzLibError::Bridge` (`MzLibException`). No time limit of
+  the crate's own, as for every PRIDE call. The `pride` guide gains *Checking a download against
+  PRIDE's checksums*: the check itself (size, then MD5, with the `md-5` crate, now a
+  dev-dependency), what the list covers (not `generated/`, files the manifest omits, non-deposits)
+  and its two traps. The tests' `spec_docs` lint reads a map return as a list of its values.
+- **`sdrf::isobaric_design_with`: the isobaric (TMT, TMTpro, iTRAQ, DiLeu) design an SDRF
+  describes, or every reason it cannot** (`sdrf isobaric-design`, mzLib #1380; spec
+  `sdrf.isobaric-design.yaml`). `SdrfIsobaricDesign` holds one row per file and annotated channel,
+  `channels()` gives them as `DesignedChannel`, and **every number is 1-based**, as the SDRF and
+  `TmtDesign.txt` write them, where `design_with`'s are 0-based: the split is mzLib's, and neither
+  is converted. Nothing is guessed: `IsobaricDesignOptions::kit` and exactly one of `plex_column`,
+  `plex_file_name_pattern` and `single_plex` must be given, and a missing one is mzLib's refusal,
+  a result, not an error. `out` names a folder, where mzLib writes MetaMorpheus's `TmtDesign.txt`.
+- **`sdrf::restrict_with`, `sdrf::restrict`: an SDRF cut to the files one search read** (`sdrf
+  restrict`, mzLib #1451; spec `sdrf.restrict.yaml`). mzLib joins `X-calib.mzML` to the row naming
+  `X.raw` by stem; a `SearchedFile::acquired_from` overrides the rule for one file.
+  `RestrictedSdrf` is the restricted `SdrfDocument` with `comment[searched data file]`
+  (`SEARCHED_DATA_FILE_COLUMN`) after `comment[data file]`, and mzLib's four reports:
+  `searched_without_row`, `dropped_data_files`, `ambiguous`, `shared_stem`. Restrict first, then
+  read a design: both design readers key on the searched name. The `sdrf` guide gains *Read an
+  isobaric (TMT) design* and *Restrict an SDRF to one search's files*, every example replayed from
+  pyMzLib's recordings over mzLib's own PXD008841 and PXD061609 subsets (copied byte for byte), and
+  the SDRF-B5 trap: mzLib's design readers split a path on the running platform's separator only,
+  so the live tests build native paths. The replay bridge holds a `sdrf restrict` call to the
+  recording made from the same searched files, as pyMzLib's does.
+- **`proteins::align_with`, `proteins::align`: mzLib's global affine-gap aligner, and every
+  residue's counterpart** (`proteins align`, mzLib #1428; spec `proteins.align.yaml`). BLOSUM62,
+  Gotoh's Needleman-Wunsch; `Alignments` holds the pairs table and the residue map, and
+  `alignments()` gives one `Alignment` per pair with `map_source_to_target` and
+  `map_target_to_source` (1-based; `None` for a residue facing a gap, never a neighbour).
+  `AlignOptions`' `gap_open`, `gap_extend`, `end_gaps` (`EndGaps`) and `max_cells` are `None` by
+  default and sent only when set, so mzLib's defaults (11, 1, free, 200,000,000 cells) apply and
+  the result echoes them; `residue_map: false` sends `--no-residue-map`.
+- **`proteins::parse_accessions`: accessions read back into entry, isoform or version, and
+  applied variants, with mzLib's grammars** (`proteins parse-accession`, mzLib #1382; spec
+  `proteins.parse-accession.yaml`). Each accession is sent exactly as given, never trimmed; what
+  fits neither UniProt's nor RefSeq's protein grammar is `unrecognized`, never repaired.
+  `ParsedAccessions::entry_of` groups isoforms and variants under their entry; `NAMESPACES` is
+  `resolve_genes_with`'s vocabulary.
+- **`proteins::build_orthology_with`: an Ensembl Compara orthology snapshot, and optionally its
+  Parquet** (`genes orthology`, mzLib #1381; spec `genes.orthology.yaml`). `OrthologyOptions`
+  takes the species' GTFs (or compact gene sets), **every** species' homology dump, the gene
+  trees, and `pair_status` for every gene's status in one other species (`PairStatus`,
+  `ORTHOLOGY_STATUSES`). `OrthologySnapshot` says what went in (`GeneSet`, `GeneTrees`,
+  `HomologyDump`), what each pair holds (`SpeciesPair`), what was written (`WrittenSnapshot`,
+  `SnapshotFile`) and the `snapshot_id`. mzLib's three-species test world is vendored byte for
+  byte under `tests/fixtures/orthology/`, marked `-text` so its sha256s, and the snapshot id the
+  live test holds, survive a Windows checkout. The `proteins` guide gains *Map a residue from one
+  sequence onto another*, *Read an accession into entry, isoform and variants* and *Orthologs
+  across species*, each replayed from pyMzLib's recordings; the DuckDB queries over the Parquet
+  are shown as SQL, since this crate carries no Parquet reader. The replay bridge holds each of
+  the three to the stdin it was recorded from, `proteins read` to its `--sequences` choice, and
+  `genes orthology` to its `--pair-status` direction and `--restrict-gene-trees` choice, as
+  pyMzLib's does; it reads one level into an echoed object (`pair_status.from_species`).
+- **A new module, `library`: mzLib's binary spectral libraries** (`library read`; spec
+  `library.read.yaml`). `library::read`, `library::read_with` and `library::read_many` read a
+  `.msl` with mzLib's `MslLibrary` into one row per precursor, in stored order (`precursor_index`,
+  not m/z), or with `LibraryReadOptions::fragments` one row per fragment ion; mzLib's "not
+  available" values (ion mobility 0.0, a NaN q-value, NCE 0, an empty protein) are `None`, and
+  `retention_time_unit` is per row, iRT or minutes. `index_only_threshold` is `None` by default and
+  sent only when set, so mzLib's own 1 GiB rule applies; `limit` and `offset` count precursors.
+  `LibraryRecords`, `LibraryBatch` and `LibraryFileReport` carry the counts, the load mode and the
+  format version; a skipped library's unknown facts are `None`, never 0. The module guide covers
+  every column, the iRT trap, targets and entrapment, fragment ions, index-only loading and batches,
+  every example replayed from pyMzLib's recordings of the two libraries vendored under
+  `tests/fixtures/library/` (marked binary in `.gitattributes`). `tests/live_library.rs` holds the
+  recordings to the live bridge.
 - **The bridge pin is pyMzLib v0.5.0** (mzLib 1.0.595, tag commit `d10017ce`, which carries 1.0.594
   as well; mzLibRust #33). What it changes for a caller is under *Changed* below, and
   `docs/upgrading.md` lists every answer that differs from the same call.
@@ -194,6 +363,11 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Changed
 
+- **`sdrf::pool_with(.., PoolOptions { out, .. })` reports the file mzLib wrote** (the pyMzLib
+  0.6.0 bridge). mzLib adds `.sdrf.tsv` to a name that does not already end in it, so an `out` of
+  `x.tsv` writes `x.tsv.sdrf.tsv`; `WrittenSdrf::path` said `x.tsv`, a file that does not exist,
+  and now says `x.tsv.sdrf.tsv`. The file written is the same. `PoolOptions::out` and
+  `WrittenSdrf::path` say so, and `docs/upgrading.md` has the entry.
 - **PRIDE's metadata calls add no timeout of their own** (pyMzLib #87). `pride::list_files` and
   `pride::search` defaulted, through `ListOptions::default()` and `SearchOptions::default()`, to a
   300 s timeout, and `pride::list_ftp_files` passed one, which turned a PRIDE outage that hangs into
@@ -305,8 +479,19 @@ A wire verb's first appearance here is the version its spec in the bridge record
   `ProjectNotFound`.
 - **`VariancePrior::scale` says what it means below 3 features.** mzLib fits no prior there
   (#1398), so `VariancePrior::df` is 0 and each feature keeps its own variance, in
-  `FitRow::prior_variance`. The pinned pyMzLib 0.5.0 bridge still reports the first feature's own
-  variance as `scale`; bridges from pyMzLib 0.5.1 report `None`, as the spec now says.
+  `FitRow::prior_variance`. The pyMzLib 0.5.0 bridge still reported the first feature's own
+  variance as `scale`; the pinned pyMzLib 0.6.0 bridge reports `None`, as the spec says, and
+  `a_fit_of_fewer_than_three_features_fits_no_prior` holds it live.
+- **The stats guide teaches contrasts, the marginal-likelihood prior, p-value combination,
+  correlation, logistic and mixed models and entrapment**, each section with an executed example
+  ported from pyMzLib's guide. Its "what it is not" no longer says contrasts are not implemented.
+- **`stats::fit_with`'s recordings are re-vendored from pyMzLib 0.6.0**
+  (`stats_fit_malat.json`, `stats_fit_limma.json`): the 0.6.0 bridge's first caveat names the
+  estimator (`moments_legacy: ...`), its `residual_df_differ` caveat points to
+  `marginal_likelihood`, and its `bh_adjusted` caveat says "per coefficient and per contrast", so
+  `the_fit_recordings_are_what_the_bridge_returns_today` failed against the repinned bridge until
+  they were. Every number is unchanged. `bridge_version.json` is re-vendored too (the 0.6.0
+  bridge's verb list), and `bridge_version`'s example names its mzLib commit, `d10017ce`.
 
 ### Tested
 

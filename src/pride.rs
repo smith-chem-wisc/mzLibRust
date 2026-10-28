@@ -8,6 +8,7 @@
 //! | Size a project before downloading it | [`total_size_bytes`], [`approximate_total_size_bytes`] | `TotalApproximateSizeBytes` |
 //! | Download the files you picked | [`download_files`] | `PrideArchiveClient.DownloadFilesAsync` |
 //! | Download by category or extension | [`download`] | `WhereCategory`, `WhereExtension` |
+//! | Check a download against the MD5 and exact size PRIDE recorded | [`file_checksums`] | `PrideArchiveClient.GetFileChecksumsAsync` |
 //!
 //! Every example in this guide runs in CI against answers recorded from the live PRIDE Archive,
 //! replayed by a stand-in bridge; the one that downloads says so.
@@ -93,8 +94,218 @@
 //! **Check large files yourself.** mzLib can check a download against PRIDE's checksums, and it
 //! also catches an EBI error page served at the right size (mzLib#1427, #1449). That check is not
 //! yet on the path [`download`] and [`download_files`] use, so a file can be reported as
-//! downloaded when its bytes are wrong. For files that matter, compare their sizes with
-//! [`list_files`] and their checksums with PRIDE's before you search them.
+//! downloaded when its bytes are wrong. For files that matter, check each one against
+//! [`file_checksums`] before you search it, as the next section shows. With
+//! [`DownloadOptions::overwrite`] set to `false`, a file already present is skipped and not
+//! checked either, so a damaged copy stays damaged.
+//!
+//! ## Checking a download against PRIDE's checksums
+//!
+//! **Is the file on your disk the file PRIDE holds?** [`download`] cannot tell you yet. PRIDE
+//! records an MD5 and the exact size of every file a submitter deposits, and [`file_checksums`]
+//! returns that record, keyed by file name:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let checksums = mzlib::pride::file_checksums("PXD000001")?;
+//! assert_eq!(checksums.len(), 12);
+//! let raw = &checksums["TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01.raw"];
+//! assert_eq!(raw.md5, "c567cecbb9866796e690a4958746f7b6");
+//! assert_eq!(raw.size_bytes, 220_475_548);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Look a file up by the name it was downloaded under. Each value is a [`PrideFileChecksum`]:
+//!
+//! - `md5` is 32 hexadecimal characters, as PRIDE wrote them. Compare it without regard to case.
+//! - `size_bytes` is the exact length a download of the file comes to. Neither other listing gives
+//!   you that: [`list_ftp_files`] rounds its sizes, and [`list_files`] can be wrong. Because each
+//!   size is exact, so is their sum: what the deposited files weigh, which the other two listings
+//!   can only estimate. It leaves out the `generated/` files, which have no row (below).
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let files = mzlib::pride::list_files("PXD000001")?;
+//! let checksums = mzlib::pride::file_checksums("PXD000001")?;
+//! let rest = files
+//!     .iter()
+//!     .find(|f| f.file_name == "PRIDE_Exp_Complete_Ac_22134.xml.gz")
+//!     .unwrap();
+//! // The download is 10,668,000 bytes: the checksum list's number, not the manifest's.
+//! assert_eq!(rest.file_size_bytes, 10_677_205);
+//! assert_eq!(checksums[&rest.file_name].size_bytes, 10_668_000);
+//!
+//! let deposited: u64 = checksums.values().map(|c| c.size_bytes).sum();
+//! assert_eq!(format!("{:.2} GB", deposited as f64 / 1e9), "1.43 GB");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! ### The check
+//!
+//! A file is PRIDE's when its length and its MD5 both match. The length costs nothing to check.
+//! The MD5 reads the whole file, which takes a few seconds per gigabyte. Check both, because the
+//! length alone does not prove the bytes: on 7 and 8 October 2026, EBI served about 23 of about 70
+//! large transfers at the right size with its own error text written over part of them
+//! (mzLib#1449). This crate has no digest of its own; the example uses the
+//! [`md-5`](https://crates.io/crates/md-5) crate. Here it is on two damaged copies of the project's
+//! 1,645-byte `README.txt`. The first was cut short. The second is the right size with EBI's error
+//! text inside, and only the MD5 catches it:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use std::path::Path;
+//!
+//! use md5::{Digest, Md5};
+//! use mzlib::pride::PrideFileChecksum;
+//!
+//! /// None when the file is the one PRIDE recorded, otherwise what is wrong with it.
+//! fn check(path: &Path, expected: &PrideFileChecksum) -> std::io::Result<Option<String>> {
+//!     let size = std::fs::metadata(path)?.len();
+//!     if size != expected.size_bytes {
+//!         return Ok(Some(format!("{size} bytes where PRIDE records {}", expected.size_bytes)));
+//!     }
+//!     let mut md5 = Md5::new();
+//!     std::io::copy(&mut std::fs::File::open(path)?, &mut md5)?;
+//!     let actual = format!("{:x}", md5.finalize());
+//!     if !actual.eq_ignore_ascii_case(&expected.md5) {
+//!         return Ok(Some(format!("MD5 {actual} where PRIDE records {}", expected.md5)));
+//!     }
+//!     Ok(None)
+//! }
+//!
+//! let checksums = mzlib::pride::file_checksums("PXD000001")?;
+//! let readme = &checksums["README.txt"];
+//! let damaged = Path::new("README.txt");
+//!
+//! std::fs::write(damaged, [b'x'; 1000])?;
+//! assert_eq!(
+//!     check(damaged, readme)?.as_deref(),
+//!     Some("1000 bytes where PRIDE records 1645")
+//! );
+//!
+//! let mut error_page = b"<Error><Code>ConnectionClosedException</Code></Error>".to_vec();
+//! error_page.resize(1645, b'.');
+//! std::fs::write(damaged, error_page)?;
+//! assert_eq!(
+//!     check(damaged, readme)?.as_deref(),
+//!     Some(
+//!         "MD5 6a8f1a7d39089d34bf9bc9b19e553dd4 where PRIDE records \
+//!          492753137013825025e6729c8798664f"
+//!     )
+//! );
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! After a real download, check every file it wrote.
+//!
+//! Not run: it downloads from PRIDE.
+//!
+//! ```no_run
+//! # use std::path::Path;
+//! # fn check(_: &Path, _: &mzlib::pride::PrideFileChecksum) -> std::io::Result<Option<String>> {
+//! #     Ok(None)
+//! # }
+//! use mzlib::pride::{download, file_checksums, DownloadOptions};
+//!
+//! let options = DownloadOptions {
+//!     category: Some("RAW".to_owned()),
+//!     ..Default::default()
+//! };
+//! let paths = download("PXD000001", "downloads", &options)?;
+//! let checksums = file_checksums("PXD000001")?;
+//! for path in &paths {
+//!     let name = path.file_name().unwrap().to_string_lossy();
+//!     match checksums.get(name.as_ref()) {
+//!         None => println!("{name}: PRIDE has no checksum for it, so it cannot be checked"),
+//!         Some(expected) => {
+//!             if let Some(problem) = check(path, expected)? {
+//!                 println!("{name}: {problem}. Download it again.");
+//!             }
+//!         }
+//!     }
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! To download a damaged file again, pass it to [`download_files`], or call [`download`] with
+//! [`DownloadOptions::overwrite`] left at its default. `Some(false)` would skip it, because it is
+//! already there.
+//!
+//! ### What the list covers
+//!
+//! It covers the files the submitter deposited at the project's root. It is a third list, not a
+//! view of either of the others, and three things follow from that.
+//!
+//! **PRIDE's own `generated/` files have no row.** A file without a row cannot be checked; that
+//! does not make it invalid. In PXD000001 those are the two files under `generated/`, and
+//! [`list_files`] names the same two without their folder:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let checksums = mzlib::pride::file_checksums("PXD000001")?;
+//! let tree = mzlib::pride::list_ftp_files("PXD000001")?;
+//! let unchecked: Vec<&str> = tree
+//!     .iter()
+//!     .map(|f| f.relative_path.as_str())
+//!     .filter(|path| !checksums.contains_key(*path))
+//!     .collect();
+//! assert_eq!(
+//!     unchecked,
+//!     [
+//!         "generated/PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz",
+//!         "generated/PRIDE_Exp_Complete_Ac_22134.pride.mztab.gz",
+//!     ]
+//! );
+//!
+//! let manifest = mzlib::pride::list_files("PXD000001")?;
+//! let unlisted: Vec<&str> = manifest
+//!     .iter()
+//!     .map(|f| f.file_name.as_str())
+//!     .filter(|name| !checksums.contains_key(*name))
+//!     .collect();
+//! assert_eq!(
+//!     unlisted,
+//!     [
+//!         "PRIDE_Exp_Complete_Ac_22134.pride.mztab.gz",
+//!         "PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz",
+//!     ]
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **It names files the REST manifest omits,** such as the 450 MB mzML that only the FTP listing
+//! showed above:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let checksums = mzlib::pride::file_checksums("PXD000001")?;
+//! assert!(checksums
+//!     .contains_key("TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01-20141210.mzML"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **It can name files that are not deposits at all.** PXD015239's list includes a 2.3 GB NFS
+//! temp file, `.nfs80360b91005fae5300002478`. Look up the files you have by name; do not read the
+//! list as the project's contents.
+//!
+//! ### Two traps
+//!
+//! **[`PrideFile::checksum`] is not this MD5.** Where PRIDE fills it in, it is a 40-character
+//! SHA-1, a different digest of the same bytes. For every PXD000001 file it is empty:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let files = mzlib::pride::list_files("PXD000001")?;
+//! assert!(files.iter().all(|f| f.checksum.is_empty()));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **An empty map is an answer.** It means the project exists but PRIDE holds no checksums for
+//! it, so nothing can be checked. An accession PRIDE does not know is
+//! [`MzLibError::ProjectNotFound`], and so is a project not yet published: PRIDE holds no
+//! checksums before publication. A list mzLib cannot read (a new header, a malformed row, a name
+//! listed twice) is [`MzLibError::Bridge`] with `error_type` `"MzLibException"`. It is not your
+//! bug, and mzLib does not retry it, so report it.
 //!
 //! ## Retries and timeouts
 //!
@@ -107,7 +318,7 @@
 //! already limited to 100 seconds, so an outage that hangs is reported as
 //! [`MzLibError::ServiceUnavailable`] after about 8 minutes per request. Set a timeout
 //! ([`ListOptions::timeout`], [`SearchOptions::timeout`], [`DownloadOptions::timeout`], or the
-//! argument of [`list_ftp_files_with`]) to cut a call off sooner; it then fails with
+//! argument of [`list_ftp_files_with`] and [`file_checksums_with`]) to cut a call off sooner; it then fails with
 //! [`MzLibError::Timeout`], which is not `ServiceUnavailable`.
 //!
 //! By the time `ServiceUnavailable` reaches you, mzLib has already retried, so retrying again at
@@ -270,6 +481,37 @@ impl PrideFtpFile {
             .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
             .unwrap_or_default()
     }
+}
+
+/// The MD5 and exact size PRIDE recorded for one file deposited in a project.
+///
+/// [`file_checksums`] returns these, keyed by file name. They are what a downloaded file is
+/// checked against: it is the file PRIDE holds when its length is [`Self::size_bytes`] and its
+/// MD5 is [`Self::md5`]. The [module guide](crate::pride#checking-a-download-against-prides-checksums)
+/// shows the check.
+///
+/// Read strictly, unlike the other PRIDE rows: a row missing its MD5 or its size fails the call
+/// with [`MzLibError::Protocol`]. Defaulting it to `""` or `0` would turn every later check of
+/// that file into a mismatch that blames the download.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrideFileChecksum {
+    /// The bare file name, spelled as [`PrideFile::file_name`] spells it. Never a path.
+    /// Case-sensitive: `README.txt` and `readme.txt` would be two files.
+    pub file_name: String,
+    /// The file's MD5 as 32 hexadecimal characters, as PRIDE wrote it. Lower case in every list
+    /// seen, but not rewritten, so compare it without regard to case, as mzLib's own checks do.
+    /// Not [`PrideFile::checksum`], which is a different digest.
+    pub md5: String,
+    /// The file's exact size in bytes: the length a download of it comes to. Compare a
+    /// downloaded file's length with this, not with [`PrideFile::file_size_bytes`], which can
+    /// differ. For PXD000001's `PRIDE_Exp_Complete_Ac_22134.xml.gz` that one is 10,677,205 bytes
+    /// and this one is 10,668,000, the length the download has.
+    pub size_bytes: u64,
+    /// The accession the list was fetched for.
+    ///
+    /// Not on the wire: stamped on by [`file_checksums`], as [`PrideFile::project_accession`] is.
+    #[serde(skip)]
+    pub project_accession: String,
 }
 
 /// How a manifest is fetched. By default the page size is mzLib's, and so is the time limit.
@@ -661,6 +903,31 @@ fn parse_ftp_files(data: &serde_json::Value) -> Result<Vec<PrideFtpFile>> {
     })
 }
 
+/// Turn the `pride checksums` payload into rows keyed by file name, stamping the accession.
+fn parse_checksums(
+    data: &serde_json::Value,
+    accession: &str,
+) -> Result<BTreeMap<String, PrideFileChecksum>> {
+    let raw = data
+        .get("files")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let rows: Vec<PrideFileChecksum> = if raw.is_null() {
+        Vec::new()
+    } else {
+        serde_json::from_value(raw).map_err(|error| {
+            MzLibError::Protocol(format!("PRIDE checksum list could not be read: {error}"))
+        })?
+    };
+    Ok(rows
+        .into_iter()
+        .map(|mut row| {
+            row.project_accession = accession.to_owned();
+            (row.file_name.clone(), row)
+        })
+        .collect())
+}
+
 /// Read the written paths out of a `pride download` payload.
 fn parse_paths(data: &serde_json::Value) -> Vec<PathBuf> {
     data.get("paths")
@@ -868,6 +1135,152 @@ pub fn list_ftp_files_with(
         )));
     }
     Ok(files)
+}
+
+/// The first pyMzLib whose bridge has `pride checksums`: its spec's `since.pymzlib`.
+const CHECKSUMS_SINCE: &str = "0.6.0";
+
+/// mzLib's wording for an unknown accession (`PrideArchiveClient.GetProjectAsync` at the pin).
+/// Every verb that resolves the project first throws it, as an `MzLibException`.
+const UNKNOWN_PROJECT_MARKER: &str = "has no project with accession";
+
+/// The MD5 and exact size PRIDE recorded for each file deposited in a project, keyed by file name.
+///
+/// This is what a download is checked against: a file is the one PRIDE holds when its length is
+/// [`PrideFileChecksum::size_bytes`] and its MD5 is [`PrideFileChecksum::md5`]. [`download`] and
+/// [`download_files`] check neither yet, so for files that matter, check them yourself; the
+/// [module guide](crate::pride#checking-a-download-against-prides-checksums) shows how.
+///
+/// **This is a third list, not a view of either of the others.** It covers the files the
+/// submitter deposited at the project's root:
+///
+/// - PRIDE's own `generated/` files have no row. A file without a row cannot be checked; that
+///   does not make it invalid.
+/// - It names files [`list_files`] omits: 5 of PXD000001's 12 rows on 2026-10-21.
+/// - It can name files that are not deposits at all. PXD015239's lists an NFS temp file,
+///   `.nfs80360b91005fae5300002478`. Look up the files you have by name; do not read the list as
+///   the project's contents.
+///
+/// [`PrideFile::checksum`] is not this MD5. Where PRIDE fills it in, it is a 40-character SHA-1,
+/// and for every PXD000001 file it is empty.
+///
+/// The map is in file-name order, so iterating it is deterministic. **It is empty when the
+/// project exists but PRIDE holds no checksums for it**: that is an answer, not an error, though
+/// nothing can then be checked.
+///
+/// It adds no time limit of this crate's own, because mzLib already bounds every request (see
+/// [`ListOptions::timeout`]); an empty list costs a second request, the project lookup.
+/// [`file_checksums_with`] takes a limit.
+///
+/// ```
+/// # mzlib_replay::activate();
+/// let checksums = mzlib::pride::file_checksums("PXD000001")?;
+/// assert_eq!(checksums.len(), 12);
+/// let readme = &checksums["README.txt"];
+/// assert_eq!(readme.md5, "492753137013825025e6729c8798664f");
+/// assert_eq!(readme.size_bytes, 1645);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`MzLibError::Usage`] if the accession is blank or malformed, or the bridge is older than
+/// pyMzLib 0.6.0's; [`MzLibError::ProjectNotFound`] if PRIDE has no public project with that
+/// accession (a project not yet published is reported the same way, since PRIDE holds no
+/// checksums before publication); [`MzLibError::ServiceUnavailable`] if PRIDE was down,
+/// rate-limiting or timed out, after mzLib's retries; [`MzLibError::Bridge`] with `error_type`
+/// `"MzLibException"` if PRIDE sent a list mzLib cannot read (a new header, a malformed row, a
+/// name listed twice), or another HTTP error.
+pub fn file_checksums(accession: &str) -> Result<BTreeMap<String, PrideFileChecksum>> {
+    file_checksums_with(accession, None)
+}
+
+/// The MD5 and exact size PRIDE recorded for each file of a project, with the timeout stated
+/// explicitly.
+///
+/// See [`file_checksums`] for what the list covers and what it does not. The accession is trimmed
+/// and upper-cased first, because PRIDE's checksum route is case-sensitive (`pxd000001` is an
+/// unknown accession there). `timeout` is the time to allow for the whole call. `None` adds no
+/// limit of this crate's own, because mzLib already bounds every request: it retries a transient
+/// failure three times, after 5, 20 and 60 s, and each attempt can take up to 100 s (mzLib#1412).
+/// An outage that hangs is therefore reported as [`MzLibError::ServiceUnavailable`] after about 8
+/// minutes per request, and an empty list costs a second request, the project lookup. A value cuts
+/// the whole call off after that long with [`MzLibError::Timeout`].
+#[doc = include_str!("../docs/reference/pride.checksums.md")]
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::ProjectNotFound`] for the one `MzLibException` that means PRIDE has no public
+/// project with that accession. Any other `MzLibException` (a list mzLib cannot read) stays
+/// [`MzLibError::Bridge`]: reporting it as a typo would hide a broken contract.
+///
+/// [`MzLibError::Usage`] before anything is spawned for a malformed accession, and when the bridge
+/// in use is older than pyMzLib 0.6.0's, which has no `pride checksums`.
+///
+/// # Examples
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use std::time::Duration;
+///
+/// // Give up after ten minutes, with MzLibError::Timeout, rather than wait out every retry.
+/// let checksums =
+///     mzlib::pride::file_checksums_with("PXD000001", Some(Duration::from_secs(600)))?;
+/// let raw = &checksums["TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01.raw"];
+/// assert_eq!(raw.md5, "c567cecbb9866796e690a4958746f7b6");
+/// assert_eq!(raw.size_bytes, 220_475_548);
+/// assert_eq!(raw.project_accession, "PXD000001");
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+#[doc = include_str!("../docs/reference/pride.checksums.see-also.md")]
+pub fn file_checksums_with(
+    accession: &str,
+    timeout: Option<Duration>,
+) -> Result<BTreeMap<String, PrideFileChecksum>> {
+    let canonical = normalise_accession(accession)?;
+    bridge::require_verb("pride checksums", CHECKSUMS_SINCE)?;
+    fetch_checksums(&canonical, timeout)
+}
+
+/// [`file_checksums_with`] after the accession and the bridge have been checked: the call itself.
+fn fetch_checksums(
+    canonical: &str,
+    timeout: Option<Duration>,
+) -> Result<BTreeMap<String, PrideFileChecksum>> {
+    let data = bridge::invoke(&checksums_args(canonical), None, timeout)
+        .map_err(|error| checksums_error(error, canonical))?;
+    parse_checksums(&data, canonical)
+}
+
+/// The `pride checksums` call for a canonical accession: nothing but the accession is sent.
+fn checksums_args(canonical: &str) -> Vec<String> {
+    vec![
+        "pride".to_owned(),
+        "checksums".to_owned(),
+        "--accession".to_owned(),
+        canonical.to_owned(),
+    ]
+}
+
+/// The error [`file_checksums_with`] reports for one the bridge returned.
+///
+/// PRIDE answers an unknown accession with an empty list, so mzLib asks for the project and throws
+/// `MzLibException` when there is none. Only that wording is re-mapped: a list mzLib cannot read is
+/// an `MzLibException` too, and reporting it as a typo would hide a broken contract.
+/// `ServiceUnavailable` has its own variant and passes through unchanged.
+fn checksums_error(error: MzLibError, canonical: &str) -> MzLibError {
+    match error {
+        MzLibError::Bridge {
+            error_type,
+            message,
+        } if error_type == "MzLibException" && message.contains(UNKNOWN_PROJECT_MARKER) => {
+            MzLibError::ProjectNotFound(format!(
+                "PRIDE has no public project '{canonical}'. Check for a typo; a project not yet \
+                 published looks the same, and PRIDE holds no checksums before publication."
+            ))
+        }
+        other => other,
+    }
 }
 
 /// Download a project's files, optionally filtered, and return where they landed.
@@ -1561,6 +1974,178 @@ mod tests {
                 [OWN_LIMIT],
                 "{name} should pass the caller's timeout on"
             );
+        }
+    }
+
+    // ---------------------------------------------------------- checksums (mzLib #1427)
+
+    /// PRIDE's checksum list for PXD000001, recorded live through the bridge, shared with pyMzLib.
+    const CHECKSUMS_FIXTURE: &str =
+        include_str!("../tests/fixtures/pride_PXD000001_checksums.json");
+
+    fn recorded_checksums() -> BTreeMap<String, PrideFileChecksum> {
+        let data: serde_json::Value =
+            serde_json::from_str(CHECKSUMS_FIXTURE).expect("checksums fixture should be JSON");
+        parse_checksums(&data, "PXD000001").expect("checksums fixture should parse")
+    }
+
+    #[test]
+    fn file_checksums_keys_every_row_by_its_file_name() {
+        let data: serde_json::Value = serde_json::from_str(CHECKSUMS_FIXTURE).unwrap();
+        let checksums = recorded_checksums();
+        assert_eq!(checksums.len(), 12);
+        assert_eq!(data["file_count"], 12);
+        assert!(checksums.iter().all(|(name, row)| *name == row.file_name));
+        // The wire's order (sorted by name, ordinal) is the map's order, so iterating is
+        // deterministic and matches what pyMzLib's dict keeps.
+        let wire: Vec<&str> = data["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["file_name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            checksums.keys().map(String::as_str).collect::<Vec<_>>(),
+            wire
+        );
+    }
+
+    #[test]
+    fn file_checksum_fields_are_typed_and_carry_the_project() {
+        let checksums = recorded_checksums();
+        let raw = &checksums["TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01.raw"];
+        assert_eq!(raw.md5, "c567cecbb9866796e690a4958746f7b6");
+        assert_eq!(raw.size_bytes, 220_475_548);
+        assert_eq!(raw.project_accession, "PXD000001");
+    }
+
+    #[test]
+    fn the_generated_files_have_no_checksum_row() {
+        // The list covers deposits only: the FTP tree's generated/ files have no row (mzLib #1427).
+        let checksums = recorded_checksums();
+        let unchecked: Vec<String> = recorded_ftp()
+            .into_iter()
+            .map(|f| f.relative_path)
+            .filter(|path| !checksums.contains_key(path))
+            .collect();
+        assert_eq!(
+            unchecked,
+            [
+                "generated/PRIDE_Exp_Complete_Ac_22134.pride.mgf.gz",
+                "generated/PRIDE_Exp_Complete_Ac_22134.pride.mztab.gz",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_checksum_size_is_the_download_length_not_the_manifests() {
+        // PRIDE's REST manifest over-reports this .xml.gz; the checksum list has the length a
+        // download comes to (an HTTP HEAD's Content-Length on 2026-10-21).
+        let name = "PRIDE_Exp_Complete_Ac_22134.xml.gz";
+        let rest = recorded_files()
+            .into_iter()
+            .find(|f| f.file_name == name)
+            .unwrap();
+        assert_eq!(
+            (rest.file_size_bytes, recorded_checksums()[name].size_bytes),
+            (10_677_205, 10_668_000)
+        );
+    }
+
+    #[test]
+    fn file_checksums_sends_the_verb_and_the_normalised_accession() {
+        // PRIDE's checksum route is case-sensitive: pxd000001 is an unknown accession there.
+        let canonical = normalise_accession("  pxd000001 ").unwrap();
+        assert_eq!(
+            checksums_args(&canonical),
+            ["pride", "checksums", "--accession", "PXD000001"],
+            "nothing but the accession is sent"
+        );
+    }
+
+    #[test]
+    fn an_existing_project_with_no_checksums_is_an_empty_map_not_an_error() {
+        // mzLib has already asked whether the project exists, so an empty list is an answer.
+        let empty = serde_json::json!({"accession": "PXD000001", "file_count": 0, "files": []});
+        assert!(parse_checksums(&empty, "PXD000001").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_row_without_its_md5_fails_rather_than_defaulting() {
+        // Defaulting it to "" would make every later check of that file blame the download.
+        let broken = serde_json::json!({
+            "accession": "PXD000001", "file_count": 1,
+            "files": [{"file_name": "run1.raw", "size_bytes": 10}],
+        });
+        let error = parse_checksums(&broken, "PXD000001").unwrap_err();
+        assert!(matches!(error, MzLibError::Protocol(_)), "{error:?}");
+    }
+
+    #[test]
+    fn file_checksums_unknown_project_is_project_not_found() {
+        let error = checksums_error(
+            MzLibError::Bridge {
+                error_type: "MzLibException".to_owned(),
+                message: "PRIDE Archive has no project with accession 'PXD999999999'.".to_owned(),
+            },
+            "PXD999999999",
+        );
+        assert!(
+            matches!(&error, MzLibError::ProjectNotFound(m) if m.contains("no public project 'PXD999999999'"))
+        );
+    }
+
+    #[test]
+    fn a_list_mzlib_cannot_read_is_not_reported_as_a_typo() {
+        // Also an MzLibException, but the project exists and its list is broken. "Check for a
+        // typo" would send the caller looking for the wrong mistake.
+        for message in [
+            "PRIDE Archive's checksum list for 'PXD000001' starts with 'File-Name,MD5', not the \
+             expected 'File-Name,File-MD5Checksum,File-Size'.",
+            "PRIDE Archive's checksum list for 'PXD000001' lists 'run1.raw' twice.",
+        ] {
+            let error = checksums_error(
+                MzLibError::Bridge {
+                    error_type: "MzLibException".to_owned(),
+                    message: message.to_owned(),
+                },
+                "PXD000001",
+            );
+            assert!(
+                matches!(&error, MzLibError::Bridge { error_type, .. } if error_type == "MzLibException"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_checksum_outage_stays_service_unavailable_and_adds_no_timeout() {
+        let mut outcome = None;
+        let seen =
+            bridge::intercept::timeouts(|| outcome = Some(fetch_checksums("PXD000001", None)));
+        assert_eq!(
+            seen,
+            [None],
+            "file_checksums should leave the time limit to mzLib"
+        );
+        assert!(matches!(
+            outcome,
+            Some(Err(MzLibError::ServiceUnavailable { .. }))
+        ));
+        let seen = bridge::intercept::timeouts(|| {
+            let _ = fetch_checksums("PXD000001", OWN_LIMIT);
+        });
+        assert_eq!(seen, [OWN_LIMIT], "a caller's own limit reaches the bridge");
+    }
+
+    #[test]
+    fn file_checksums_rejects_a_bad_accession_before_any_work() {
+        for accession in ["", "   ", "not-an-accession"] {
+            let seen = bridge::intercept::timeouts(|| {
+                let error = file_checksums(accession).unwrap_err();
+                assert!(matches!(error, MzLibError::Usage(_)), "{accession:?}");
+            });
+            assert!(seen.is_empty(), "{accession:?} reached the bridge");
         }
     }
 

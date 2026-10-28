@@ -52,13 +52,24 @@
 //! [`readers`] module.
 //! SDRF experimental-design files have their own module, [`sdrf`], because `read_records`
 //! cannot carry them without loss. Protein databases — what an accession is, which Ensembl gene
-//! it resolves to, and whether a peptide is unique — are the [`proteins`] module.
+//! it resolves to, and whether a peptide is unique — are the [`proteins`] module, which also
+//! carries a residue across isoforms and orthologs ([`proteins::align_with`]) and builds an
+//! Ensembl Compara orthology snapshot ([`proteins::build_orthology_with`]).
 //! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
-//! FlashLFQ, or every reason it cannot. The channels of the isobaric labelling kits mzLib can name
+//! FlashLFQ, or every reason it cannot; [`sdrf::isobaric_design_with`] does the same for a TMT
+//! design, and [`sdrf::restrict_with`] first cuts the SDRF to the files a search read.
+//! [`pride::file_checksums`] is what a PRIDE download is checked against. The channels of the
+//! isobaric labelling kits mzLib can name
 //! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
-//! Differential abundance without R — limma's moderated t, Benjamini-Hochberg and
-//! DerSimonian-Laird meta-analysis, each held by mzLib to the R reference — is the [`stats`]
-//! module.
+//! mzLib's binary spectral libraries (`.msl`), one row per precursor or per fragment ion, with
+//! mzLib's "not available" values as `None`, are the [`library`] module.
+//! Differential abundance without R — limma's moderated t with contrasts and confidence
+//! intervals, Benjamini-Hochberg and DerSimonian-Laird meta-analysis, p-value combination,
+//! Spearman correlation, logistic and mixed models per feature, and entrapment FDP estimates, each
+//! held by mzLib to the R reference — is the [`stats`] module. The design and contrasts files it
+//! reads, from a sample sheet, and every peptide in every sample, from a FlashLFQ or MetaMorpheus
+//! peptide table, are the [`diff`] module. PTM site occupancy, PTM-PTM pairs and the effect of a
+//! per-run trait on each site's occupancy are the [`ptmqtl`] module.
 //!
 //! ## Two conventions worth knowing up front
 //!
@@ -120,12 +131,15 @@
 #![allow(rustdoc::redundant_explicit_links)]
 
 pub mod bridge;
+pub mod diff;
 pub mod flashlfq;
 pub mod install;
 pub mod isobaric;
+pub mod library;
 pub mod peptidoform;
 pub mod pride;
 pub mod proteins;
+pub mod ptmqtl;
 pub mod readers;
 pub mod sdrf;
 pub mod stats;

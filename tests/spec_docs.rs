@@ -68,6 +68,8 @@ const DEVIATIONS: &[&[Deviation]] = &[
     PEPTIDOFORM,
     QUANT,
     STATS,
+    DIFF,
+    PTMQTL,
 ];
 
 /// Deviations: conventions that hold for every verb.
@@ -171,6 +173,25 @@ const SDRF: &[Deviation] = &[
         Some("searched_files"),
         "DesignOptions::searched_files is the list; giving it sets the flag and sends one per line",
     ),
+    dev(
+        "sdrf isobaric-design",
+        "param.searched-files-stdin",
+        Some("searched_files"),
+        "IsobaricDesignOptions::searched_files is the list; giving it sets the flag and sends one \
+         per line",
+    ),
+    dev(
+        "sdrf restrict",
+        "param.stdin",
+        Some("searched_files"),
+        "one stdin line per SearchedFile in restrict_with's searched_files: searched[TAB acquired]",
+    ),
+    dev(
+        "sdrf restrict",
+        "field.column_names",
+        Some("columns"),
+        "SDRF column names repeat, so the header is a Vec<String> named columns, not a Table",
+    ),
 ];
 
 /// Deviations: stats.
@@ -193,7 +214,55 @@ const STATS: &[Deviation] = &[
         Some("studies"),
         "one tab-separated stdin line per Study in meta_with's studies",
     ),
+    dev(
+        "stats combine-p",
+        "param.stdin",
+        Some("tests"),
+        "one tab-separated stdin line per PValueTest in combine_p's tests",
+    ),
+    dev(
+        "stats correlate",
+        "param.trait",
+        Some("trait_table"),
+        "trait is a Rust keyword, so correlate_with's argument is trait_table",
+    ),
+    dev(
+        "stats fit-logistic",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_logistic_with's coefficients",
+    ),
+    dev(
+        "stats fit-mixed",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_mixed_with's coefficients",
+    ),
 ];
+
+/// Deviations: diff.
+const DIFF: &[Deviation] = &[
+    dev(
+        "diff design",
+        "param.stdin",
+        Some("factors"),
+        "one stdin line per term of DesignOptions' factors, covariates, interactions, strata and batch",
+    ),
+    dev(
+        "diff observations",
+        "param.stdin",
+        Some("runs"),
+        "one tab-separated stdin line per ObservationRun in observations_with's runs",
+    ),
+];
+
+/// Deviations: ptmqtl.
+const PTMQTL: &[Deviation] = &[dev(
+    "ptmqtl pairs",
+    "param.type",
+    Some("pair_type"),
+    "type is a Rust keyword, so pairs_with's argument is pair_type, a PairType",
+)];
 
 /// Deviations: proteins and genes.
 const PROTEINS: &[Deviation] = &[
@@ -264,6 +333,20 @@ const PROTEINS: &[Deviation] = &[
         "param.on-error",
         None,
         "the wire accepts only fail, the default, so there is nothing to choose",
+    ),
+    dev(
+        "proteins align",
+        "param.no-residue-map",
+        Some("residue_map"),
+        "stated positively, as pyMzLib's residue_map: AlignOptions::residue_map = false sends \
+         --no-residue-map",
+    ),
+    dev(
+        "genes orthology",
+        "param.species",
+        Some("gtfs"),
+        "the species lines are rendered from OrthologyOptions::gtfs and ::gene_sets, two lists of \
+         (production name, path), as pyMzLib renders them from its gtfs= and gene_sets=",
     ),
 ];
 
@@ -390,6 +473,24 @@ const PRIDE: &[Deviation] = &[
         "field.results",
         None,
         "search returns this list itself, as PrideProjectSearchResult values",
+    ),
+    dev(
+        "pride checksums",
+        "field.accession",
+        None,
+        "the caller's own argument; each PrideFileChecksum also carries it as project_accession",
+    ),
+    dev(
+        "pride checksums",
+        "field.file_count",
+        None,
+        "file_checksums returns BTreeMap<String, PrideFileChecksum>; this is its len()",
+    ),
+    dev(
+        "pride checksums",
+        "field.files",
+        None,
+        "file_checksums returns these rows themselves, keyed by file_name, as pyMzLib's dict is",
     ),
 ];
 
@@ -1298,7 +1399,10 @@ fn guide_module(spec_module: &str) -> Option<&'static str> {
         "pride" => "pride",
         "peptidoform" => "peptidoform",
         "isobaric" => "isobaric",
+        "library" => "library",
         "stats" => "stats",
+        "diff" => "diff",
+        "ptmqtl" => "ptmqtl",
         _ => return None,
     })
 }
@@ -1622,6 +1726,17 @@ fn returned(info: &FnInfo) -> Option<(String, bool)> {
     let inner_segment = last_segment(inner)?;
     if inner_segment.ident == "Vec" {
         Some((base_struct(generic_argument(inner_segment)?)?, true))
+    } else if inner_segment.ident == "BTreeMap" {
+        // A map keyed by one of the entry's own fields (pride::file_checksums, keyed by
+        // file_name) returns the entries, as a Vec does: its values are the list.
+        let syn::PathArguments::AngleBracketed(args) = &inner_segment.arguments else {
+            return None;
+        };
+        let value = args.args.iter().rev().find_map(|arg| match arg {
+            syn::GenericArgument::Type(ty) => Some(ty),
+            _ => None,
+        })?;
+        Some((base_struct(value)?, true))
     } else {
         Some((inner_segment.ident.to_string(), false))
     }
