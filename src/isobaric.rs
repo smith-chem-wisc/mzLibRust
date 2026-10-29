@@ -6,6 +6,7 @@
 //! | One kit's channels and reporter-ion m/z | [`kits`]`(Some("TMT18"))` | `IsobaricMassTag.TryGetTagType` |
 //! | The channels grouped per kit | [`IsobaricKits::by_kit`], [`IsobaricKits::kit`] | `IsobaricMassTag.ChannelLabels`, `ReporterIonMzs` |
 //! | The window a reporter intensity is read in | [`IsobaricKits::absolute_tolerance`], [`ReporterChannel::mz_min`] | `IsobaricMassTag.AbsoluteToleranceValue` |
+//! | The label an SDRF writes for each channel | [`ReporterChannel::sdrf_label`], [`IsobaricKit::sdrf_labels`] | `SdrfIsobaricLabels.GetSdrfLabel` |
 //!
 //! An isobaric experiment is read out of the low-m/z reporter ions: one ion per channel, a few
 //! millidaltons apart. Getting a channel's label or its m/z wrong mislabels every sample after it,
@@ -52,6 +53,19 @@
 //!     catalogue.kit("iTRAQ8")?.labels(),
 //!     ["113", "114", "115", "116", "117", "118", "119", "121"]
 //! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! **The SDRF label.** An SDRF names a channel in its `comment[label]` column with PRIDE's term:
+//! `TMT`, `ITRAQ` or `DiLeu` and the channel. [`ReporterChannel::sdrf_label`] is mzLib's spelling of
+//! it (`SdrfIsobaricLabels`, mzLib #1467), the one [`crate::sdrf::isobaric_design_with`] reads back.
+//! TMT10's last channel is `TMT131` there, while TMT11 and TMTpro keep `TMT131N`:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! let catalogue = mzlib::isobaric::kits(None)?;
+//! assert_eq!(catalogue.kit("TMT10")?.sdrf_labels()[8..], [Some("TMT130C"), Some("TMT131")]);
+//! assert_eq!(catalogue.kit("TMT11")?.sdrf_labels()[9], Some("TMT131N"));
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
@@ -108,6 +122,12 @@ pub struct ReporterChannel {
     pub mz_min: f64,
     /// `reporter_ion_mz` plus the matching tolerance, in m/z.
     pub mz_max: f64,
+    /// The SDRF `comment[label]` that names the channel, by mzLib's
+    /// `SdrfIsobaricLabels.GetSdrfLabel`: `"TMT127N"`, `"ITRAQ114"`, `"DiLeu115a"`, and `"TMT131"`
+    /// for TMT10's 131N (PRIDE's spelling). Write it when you build an SDRF;
+    /// [`crate::sdrf::isobaric_design_with`] reads it back to this channel. `None` only from a
+    /// bridge before pyMzLib 0.7.0, which has no such column.
+    pub sdrf_label: Option<String>,
 }
 
 /// One kit and its channels, in ascending reporter-ion m/z: an element of
@@ -134,14 +154,24 @@ impl IsobaricKit {
     pub fn reporter_ion_mzs(&self) -> Vec<f64> {
         self.channels.iter().map(|c| c.reporter_ion_mz).collect()
     }
+
+    /// The SDRF `comment[label]` of each channel, in ascending reporter-ion m/z. See
+    /// [`ReporterChannel::sdrf_label`].
+    #[must_use]
+    pub fn sdrf_labels(&self) -> Vec<Option<&str>> {
+        self.channels
+            .iter()
+            .map(|c| c.sdrf_label.as_deref())
+            .collect()
+    }
 }
 
 /// The kits [`kits`] returned, as a long table and as structs.
 ///
 /// The table has one row per (kit, channel), kits in mzLib's order and channels in ascending m/z:
-/// `kit`, `channel_index`, `channel_label`, `reporter_ion_mz`, `mz_min` and `mz_max`, with the
-/// meanings of [`ReporterChannel`] (the three m/z columns in m/z). [`Self::by_kit`] groups the
-/// same rows by kit.
+/// `kit`, `channel_index`, `channel_label`, `reporter_ion_mz`, `mz_min`, `mz_max` and `sdrf_label`,
+/// with the meanings of [`ReporterChannel`] (the three m/z columns in m/z). [`Self::by_kit`] groups
+/// the same rows by kit.
 #[derive(Debug, Clone, Deserialize)]
 pub struct IsobaricKits {
     /// The name you asked for, exactly as given; `None` when every kit was listed.
@@ -164,7 +194,7 @@ pub struct IsobaricKits {
     /// The channel table.
     #[serde(flatten)]
     pub columns: Table,
-    /// What the m/z are and are not — read these once.
+    /// What the m/z and the SDRF labels are and are not — read these once.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub caveats: Vec<String>,
 }
@@ -185,6 +215,12 @@ impl IsobaricKits {
         let mz = self.columns.floats("reporter_ion_mz")?;
         let mz_min = self.columns.floats("mz_min")?;
         let mz_max = self.columns.floats("mz_max")?;
+        // A bridge before pyMzLib 0.7.0 has no sdrf_label column.
+        let sdrf_label = if self.columns.has("sdrf_label") {
+            self.columns.strings("sdrf_label")?
+        } else {
+            vec![None; kit.len()]
+        };
         let missing = |what: &str, row: usize| {
             MzLibError::Protocol(format!("isobaric kits returned no {what} on row {row}"))
         };
@@ -201,6 +237,7 @@ impl IsobaricKits {
                     reporter_ion_mz: mz[i].ok_or_else(|| missing("reporter_ion_mz", i))?,
                     mz_min: mz_min[i].ok_or_else(|| missing("mz_min", i))?,
                     mz_max: mz_max[i].ok_or_else(|| missing("mz_max", i))?,
+                    sdrf_label: sdrf_label[i].clone(),
                 })
             })
             .collect()
@@ -355,6 +392,24 @@ mod tests {
         assert!((first.mz_min - 126.124_725_954_759_01).abs() < 1e-12);
         assert!((first.mz_max - 126.130_725_954_759_01).abs() < 1e-12);
         assert_eq!(tmtpro.absolute_tolerance, 0.003);
+    }
+
+    #[test]
+    fn every_channel_carries_mzlibs_sdrf_label() {
+        let all = catalogue();
+        let channels = all.channels().unwrap();
+        assert!(channels.iter().all(|c| c.sdrf_label.is_some()));
+        let tmt10 = all.kit("TMT10").unwrap();
+        assert_eq!(tmt10.labels()[9], "131N");
+        assert_eq!(tmt10.sdrf_labels()[9], Some("TMT131"));
+        assert_eq!(
+            all.kit("iTRAQ4").unwrap().sdrf_labels()[0],
+            Some("ITRAQ114")
+        );
+        assert_eq!(
+            all.kit("diLeu4").unwrap().sdrf_labels()[0],
+            Some("DiLeu115")
+        );
     }
 
     #[test]

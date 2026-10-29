@@ -222,7 +222,7 @@ examples:
     r: "fit <- stats_fit('limma_reference_responses.tsv', 'limma_reference_design.tsv', 'age_decades')"
   - fixture: stats_fit_malat_contrasts.json
     py: "fit = pymzlib.stats.fit('malat_dilution_log2_vs_fluc.tsv', 'malat_pairs/design_1.tsv', contrasts='malat_pairs/contrasts_1.tsv')"
-    rust: "let fit = mzlib::stats::fit_with(\"malat_dilution_log2_vs_fluc.tsv\", \"malat_pairs/design_1.tsv\", &[], &FitOptions { contrasts: Some(\"malat_pairs/contrasts_1.tsv\".into()), ..Default::default() })?;"
+    rust: "let fit = mzlib::stats::fit_with(\"malat_dilution_log2_vs_fluc.tsv\", \"malat_pairs/design_1.tsv\", &[] as &[&str], &FitOptions { contrasts: Some(\"malat_pairs/contrasts_1.tsv\".into()), ..Default::default() })?;"
     r: "fit <- stats_fit('malat_dilution_log2_vs_fluc.tsv', 'malat_pairs/design_1.tsv', character(0), contrasts = 'malat_pairs/contrasts_1.tsv')"
   - fixture: stats_fit_malat_marginal.json
     py: "fit = pymzlib.stats.fit('malat_dilution_log2_vs_fluc.tsv', 'malat_dilution_design.tsv', ['malat_250ng', 'malat_125ng'], estimator='marginal_likelihood')"

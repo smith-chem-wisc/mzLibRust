@@ -155,6 +155,15 @@ const RECORDED_WITH: &[(&str, &[(&str, Option<&str>)])] = &[
     ),
     ("stats_fit_mixed_lmm_ml.json", &[("estimator", Some("ml"))]),
     (
+        "stats_fit_latent_mixed_link_ml.json",
+        &[("estimator", Some("ml"))],
+    ),
+    // stats fit-link echoes the value it passed, which is mzLib's default when the option was absent.
+    (
+        "stats_fit_link_simulated.json",
+        &[("with-depth", Some("true"))],
+    ),
+    (
         "stats_fit_malat_marginal.json",
         &[("estimator", Some("marginal_likelihood"))],
     ),
@@ -167,9 +176,18 @@ const RECORDED_WITH: &[(&str, &[(&str, Option<&str>)])] = &[
         "ptmqtl_pairs_batch_run_level.json",
         &[("remove-run-level", None)],
     ),
+    ("ptmqtl_pairs_bounds.json", &[("include-bounds", None)]),
+    (
+        "ptmqtl_pairs_depth_covariate_run_level.json",
+        &[("remove-run-level", None)],
+    ),
     (
         "ptmqtl_trait_effects_strict.json",
         &[("min-replicates", Some("6"))],
+    ),
+    (
+        "ptmqtl_trait_effects_log2.json",
+        &[("scale", Some("log2_odds"))],
     ),
     // sdrf isobaric-design echoes the plex source, but a call that declares none must get the
     // refusal recorded without one, not the design read with the pattern.
@@ -177,18 +195,33 @@ const RECORDED_WITH: &[(&str, &[(&str, Option<&str>)])] = &[
         "sdrf_isobaric_design_PXD008841.json",
         &[("plex-file-name-pattern", Some(r"TMT_?pool(?<plex>\d+)"))],
     ),
+    // library calibrate-rt echoes the options it applied, which are mzLib's defaults when absent.
+    (
+        "library_calibrate_rt_pbmc_skip.json",
+        &[("on-error", Some("skip"))],
+    ),
+    (
+        "library_calibrate_rt_pbmc_linear.json",
+        &[("kind", Some("linear")), ("minimum-anchors", Some("10"))],
+    ),
 ];
 
 /// Optional input files a verb echoes as `<name>_file`, null when the option was not given (stats
-/// correlate --given, diff observations --protein-groups and --samples, ptmqtl --samples and
-/// --run-level-groups, stats fit --contrasts). A recording made with one answers only a call that
-/// gives one, and the reverse. pyMzLib's `OPTIONAL_FILES`.
+/// correlate --given, diff observations --protein-groups and --samples, ptmqtl --samples,
+/// --run-level-groups and --run-covariate, stats fit --contrasts, stats fit-latent-mixed
+/// --responses, --counts, --depth and --residual-variance). A recording made with one answers only
+/// a call that gives one, and the reverse. pyMzLib's `OPTIONAL_FILES`.
 const OPTIONAL_FILES: &[&str] = &[
     "given",
     "protein-groups",
     "samples",
     "run-level-groups",
+    "run-covariate",
     "contrasts",
+    "responses",
+    "counts",
+    "depth",
+    "residual-variance",
 ];
 
 /// Options a verb echoes inside an object rather than at the top level (stats fit --estimator as

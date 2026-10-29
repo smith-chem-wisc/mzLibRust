@@ -272,13 +272,14 @@
 //! low_mean_vs_500    0          0.5               -1
 //! ```
 //!
-//! The traps: contrast ids are numbered **within each stratum**, so `c1` can mean different
-//! comparisons in two strata — read the labels from [`crate::diff::Design::contrasts`]. With missing
-//! values a contrast's standard error is exact per feature, where limma's `contrasts.fit`
-//! approximates it, so on such data the numbers differ from limma's by design; with complete data
-//! they agree. A contrast of one coefficient is that coefficient's test, number for number.
-//! [`FitOptions::confidence`] changes the level; leave it `None` for mzLib's default, and
-//! [`ModeratedContrasts::confidence_level`] reports the level used.
+//! The traps: a contrast id is the same comparison in every stratum — [`crate::diff::design_with`]
+//! numbers them once over the whole analysis, and a stratum that cannot run one skips its id. Read
+//! the labels from [`crate::diff::Design::contrasts`]. With missing values a contrast's standard
+//! error is exact per feature, where limma's `contrasts.fit` approximates it, so on such data the
+//! numbers differ from limma's by design; with complete data they agree. A contrast of one
+//! coefficient is that coefficient's test, number for number. [`FitOptions::confidence`] changes
+//! the level; leave it `None` for mzLib's default, and [`ModeratedContrasts::confidence_level`]
+//! reports the level used.
 //!
 //! ## Your data, as files
 //!

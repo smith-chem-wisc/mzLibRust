@@ -231,7 +231,11 @@
 //! assert_eq!(strata, [("organism part=kidney", 2), ("organism part=liver", 3), ("organism part=muscle", 3)]);
 //! assert_eq!(
 //!     design.stratum("organism part=kidney")?.not_run,
-//!     [NotRunContrast { label: "condition (one level: A)".into(), reason: "not_in_stratum".into() }]
+//!     [NotRunContrast {
+//!         id: Some("c1".into()),
+//!         label: "condition=B vs condition=A".into(),
+//!         reason: "not_in_stratum".into(),
+//!     }]
 //! );
 //! let ids: Vec<(String, String)> = design.contrasts()?.into_iter().map(|c| (c.stratum, c.contrast_id)).collect();
 //! assert_eq!(ids[0], ("organism part=liver".to_owned(), "c1".to_owned()));
@@ -239,9 +243,11 @@
 //! # Ok::<(), mzlib::MzLibError>(())
 //! ```
 //!
-//! Kidney has only condition A, so there is nothing to compare there, and `not_run` says so. **A
-//! contrast id is numbered within its stratum:** `c1` is liver's first comparison and muscle's
-//! first, so match strata by `label`. With [`DesignOptions::out`], stratum *i* writes
+//! Kidney has only condition A, so it cannot run `c1`, and `not_run` says so under that id. **A
+//! contrast id is numbered once over the whole analysis** (mzLib's `AnalysisDesign.ByStratum`,
+//! mzLib #1476), so `c1` is the same comparison in liver and in muscle, and results from each
+//! stratum's fit stack by id. A stratum that lacks one side of a comparison skips its id rather
+//! than renumbering. With [`DesignOptions::out`], stratum *i* writes
 //! `design_i.tsv`, numbered in the order of [`Design::strata`], because a stratum key can hold
 //! characters a file name cannot.
 //!
@@ -673,7 +679,12 @@ pub struct Interaction {
 /// A contrast the model asks for that one stratum cannot run: mzLib's `NotRunContrast`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct NotRunContrast {
-    /// Which contrast, e.g. `"condition (one level: A)"`.
+    /// The default contrast's id ([`DefaultContrast::contrast_id`]), the same in every stratum.
+    /// `None` when no default contrast stands for the entry, such as a factor with one level over
+    /// the whole analysis, and from a bridge before pyMzLib 0.7.0.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Which contrast, e.g. `"condition=B vs condition=A"`.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub label: String,
     /// Why: `"not_in_stratum"` (one side has no sample there).
@@ -809,7 +820,8 @@ pub struct Design {
 pub struct DefaultContrast {
     /// The stratum key ([`DesignStratum::stratum`]).
     pub stratum: String,
-    /// `c1`, `c2`, ... numbered **within the stratum**: the id of its row in the contrasts file.
+    /// `c1`, `c2`, ... in mzLib's default order, numbered **once over the whole analysis**, so an id
+    /// is the same comparison in every stratum: the id of its row in the contrasts file.
     pub contrast_id: String,
     /// `factor=level vs factor=reference`, or a slope's column.
     pub label: String,
@@ -1552,6 +1564,9 @@ mod tests {
         assert_eq!(strata.stratum_columns, ["organism part"]);
         let kidney = strata.stratum("organism part=kidney").unwrap();
         assert_eq!(kidney.not_run[0].reason, "not_in_stratum");
+        // mzLib #1476: the skipped contrast is named by the id it has in every other stratum.
+        assert_eq!(kidney.not_run[0].id.as_deref(), Some("c1"));
+        assert_eq!(kidney.not_run[0].label, "condition=B vs condition=A");
 
         let covariate: Design = serde_json::from_str(COVARIATE).unwrap();
         assert_eq!(
