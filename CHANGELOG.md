@@ -15,6 +15,72 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **`ptmqtl` takes pyMzLib 0.7.0's three new options** (mzLib #1464, #1468), each sent only
+  when set, so mzLib's default applies otherwise; the echoes the repin projected now report them:
+  - `PairsOptions::include_bounds` (wire `--include-bounds`): co-varying pairs count runs where a
+    site was seen in only one form as tied bounds, never invented values. A pair whose two sites
+    are mostly one bound is `both_sites_mostly_bounds`, untested. `false` is mzLib's default.
+  - `PairsOptions::run_covariate` (wire `--run-covariate`): a per-run covariate table, such as
+    each run's target PSMs; pairs become the partial Spearman correlation given it.
+  - `TraitEffectsOptions::scale` (wire `--scale`), an `OccupancyScale` (`OCCUPANCY_SCALES`):
+    `Log2Odds` reports the same fit in log2 odds, a change of unit, not a refit. `None` is
+    mzLib's natural-log odds.
+
+  The ptmqtl guide gains "Counting one-form runs as bounds", "Given each run's depth" and the log2
+  example, on mzLib's `BoundsEnterTypeAAsTiedRanks`, `ARunCovariateIsPartialledOut` and
+  `TraitDesign` cases (`bounds.tsv`, `depth.tsv` and `depth_psms.tsv` vendored byte for byte from
+  pyMzLib 0.7.0), and `PENDING` in `tests/spec_docs.rs` is empty.
+- **`stats` gains two latent-scale verbs, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1469),
+  with a guide section ("When some samples are only counted") whose examples run, and live
+  canaries against lme4's `glmer` and `glmmTMB`:
+  - **`stats::fit_latent_mixed_with`**: one random-intercept mixed model per feature on a latent
+    scale (logit occupancy, say), from samples measured on it
+    (`FitLatentMixedOptions::responses`), counted through it, k of n trials
+    (`FitLatentMixedOptions::counts`), or both; mzLib's `LogitNormalMixedModel.Fit`. The `link`
+    argument is required (mzLib has none): `Link::Identity`, a `DetectionLink`, or 2 to 4 numbers
+    (`[f64; 2..=4]`), a number left out being mzLib's default. `depth`, `residual_variance` and
+    `estimator` are sent only when set. Returns `LatentMixedModelFit` (with the `DetectionLink`
+    mzLib used), whose `rows(coefficient)` gives `LatentMixedRow`s; `LATENT_MIXED_STATUSES`.
+    Wire verb `stats fit-latent-mixed`.
+  - **`stats::fit_link` / `fit_link_with`**: the detection link fitted from cells by maximum
+    likelihood, mzLib's `LogitNormalMixedModel.FitLink`. `FitLinkOptions::with_depth`,
+    `with_overdispersion` and `detection_only` are `None` (mzLib's declared defaults, which
+    `LinkFit` reports) unless you set them. `LinkFit::link` is `None` when mzLib's search did not
+    converge. Wire verb `stats fit-link`.
+  The recordings and inputs (`stats/lnmm_*`, `stats/link_cells.tsv`, and
+  `stats_fit_mixed_lnmm_simulated.json` for the guide's comparison) are pyMzLib 0.7.0's, byte for
+  byte.
+- **`library::calibrate_rt`, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1387): each run's map
+  from retention time in minutes onto a spectral library's iRT scale, fitted by mzLib's
+  `IrtCalibration.Fit` from anchors you choose (`RtAnchor`: group, minutes, iRT), and the times
+  you send converted with it, either way (`RtQuery::minutes_to_irt`, `RtQuery::irt_to_minutes`).
+  `RtCalibrationOptions`' `kind` (`CALIBRATION_KINDS`), `minimum_anchors`, `bandwidth`, `knots`
+  and `robustness_iterations` are `None` (mzLib's, which the result reports) unless set;
+  `on_error: OnError::Skip` records a refused group's `FitFailure` and fits the rest. Returns
+  `RtCalibration` (one `RtCalibrationGroup` per run, `rows()` giving `RtCalibrationRow`s). The
+  library guide gains "Calibrate a run onto library iRT", on two DIA-NN reports from mzLib's test
+  data (`tests/fixtures/calibration/`, pyMzLib 0.7.0's, byte for byte). Wire verb
+  `library calibrate-rt`.
+- **`proteins::map_residues_with`, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1465): which
+  residue of a target protein sits in the same column of Ensembl Compara's gene-tree alignment as
+  a source residue, or why none does (`COLUMN_OUTCOMES`, mzLib's `ComparaColumnOutcome` names
+  verbatim: a gap is `GapInTarget`, never the nearest residue), for a batch of
+  `(source, position, target)` queries. `MapResiduesOptions` takes the alignment, the gene-tree
+  file, the species' `gtfs` or `gene_sets` (none is mzLib's default, every gene kept) and
+  `proteins` (the kept proteins' ungapped sequences, `AlignedProteins::sequences()`). Returns
+  `ResidueMappings` (`ComparaAlignment`, `GeneTrees`, `GeneSet`s; `rows()` giving
+  `ResidueMapping`s). A position outside its source protein fails the whole call, as mzLib's
+  `MapResidue` throws: positions are sent unchecked. The proteins guide gains "Map a residue
+  across species", with the UniProt-to-UniProt chain through `read_with` and `align_with`, on a
+  byte-exact cut of Ensembl release 116 (`tests/fixtures/map_residues/`, `-text` in
+  `.gitattributes`, pyMzLib 0.7.0's). Wire verb `genes map-residues`.
+- **The replay bridge learns pyMzLib 0.7.0's matching rules**: `--link` held to the recording's
+  `link` echo by value, a `true`/`false` option held to its boolean echo (`--with-depth`),
+  `genes map-residues`' `--proteins` choice and alignment file, and the stdin echoes of
+  `stats fit-latent-mixed` (coefficients), `genes map-residues` (species and queries) and
+  `library calibrate-rt` (anchors and queries, compared as numbers). `--restrict-gene-trees` is
+  checked only for `genes orthology`, as pyMzLib's rule says.
+
 - **The bridge pin is pyMzLib v0.7.0** (mzLib 1.0.596, tag commit `cc67b7a2`; bridge-watch's
   repin, mzLibRust #37). `install_bridge()` fetches it, and its bridge dispatches 57 verbs. Every
   answer it changes for the same call is in `docs/upgrading.md`'s new pyMzLib 0.7.0 section:

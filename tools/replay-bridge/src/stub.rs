@@ -133,6 +133,9 @@ const STDIN_ECHO: &[&str] = &[
     "proteins parse-accession",
     "proteins align",
     "genes orthology",
+    "stats fit-latent-mixed",
+    "genes map-residues",
+    "library calibrate-rt",
 ];
 
 /// Recordings made with an option the call must send as well. The echo alone cannot say so: a call
@@ -312,8 +315,50 @@ fn option<'a>(options: &'a [(String, Option<String>)], name: &str) -> Option<&'a
     options.iter().find(|(n, _)| n == name).map(|(_, v)| v)
 }
 
+/// `stats fit-latent-mixed --link` against the recording's `link` echo: `identity` is (0, 1), and
+/// each number given must equal the echo's at its place (intercept, slope, depth_slope,
+/// overdispersion). pyMzLib's `link_mismatch`.
+fn link_mismatch(recording: &Recording, sent: &str) -> Option<String> {
+    let given: Vec<f64> = if sent.trim().eq_ignore_ascii_case("identity") {
+        vec![0.0, 1.0]
+    } else {
+        match sent.split(',').map(|x| x.trim().parse::<f64>()).collect() {
+            Ok(numbers) => numbers,
+            Err(_) => return Some(format!("--link {sent:?} is not numbers")),
+        }
+    };
+    let names = ["intercept", "slope", "depth_slope", "overdispersion"];
+    for (name, value) in names.iter().zip(&given) {
+        let echo = recording
+            .get(&format!("link.{name}"))
+            .map(python_str)
+            .and_then(|text| text.parse::<f64>().ok());
+        if echo != Some(*value) {
+            let recorded: Vec<String> = names
+                .iter()
+                .map(|n| {
+                    recording
+                        .get(&format!("link.{n}"))
+                        .map(python_str)
+                        .unwrap_or_default()
+                })
+                .collect();
+            return Some(format!(
+                "recorded with link ({}), not --link {sent}",
+                recorded.join(", ")
+            ));
+        }
+    }
+    None
+}
+
 /// Why this recording cannot be the answer to these options, or `None` if it can.
 fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Option<String> {
+    if let (Some(V::Compound), Some(Some(sent))) = (recording.get("link"), option(options, "link")) {
+        if let Some(why) = link_mismatch(recording, sent) {
+            return Some(why);
+        }
+    }
     for (name, value) in options {
         let key = ECHOED_AS
             .iter()
@@ -353,6 +398,16 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
         }
         let recorded = match recording.get(&key) {
             None | Some(V::Compound) => continue,
+            // A true|false option (stats fit-link --with-depth) against its boolean echo.
+            Some(V::Bool(flag)) => {
+                if !value.trim().eq_ignore_ascii_case(&flag.to_string()) {
+                    return Some(format!(
+                        "recorded with {key}={}, not '{value}'",
+                        python_str(&V::Bool(*flag))
+                    ));
+                }
+                continue;
+            }
             Some(recorded) => python_str(recorded),
         };
         if key == "path" || key.ends_with("_file") {
@@ -439,9 +494,29 @@ fn mismatch(recording: &Recording, options: &[(String, Option<String>)]) -> Opti
             }
         }
     }
-    if let Some(restricted) = recording.get("gene_trees.restricted_to_gene_sets") {
+    // genes map-residues also echoes gene_trees, but takes no --restrict-gene-trees.
+    if let (Some(restricted), None) = (
+        recording.get("gene_trees.restricted_to_gene_sets"),
+        recording.get("alignment"),
+    ) {
         if option(options, "restrict-gene-trees").is_some() == matches!(restricted, V::Null) {
             return Some("a recording with the other --restrict-gene-trees choice".to_owned());
+        }
+    }
+
+    // genes map-residues: --proteins fills proteins, and only then; and the alignment file is the
+    // recording's (by file name), as --path is.
+    if let Some(V::Bool(included)) = recording.get("proteins_included") {
+        if option(options, "proteins").is_some() != *included {
+            return Some("a recording with the other --proteins choice".to_owned());
+        }
+    }
+    if let (Some(V::Text(file)), Some(Some(sent))) = (
+        recording.get("alignment.source_file_name"),
+        option(options, "alignment"),
+    ) {
+        if base(sent) != *file {
+            return Some(format!("recorded from '{file}', not '{}'", base(sent)));
         }
     }
 
@@ -604,6 +679,109 @@ fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Stri
         return (dumps != recorded_dumps)
             .then(|| format!("recorded with {recorded_dumps} dumps, not {dumps}"));
     }
+    // genes map-residues: the same species (before `--`) as the recording's gene_sets, and the
+    // same queries after it, in the same order, as its source, position and target columns.
+    if verb == "genes map-residues" {
+        let lines: Vec<&str> = stdin
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        let cut = lines.iter().position(|line| *line == "--").unwrap_or(lines.len());
+        let mut species: Vec<&str> = lines[..cut]
+            .iter()
+            .map(|line| line.split('\t').next().unwrap_or("").trim())
+            .collect();
+        species.sort_unstable();
+        let recorded_cut = recording
+            .inputs
+            .iter()
+            .position(|line| *line == "--")
+            .unwrap_or(recording.inputs.len());
+        if species != recording.inputs[..recorded_cut] {
+            return Some(format!(
+                "recorded for species {:?}, not {species:?}",
+                &recording.inputs[..recorded_cut]
+            ));
+        }
+        let sent: Vec<String> = lines[(cut + 1).min(lines.len())..]
+            .iter()
+            .map(|line| {
+                line.split('\t')
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect();
+        let recorded = &recording.inputs[(recorded_cut + 1).min(recording.inputs.len())..];
+        return (sent != recorded).then(|| {
+            format!(
+                "recorded for queries {:?}..., not {:?}...",
+                &recorded[..recorded.len().min(2)],
+                &sent[..sent.len().min(2)]
+            )
+        });
+    }
+    // library calibrate-rt: the same lines, in the same order, as the recording's rows: each
+    // line's group, role (anchor before `--`; to_irt or to_minutes after it, by which time is
+    // given) and the times it gives, compared as numbers.
+    if verb == "library calibrate-rt" {
+        let mut sent = Vec::new();
+        let mut queries = false;
+        for line in stdin.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if line.trim() == "--" {
+                queries = true;
+                continue;
+            }
+            let mut fields = line.split('\t');
+            let group = fields.next().unwrap_or("").trim();
+            let rt = canonical_number(fields.next().unwrap_or(""));
+            let irt = canonical_number(fields.next().unwrap_or(""));
+            let role = if !queries {
+                "anchor"
+            } else if rt.is_empty() {
+                "to_minutes"
+            } else {
+                "to_irt"
+            };
+            let (rt, irt) = match role {
+                "to_minutes" => (String::new(), irt),
+                "to_irt" => (rt, String::new()),
+                _ => (rt, irt),
+            };
+            sent.push(format!("{group}\t{role}\t{rt}\t{irt}"));
+        }
+        // build.rs reads the recording with serde_json's default float parser, which can land one
+        // unit in the last place from the correctly rounded value the call parses, so the times
+        // are compared to 1e-15 relative, not as text.
+        let same_line = |a: &str, b: &str| {
+            let (a, b): (Vec<&str>, Vec<&str>) = (a.split('\t').collect(), b.split('\t').collect());
+            a.len() == b.len()
+                && a.iter().zip(&b).all(|(x, y)| {
+                    x == y
+                        || matches!((x.parse::<f64>(), y.parse::<f64>()),
+                            (Ok(x), Ok(y)) if (x - y).abs() <= 1e-15 * y.abs())
+                })
+        };
+        if sent.len() == recording.inputs.len()
+            && sent.iter().zip(recording.inputs).all(|(a, b)| same_line(a, b))
+        {
+            return None;
+        }
+        let first = sent
+            .iter()
+            .zip(recording.inputs)
+            .position(|(a, b)| !same_line(a, b))
+            .unwrap_or(sent.len().min(recording.inputs.len()));
+        return Some(format!(
+            "recorded for {} other lines (first difference at line {})",
+            recording.inputs.len(),
+            first + 1
+        ));
+    }
     if verb == "peptidoform convert" || verb == "proteins parse-accession" {
         let sent: Vec<&str> = stdin.lines().filter(|line| !line.trim().is_empty()).collect();
         return (sent != recording.inputs)
@@ -620,6 +798,15 @@ fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Stri
     recorded.sort_unstable();
     recorded.dedup();
     (sent != recorded).then(|| format!("recorded for runs {recorded:?}, not {sent:?}"))
+}
+
+/// A number as `build.rs` writes a recorded one: Rust's shortest round-trip form, or blank for a
+/// blank, `NA` or `NaN` cell.
+fn canonical_number(text: &str) -> String {
+    match text.trim().parse::<f64>() {
+        Ok(number) if !number.is_nan() => format!("{number:?}"),
+        _ => String::new(),
+    }
 }
 
 /// The non-blank stdin lines, each split into trimmed tab-separated fields.
@@ -681,7 +868,7 @@ fn canonical_model(stdin: &str) -> String {
 /// * diff observations: the same runs, or, with `--samples`, runs among those sent.
 fn model_stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Option<String>> {
     let why = match verb {
-        "stats fit" | "stats fit-logistic" | "stats fit-mixed" => {
+        "stats fit" | "stats fit-logistic" | "stats fit-mixed" | "stats fit-latent-mixed" => {
             let sent: Vec<&str> = stdin
                 .lines()
                 .map(str::trim)

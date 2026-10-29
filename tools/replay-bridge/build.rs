@@ -108,6 +108,13 @@ const REPLAY_EXTRA: &[(&str, &[&str])] = &[
         ],
     ),
     ("diff design", &["diff_design_malat_pairs.json"]),
+    // The stats guide: fit_mixed on the measured half of mzLib's measured-and-counted simulation,
+    // which fit_latent_mixed's example fits whole.
+    ("stats fit-mixed", &["stats_fit_mixed_lnmm_simulated.json"]),
+    // The proteins guide's cross-species chain: UniProt P04637 to Ensembl's canonical TP53
+    // protein, and Ensembl's canonical Trp53 protein to UniProt P02340, around genes map-residues.
+    ("proteins read", &["proteins_read_p53.json"]),
+    ("proteins align", &["proteins_align_tp53_chain.json"]),
 ];
 
 fn main() {
@@ -300,27 +307,94 @@ fn recording(name: &str, data: &Value, envelope: &Path) -> String {
         }
     };
     let column = |name: &str| strings(map.get("columns").and_then(|c| c.get(name)));
-    let inputs: Vec<String> =
-        if map.contains_key("source_format") || map.contains_key("namespace_counts") {
-            column("input")
-        } else if map.contains_key("searched_without_row") {
-            strings(map.get("searched_files"))
-        } else if map.contains_key("aligner_id") {
-            column("aligned_source")
-                .iter()
-                .zip(column("aligned_target"))
-                .map(|(s, t)| format!("{}\t{}", s.replace('-', ""), t.replace('-', "")))
-                .collect()
-        } else if map.contains_key("snapshot_id") {
-            let mut lines = strings(map.get("species"));
-            lines.push("--".to_owned());
-            if let Some(Value::Object(dumps)) = map.get("dumps") {
-                lines.extend(dumps.keys().cloned());
-            }
-            lines
-        } else {
-            Vec::new()
+    let inputs: Vec<String> = if map.contains_key("source_format")
+        || map.contains_key("namespace_counts")
+    {
+        column("input")
+    } else if map.contains_key("searched_without_row") {
+        strings(map.get("searched_files"))
+    } else if map.contains_key("aligner_id") {
+        column("aligned_source")
+            .iter()
+            .zip(column("aligned_target"))
+            .map(|(s, t)| format!("{}\t{}", s.replace('-', ""), t.replace('-', "")))
+            .collect()
+    } else if map.contains_key("snapshot_id") {
+        let mut lines = strings(map.get("species"));
+        lines.push("--".to_owned());
+        if let Some(Value::Object(dumps)) = map.get("dumps") {
+            lines.extend(dumps.keys().cloned());
+        }
+        lines
+    } else if map.contains_key("proteins_included") {
+        // genes map-residues: the gene sets' species, sorted, a `--`, then one
+        // `source<TAB>position<TAB>target` per row.
+        let mut lines: Vec<String> = match map.get("gene_sets") {
+            Some(Value::Object(sets)) => sets.keys().cloned().collect(),
+            _ => Vec::new(),
         };
+        lines.sort();
+        lines.push("--".to_owned());
+        let cells = |name: &str| -> Vec<String> {
+            match map.get("columns").and_then(|c| c.get(name)) {
+                Some(Value::Array(values)) => values
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        let (sources, positions, targets) = (
+            cells("source_protein_id"),
+            cells("position"),
+            cells("target_protein_id"),
+        );
+        lines.extend(
+            (0..sources.len()).map(|i| format!("{}\t{}\t{}", sources[i], positions[i], targets[i])),
+        );
+        lines
+    } else if map.contains_key("fitted_count") && map.contains_key("groups") {
+        // library calibrate-rt: one `group<TAB>role<TAB>rt<TAB>irt` per row, the time a query
+        // computes left blank, numbers in Rust's shortest round-trip form.
+        let column = |name: &str| -> Vec<Value> {
+            match map.get("columns").and_then(|c| c.get(name)) {
+                Some(Value::Array(values)) => values.clone(),
+                _ => Vec::new(),
+            }
+        };
+        let number = |value: &Value| {
+            value
+                .as_f64()
+                .map_or_else(String::new, |n| format!("{n:?}"))
+        };
+        let (groups, roles, rts, irts) = (
+            column("group"),
+            column("role"),
+            column("rt_minutes"),
+            column("irt"),
+        );
+        (0..groups.len())
+            .map(|i| {
+                let role = roles[i].as_str().unwrap_or("");
+                let rt = if role == "to_minutes" {
+                    String::new()
+                } else {
+                    number(&rts[i])
+                };
+                let irt = if role == "to_irt" {
+                    String::new()
+                } else {
+                    number(&irts[i])
+                };
+                format!("{}\t{role}\t{rt}\t{irt}", groups[i].as_str().unwrap_or(""))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // The recording's column order, for the rules that ask whether a column is there
     // (`proteins read --sequences`).

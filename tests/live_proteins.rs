@@ -715,3 +715,248 @@ fn orthology_a_malformed_dump_is_mzlibs_correctness_failure() {
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }
+
+// ---- genes map-residues (pyMzLib 0.7.0) -----------------------------------------------------------
+//
+// test_proteins_map_residues_live.py, test for test, over the committed cut of Ensembl release 116
+// in tests/fixtures/map_residues/ (byte for byte: -text). Skips on a bridge without the verb.
+
+use mzlib::proteins::{map_residues_with, ComparaAlignment, GeneTrees, MapResiduesOptions};
+
+const TP53: &str = "ENSP00000269305";
+const TRP53: &str = "ENSMUSP00000104298";
+
+fn map_input(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("map_residues")
+        .join(name)
+}
+
+fn map_options() -> MapResiduesOptions {
+    MapResiduesOptions {
+        alignment: map_input("Compara.116.protein_default.aa.fasta.gz"),
+        gene_trees: map_input("vertebrates.GeneTree_content.default.e116.txt.gz"),
+        gtfs: vec![
+            (
+                "homo_sapiens".into(),
+                map_input("Homo_sapiens.GRCh38.116.gtf"),
+            ),
+            (
+                "mus_musculus".into(),
+                map_input("Mus_musculus.GRCm39.116.gtf"),
+            ),
+            (
+                "rattus_norvegicus".into(),
+                map_input("Rattus_norvegicus.GRCr8.116.gtf"),
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+fn map_recording(name: &str) -> serde_json::Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join(name),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn map_usage(result: mzlib::Result<proteins::ResidueMappings>) -> String {
+    match result {
+        Err(mzlib::MzLibError::Usage(message)) => message,
+        other => panic!("expected a usage error, got {other:?}"),
+    }
+}
+
+#[test]
+fn each_map_residues_recording_is_what_the_bridge_answers_now() {
+    let Some(()) = require_verb("genes map-residues") else {
+        return;
+    };
+    for (fixture, with_proteins) in [
+        ("genes_map_residues_tp53.json", true),
+        ("genes_map_residues_chain.json", false),
+    ] {
+        let recorded = map_recording(fixture);
+        let columns = &recorded["columns"];
+        let text = |name: &str, i: usize| columns[name][i].as_str().unwrap().to_owned();
+        let queries: Vec<(String, i64, String)> = (0..recorded["row_count"].as_u64().unwrap()
+            as usize)
+            .map(|i| {
+                (
+                    text("source_protein_id", i),
+                    columns["position"][i].as_i64().unwrap(),
+                    text("target_protein_id", i),
+                )
+            })
+            .collect();
+        let live = map_residues_with(
+            &queries,
+            &MapResiduesOptions {
+                proteins: with_proteins,
+                ..map_options()
+            },
+        )
+        .unwrap();
+        for name in recorded["column_names"].as_array().unwrap() {
+            let name = name.as_str().unwrap();
+            assert_eq!(
+                serde_json::Value::Array(live.columns.raw(name).unwrap().to_vec()),
+                columns[name],
+                "{fixture} {name}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&live.outcome_counts).unwrap(),
+            recorded["outcome_counts"],
+            "{fixture}"
+        );
+        // Byte-exact inputs (-text), so every sha256 is the recording's.
+        let alignment: ComparaAlignment =
+            serde_json::from_value(recorded["alignment"].clone()).unwrap();
+        assert_eq!(live.alignment, alignment, "{fixture}");
+        let trees: GeneTrees = serde_json::from_value(recorded["gene_trees"].clone()).unwrap();
+        assert_eq!(live.gene_trees, trees, "{fixture}");
+        assert_eq!(
+            serde_json::to_value(&live.caveats).unwrap(),
+            recorded["caveats"],
+            "{fixture}"
+        );
+        match (&live.proteins, recorded["proteins"].is_null()) {
+            (None, true) => {}
+            (Some(kept), false) => {
+                for name in recorded["proteins"]["column_names"].as_array().unwrap() {
+                    let name = name.as_str().unwrap();
+                    assert_eq!(
+                        serde_json::Value::Array(kept.columns.raw(name).unwrap().to_vec()),
+                        recorded["proteins"]["columns"][name],
+                        "{fixture} proteins {name}"
+                    );
+                }
+            }
+            (live, _) => panic!("{fixture}: proteins {live:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_position_past_the_source_fails_the_whole_call_with_mzlibs_message() {
+    let Some(()) = require_verb("genes map-residues") else {
+        return;
+    };
+    // mzLib's MapResidue throws for it (the bridge checks no length), so the first query's answer
+    // is lost too: no row comes back.
+    let message = map_usage(map_residues_with(
+        &[(TP53, 15, TRP53), (TP53, 394, TRP53)],
+        &map_options(),
+    ));
+    assert!(
+        message.contains("Query 2 (ENSP00000269305, position 394, ENSMUSP00000104298)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("ENSP00000269305 has 393 residues."),
+        "mzLib's own words: {message}"
+    );
+    assert!(
+        message.contains("no query of this call was answered"),
+        "{message}"
+    );
+    let message = map_usage(map_residues_with(&[(TP53, 0, TRP53)], &map_options()));
+    assert!(message.contains("has 393 residues"), "{message}");
+}
+
+#[test]
+fn a_source_not_kept_is_an_outcome_before_its_position_is_looked_at() {
+    let Some(()) = require_verb("genes map-residues") else {
+        return;
+    };
+    // MapResidue checks the source before the position, so an unkept source with any position is
+    // SourceNotInAlignment, not a refusal.
+    let mapped = map_residues_with(&[("ENSP00000352610", 100_000, TRP53)], &map_options()).unwrap();
+    assert_eq!(mapped.rows().unwrap()[0].outcome, "SourceNotInAlignment");
+}
+
+#[test]
+fn without_gene_sets_mzlibs_default_keeps_every_gene_and_a_caveat_says_so() {
+    let Some(()) = require_verb("genes map-residues") else {
+        return;
+    };
+    let mapped = map_residues_with(
+        &[(TP53, 15, TRP53)],
+        &MapResiduesOptions {
+            gtfs: Vec::new(),
+            ..map_options()
+        },
+    )
+    .unwrap();
+    assert!(mapped.gene_sets.is_empty());
+    assert_eq!(mapped.gene_trees.restricted_to_gene_sets, None);
+    assert_eq!(
+        mapped.rows().unwrap()[0].target_position,
+        Some(18),
+        "the same answer for the same proteins"
+    );
+    assert!(mapped
+        .caveats
+        .iter()
+        .any(|c| c.contains("No gene sets were given, so mzLib kept every gene")));
+}
+
+#[test]
+fn a_ragged_alignment_is_mzlibs_correctness_failure_and_a_missing_one_a_usage_error() {
+    let Some(()) = require_verb("genes map-residues") else {
+        return;
+    };
+    let scratch =
+        std::env::temp_dir().join(format!("mzlib-live-map-residues-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    // Plain text: mzLib reads the alignment plain or .gz, and this crate carries no gzip writer.
+    let bad = scratch.join("Compara.116.protein_default.aa.fasta");
+    std::fs::write(
+        &bad,
+        ">ENSDARP00000000001\nPEPT\n>ENSDARP00000000002\nPEP\n//\n",
+    )
+    .unwrap();
+    match map_residues_with(
+        &[(TP53, 15, TRP53)],
+        &MapResiduesOptions {
+            alignment: bad,
+            ..map_options()
+        },
+    )
+    .unwrap_err()
+    {
+        mzlib::MzLibError::Bridge {
+            error_type,
+            message,
+        } => {
+            assert_eq!(error_type, "InvalidDataException");
+            assert!(
+                message.contains("is 3 columns wide, the alignment 4"),
+                "{message}"
+            );
+        }
+        other => panic!("expected mzLib's InvalidDataException, got {other:?}"),
+    }
+    let message = map_usage(map_residues_with(
+        &[(TP53, 15, TRP53)],
+        &MapResiduesOptions {
+            alignment: scratch.join("absent.aa.fasta.gz"),
+            ..map_options()
+        },
+    ));
+    assert!(
+        message.contains("Compara gene-tree alignment not found"),
+        "{message}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use mzlib::ptmqtl::{
     occupancy, occupancy_with, pairs, pairs_with, trait_effects, trait_effects_with,
-    OccupancyOptions, PairType, PairsOptions, TraitEffectsOptions,
+    OccupancyOptions, OccupancyScale, PairType, PairsOptions, PtmPairs, TraitEffectsOptions,
 };
 use serde_json::Value;
 use support::require_verb;
@@ -90,6 +90,25 @@ fn check(
     }
 }
 
+/// The settings a pairs call echoes (mzLib's defaults when not given), and the run covariate's
+/// bookkeeping, held to the recording's.
+fn check_pair_echoes(fixture: &str, found: &PtmPairs) {
+    let recorded = recording(fixture);
+    let live = serde_json::json!({
+        "include_bounds": found.include_bounds,
+        "min_untied_share": found.min_untied_share,
+        "exclude_ceiling": found.exclude_ceiling,
+        "run_covariate_name": found.run_covariate_name,
+        "run_covariate_runs_missing": found.run_covariate_runs_missing,
+        "min_runs_for_run_level": found.min_runs_for_run_level,
+    });
+    for (key, value) in live.as_object().unwrap() {
+        if let Some(echo) = recorded.get(key) {
+            assert_eq!(value, echo, "{fixture} {key}");
+        }
+    }
+}
+
 #[test]
 fn the_recordings_are_what_the_bridge_returns_today() {
     let Some(()) = require_verb("ptmqtl occupancy") else {
@@ -149,6 +168,49 @@ fn the_recordings_are_what_the_bridge_returns_today() {
         None,
     );
 
+    // pyMzLib 0.7.0's options: bounds, and a run covariate with and without the run level.
+    for (fixture, observations, options) in [
+        (
+            "ptmqtl_pairs_bounds_plain.json",
+            "bounds.tsv",
+            PairsOptions::default(),
+        ),
+        (
+            "ptmqtl_pairs_bounds.json",
+            "bounds.tsv",
+            PairsOptions {
+                include_bounds: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "ptmqtl_pairs_depth.json",
+            "depth.tsv",
+            PairsOptions::default(),
+        ),
+        (
+            "ptmqtl_pairs_depth_covariate.json",
+            "depth.tsv",
+            PairsOptions {
+                run_covariate: Some(ptmqtl_file("depth_psms.tsv")),
+                ..Default::default()
+            },
+        ),
+        (
+            "ptmqtl_pairs_depth_covariate_run_level.json",
+            "depth.tsv",
+            PairsOptions {
+                run_covariate: Some(ptmqtl_file("depth_psms.tsv")),
+                remove_run_level: true,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let found = pairs_with(ptmqtl_file(observations), PairType::Covarying, &options).unwrap();
+        check(fixture, &found.columns, &found.caveats, None);
+        check_pair_echoes(fixture, &found);
+    }
+
     let fit = trait_effects(
         ptmqtl_file("trait_occupancy.tsv"),
         ptmqtl_file("trait_runs.tsv"),
@@ -174,6 +236,25 @@ fn the_recordings_are_what_the_bridge_returns_today() {
         &fit.columns,
         &fit.caveats,
         Some(("status_counts", counts(&fit.status_counts))),
+    );
+    let fit = trait_effects_with(
+        ptmqtl_file("trait_occupancy.tsv"),
+        ptmqtl_file("trait_runs.tsv"),
+        &TraitEffectsOptions {
+            scale: Some(OccupancyScale::Log2Odds),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    check(
+        "ptmqtl_trait_effects_log2.json",
+        &fit.columns,
+        &fit.caveats,
+        Some(("status_counts", counts(&fit.status_counts))),
+    );
+    assert_eq!(
+        serde_json::json!(fit.scale),
+        recording("ptmqtl_trait_effects_log2.json")["scale"]
     );
 }
 
@@ -314,6 +395,33 @@ fn refusals_cross_as_usage_errors() {
         )
         .unwrap_err(),
         &["above 0 and below 0.5"],
+    );
+    usage(
+        pairs_with(
+            ptmqtl_file("bounds.tsv"),
+            PairType::Physical,
+            &PairsOptions {
+                include_bounds: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err(),
+        &["--include-bounds shapes co-varying pairs only"],
+    );
+    // mzLib refuses a covariate that is not finite, in its own words.
+    let nan = dir.join("nan_psms.tsv");
+    std::fs::write(&nan, "run\ttarget_psms\nr00\tNaN\n").unwrap();
+    usage(
+        pairs_with(
+            ptmqtl_file("depth.tsv"),
+            PairType::Covarying,
+            &PairsOptions {
+                run_covariate: Some(nan),
+                ..Default::default()
+            },
+        )
+        .unwrap_err(),
+        &["must be finite"],
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

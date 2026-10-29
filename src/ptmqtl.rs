@@ -6,7 +6,10 @@
 //! | The same for a sample measured as several fractions? | [`occupancy_with`] with [`OccupancyOptions::samples`] | `SiteOccupancyCalculator.Calculate` with a run-to-sample map |
 //! | Which two modifications sit on one molecule? | [`pairs_with`] with [`PairType::Physical`] | `PtmPairEngine.Physical` |
 //! | Which two sites rise and fall together across runs? | [`pairs_with`] with [`PairType::Covarying`] | `PtmPairEngine.CoVarying` (Spearman, BH) |
+//! | The same, counting runs where a site was seen in only one form? | [`pairs_with`] with [`PairsOptions::include_bounds`] | `PtmPairEngine.CoVarying(includeBounds)`, `PairTestStatus` |
+//! | The same, given each run's depth? | [`pairs_with`] with [`PairsOptions::run_covariate`] | `PtmPairEngine.CoVarying(runCovariate)` |
 //! | Does a site's occupancy change with a per-run trait? | [`trait_effects_with`] | `SiteTraitEffects.Fit` (a mixed model per site) |
+//! | The same, with the effect in log2 odds? | [`trait_effects_with`] with [`TraitEffectsOptions::scale`] | `SiteTraitOptions.Scale`, `OccupancyScale` |
 //!
 //! A modification site is rarely all-or-nothing. In one run 15% of a serine is phosphorylated, in
 //! the next 40%. That fraction, the site's **occupancy**, is what changes with age, dose or
@@ -231,8 +234,123 @@
 //! where a site was seen only modified: two unrelated sites that both read 1 in low-load runs then
 //! correlate through detection alone, which is why mzLib leaves them out by default.
 //! [`PtmPair::test_status`] says why a co-varying pair has no statistic: `not_estimable` (too few
-//! complete runs, or a site constant over them) or `too_few_shared_runs` (with the run level
-//! removed, fewer than [`PtmPairs::min_runs_for_run_level`] runs), one of [`PAIR_TEST_STATUSES`].
+//! complete runs, or a site constant over them), `too_few_shared_runs` (with the run level or a
+//! run covariate removed, fewer than [`PtmPairs::min_runs_for_run_level`] runs) or
+//! `both_sites_mostly_bounds` (next section), one of [`PAIR_TEST_STATUSES`]. An untested pair has
+//! no `statistic`, `p_value` or `q`, and is not in its family's adjustment.
+//!
+//! ### Counting one-form runs as bounds
+//!
+//! A site seen in only one form in a run has no fraction, but it is not missing either. A
+//! `not_detected` cell says the occupancy was below what the run could see; a ceiling says it was
+//! at the top. By default mzLib leaves such runs out of the correlation. A site that is often below
+//! detection then never reaches the 70% guard, and its pairs are never tested.
+//!
+//! [`PairsOptions::include_bounds`] lets those runs in as **tied ranks**, never as invented values
+//! (mzLib #1468). A `not_detected` or `floor` cell ties below every fraction of its site. A ceiling,
+//! or a `count_only` cell whose covering peptidoforms all carry the mark (k of n with k = n), ties
+//! above. A `count_only` cell where both forms were identified has no rank and stays out. The
+//! example is mzLib's `BoundsEnterTypeAAsTiedRanks`: two sites with a value in six of ten runs, and
+//! a bound in the other four.
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::ptmqtl::{pairs, pairs_with, PairType, PairsOptions};
+//!
+//! let plain = pairs("bounds.tsv", PairType::Covarying)?;
+//! assert_eq!((plain.row_count, plain.include_bounds), (0, Some(false)));
+//!
+//! let bounded = pairs_with(
+//!     "bounds.tsv",
+//!     PairType::Covarying,
+//!     &PairsOptions { include_bounds: true, ..Default::default() },
+//! )?;
+//! let pair = &bounded.rows()?[0];
+//! assert_eq!((pair.n, pair.test_status.as_deref(), pair.bounds_included), (9, Some("tested"), true));
+//! assert_eq!(format!("{:.3}", pair.statistic.unwrap()), "0.004");
+//! assert_eq!((bounded.min_untied_share, bounded.exclude_ceiling), (Some(0.5), None));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Six of ten is below the guard, so the plain call tests nothing. With bounds, `BOUND_S` has a
+//! value or a bound in all ten runs and `BOUND_T` in nine, and the pair is tested on the nine they
+//! share. The tenth is `BOUND_T`'s `count_only` cell with both forms identified (1 of 2): it has no
+//! rank. The two sites turn out unrelated (rho 0.004).
+//!
+//! **Too many ties make the test unreliable.** When both sites are mostly one bound, Spearman's t
+//! test calls far too many pairs: in mzLib's simulation, 2 to 5 times the nominal rate at
+//! p < 0.001 with no relation at all. So a pair is tested only if one of its sites has at least
+//! [`PtmPairs::min_untied_share`] (half) of the shared runs outside its largest tie. Otherwise its
+//! [`PtmPair::test_status`] is `both_sites_mostly_bounds`, and it has no p-value.
+//! [`PtmPairs::exclude_ceiling`] stays `None`: with bounds, mzLib treats a ceiling as a high bound,
+//! and [`PairsOptions::keep_ceiling`] gives the same answer.
+//!
+//! ### Given each run's depth
+//!
+//! Shallow runs miss low-abundance forms everywhere at once. With bounds in, that makes
+//! covered-zeros co-occur across unrelated sites, and any site that rises with depth correlates with
+//! every other. [`PairsOptions::run_covariate`] takes a per-run value, such as the run's target
+//! PSMs, and correlates the two sites **given** it: a partial Spearman correlation, as for the run
+//! level. The file is tab-separated, with a header row whose second field names the covariate,
+//! then one row per run (`depth_psms.tsv`, tabs shown as spaces):
+//!
+//! ```text
+//! run   target_psms
+//! r00   9000
+//! r01   12000
+//! ```
+//!
+//! The example is mzLib's `ARunCovariateIsPartialledOut`: twelve runs in two batches, and two sites
+//! that also rise a little with each run's depth.
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::ptmqtl::{pairs, pairs_with, PairType, PairsOptions, PtmPairs};
+//!
+//! let depth_pair = |result: &PtmPairs| -> mzlib::Result<String> {
+//!     let r = result
+//!         .rows()?
+//!         .into_iter()
+//!         .find(|r| r.site_a.starts_with("DEPTH_S") && r.site_b.starts_with("DEPTH_T"))
+//!         .unwrap();
+//!     Ok(format!("rho {:.2}  p {:.3}  n {}", r.statistic.unwrap(), r.p_value.unwrap(), r.n))
+//! };
+//! assert_eq!(depth_pair(&pairs("depth.tsv", PairType::Covarying)?)?, "rho 0.77  p 0.003  n 12");
+//!
+//! let given = pairs_with(
+//!     "depth.tsv",
+//!     PairType::Covarying,
+//!     &PairsOptions { run_covariate: Some("depth_psms.tsv".into()), ..Default::default() },
+//! )?;
+//! assert_eq!(depth_pair(&given)?, "rho 0.76  p 0.006  n 12");
+//! assert_eq!(given.run_covariate_name.as_deref(), Some("target_psms"));
+//! assert_eq!(given.run_covariate_runs_missing.as_deref(), Some(&[][..]));
+//! assert_eq!(given.min_runs_for_run_level, Some(10));
+//!
+//! let both = pairs_with(
+//!     "depth.tsv",
+//!     PairType::Covarying,
+//!     &PairsOptions {
+//!         run_covariate: Some("depth_psms.tsv".into()),
+//!         remove_run_level: true,
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!(depth_pair(&both)?, "rho 0.08  p 0.832  n 12");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Depth alone barely moves rho: in these runs most of the shared rise is the batch. Given the
+//! batch's run level as well, the pair is unrelated. A covariate removes only what it explains.
+//!
+//! - **Any increasing transform gives the same answer.** The covariate is ranked, so target PSMs
+//!   and log2 target PSMs are the same input.
+//! - **Leave a run out for "unknown".** It is then left out of every pair, and listed in
+//!   [`PtmPairs::run_covariate_runs_missing`]. A blank or `NA` value is not "unknown": mzLib refuses
+//!   it, and the call returns [`crate::MzLibError::Usage`].
+//! - **The same floor of shared runs applies.** A pair partial on the covariate is tested only on
+//!   at least [`PtmPairs::min_runs_for_run_level`] shared runs; below that it is
+//!   `too_few_shared_runs`.
 //!
 //! ## Does occupancy change with a trait?
 //!
@@ -280,13 +398,48 @@
 //!
 //! `TRAIT_SITE` recovers the 0.5 it was built with. **`effect` is in logit units per unit of the
 //! trait**, so `0.5_f64.exp()` = 1.65: each dose unit multiplies the odds of the modified form by
-//! about 1.65. [`TraitEffects::scale`] names the scale, `natural_log_odds` by mzLib's default
-//! (mzLib #1464 added `log2_odds`, which this crate does not request yet). The degrees of freedom
-//! are between replicates (six replicates, less the intercept and the dose), because the dose never
-//! varies within a replicate. `CENSORED_SITE` is the same site with one replicate's two runs
-//! replaced by a floor and a ceiling. Both leave the fit — only quantified, non-ceiling cells are
-//! responses — so it rests on five replicates and three degrees of freedom. What it does not tell
-//! you:
+//! about 1.65. [`TraitEffects::scale`] names the scale, `natural_log_odds` by mzLib's default. The
+//! degrees of freedom are between replicates (six replicates, less the intercept and the dose),
+//! because the dose never varies within a replicate. `CENSORED_SITE` is the same site with one
+//! replicate's two runs replaced by a floor and a ceiling. Both leave the fit — only quantified,
+//! non-ceiling cells are responses — so it rests on five replicates and three degrees of freedom.
+//!
+//! **In log2 odds.** Natural-log odds are mzLib's default. [`TraitEffectsOptions::scale`] set to
+//! [`OccupancyScale::Log2Odds`] reports the same fit in log2 odds (mzLib #1464), where an effect of
+//! +1 doubles the odds of the modified form per trait unit:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::ptmqtl::{trait_effects, trait_effects_with, OccupancyScale, TraitEffectsOptions};
+//!
+//! let fit = trait_effects("trait_occupancy.tsv", "trait_runs.tsv")?;
+//! let log2 = trait_effects_with(
+//!     "trait_occupancy.tsv",
+//!     "trait_runs.tsv",
+//!     &TraitEffectsOptions { scale: Some(OccupancyScale::Log2Odds), ..Default::default() },
+//! )?;
+//! assert_eq!((fit.scale.as_str(), log2.scale.as_str()), ("natural_log_odds", "log2_odds"));
+//! for (natural, base2) in fit.rows()?.iter().zip(log2.rows()?) {
+//!     println!(
+//!         "{:<14}{:.3} -> {:.3}  p {:.5} -> {:.5}",
+//!         natural.protein_accession,
+//!         natural.effect.unwrap(),
+//!         base2.effect.unwrap(),
+//!         natural.p_value.unwrap(),
+//!         base2.p_value.unwrap()
+//!     );
+//! }
+//! //   CENSORED_SITE 0.543 -> 0.783  p 0.00361 -> 0.00361
+//! //   TRAIT_SITE    0.501 -> 0.723  p 0.00082 -> 0.00082
+//! let trait_site = &log2.rows()?[1];
+//! assert_eq!(format!("{:.3}", trait_site.effect.unwrap()), "0.723");
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! `TRAIT_SITE`'s 0.50 natural-log units are 0.72 log2 units: 2^0.72 = 1.65, the same odds ratio
+//! per dose unit. mzLib does not refit. It divides the effects and standard errors by ln 2 and the
+//! two variances by (ln 2)², so `df`, `p_value` and `q` are unchanged. Pick the scale your other
+//! results use; the science does not change. What it does not tell you:
 //!
 //! - **Only the modified share.** Floors, count-only and undetected cells are left out, never
 //!   entered as 0. Whether the modification is *detected* more often with the trait is a separate
@@ -339,6 +492,10 @@ pub const PAIR_TEST_STATUSES: [&str; 4] = [
     "both_sites_mostly_bounds",
 ];
 
+/// The wire names of [`OccupancyScale`], in its order: what [`TraitEffectsOptions::scale`] sends
+/// and [`TraitEffects::scale`] reports (mzLib's `OccupancyScale`).
+pub const OCCUPANCY_SCALES: [&str; 2] = ["natural_log_odds", "log2_odds"];
+
 /// Every value of the [`trait_effects_with`] `status` column. Only `"fitted"` rows carry
 /// statistics.
 pub const TRAIT_STATUSES: [&str; 7] = [
@@ -380,6 +537,31 @@ impl PairType {
             Self::Physical => "physical",
             Self::Covarying => "covarying",
             Self::Both => "both",
+        }
+    }
+}
+
+/// The unit [`trait_effects_with`] reports effects and variances in (mzLib's `OccupancyScale`,
+/// #1464). There is no default here: leave [`TraitEffectsOptions::scale`] `None` and mzLib's
+/// applies (`SiteTraitOptions.Scale`, natural-log odds at the pin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OccupancyScale {
+    /// `"natural_log_odds"`: ln(f / (1 - f)), the logit, so `effect.exp()` is the odds ratio per
+    /// trait unit.
+    NaturalLogOdds,
+    /// `"log2_odds"`: log2(f / (1 - f)), so an effect of +1 doubles the odds per trait unit. mzLib
+    /// divides the natural-log fit's effects and standard errors by ln 2 and its variances by
+    /// (ln 2)², and leaves df, p and q unchanged: a change of unit, not a refit.
+    Log2Odds,
+}
+
+impl OccupancyScale {
+    /// The wire name, one of [`OCCUPANCY_SCALES`].
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NaturalLogOdds => "natural_log_odds",
+            Self::Log2Odds => "log2_odds",
         }
     }
 }
@@ -434,6 +616,21 @@ pub struct PairsOptions {
     /// Co-varying only. Keep runs where a site was seen only modified. `false` sends nothing, so
     /// mzLib's default (leave them out) applies.
     pub keep_ceiling: bool,
+    /// Co-varying only. Let a run where a site was seen in only one form enter as a tied bound,
+    /// never an invented value (mzLib's `includeBounds`, #1468): `not_detected` and `floor` cells
+    /// rank below every fraction of the site, ceilings and count-only cells seen only modified
+    /// above; a count-only cell with both forms identified has no rank. A pair whose two sites are
+    /// both mostly one bound is not tested (`"both_sites_mostly_bounds"`). `false` sends nothing, so
+    /// mzLib's default applies (`includeBounds` false at the pin: no bounds), which
+    /// [`PtmPairs::include_bounds`] reports.
+    pub include_bounds: bool,
+    /// Co-varying only. A TSV with a header row whose second field names the covariate (e.g.
+    /// `target_psms`), then `run`, value: each run's (or with [`Self::samples`], each sample's)
+    /// depth, in any unit. Pairs become the partial Spearman correlation given it (mzLib's
+    /// `runCovariate`, #1468); it is ranked, so log2 gives the same answer. Leave a run out for
+    /// "unknown": it is then left out of every pair. A blank, `NA` or `NaN` value is refused by
+    /// mzLib. `None` sends nothing: no covariate.
+    pub run_covariate: Option<PathBuf>,
     /// Co-varying only. Correlate given each run's level — the median occupancy of the other tested
     /// sites of the pair's group — to remove a batch or loading shift. **Batch only**: where the
     /// level follows the design, it removes the effect you study. `false` sends nothing, so mzLib's
@@ -458,6 +655,8 @@ impl Default for PairsOptions {
             categories: None,
             min_quantified_fraction: None,
             keep_ceiling: false,
+            include_bounds: false,
+            run_covariate: None,
             remove_run_level: false,
             run_level_group: None,
             run_level_groups: None,
@@ -484,6 +683,12 @@ pub struct TraitEffectsOptions {
     /// Use runs where the site was seen only modified. `false` sends nothing, so mzLib's default
     /// (leave them out) applies.
     pub keep_ceiling: bool,
+    /// The unit of the effects and variances. [`OccupancyScale::NaturalLogOdds`]: `effect.exp()` is
+    /// the odds ratio per trait unit. [`OccupancyScale::Log2Odds`]: an effect of +1 doubles the
+    /// odds; mzLib divides the natural-log fit by ln 2 (variances by (ln 2)²), and df, p and q do
+    /// not change. `None` sends nothing, so mzLib's default applies (`SiteTraitOptions.Scale`,
+    /// natural-log odds at the pin), which [`TraitEffects::scale`] reports.
+    pub scale: Option<OccupancyScale>,
     /// How long to allow; `None` waits indefinitely. Ten minutes by default.
     pub timeout: Option<Duration>,
 }
@@ -495,6 +700,7 @@ impl Default for TraitEffectsOptions {
             min_replicates: None,
             logit_epsilon: None,
             keep_ceiling: false,
+            scale: None,
             timeout: Some(TIMEOUT),
         }
     }
@@ -718,8 +924,9 @@ pub struct PtmPairs {
     /// crate does not restate that rule to name the value. Also `None` for [`PairType::Physical`].
     #[serde(default)]
     pub exclude_ceiling: Option<bool>,
-    /// Whether runs where a site was seen in only one form entered as tied bounds: mzLib's default
-    /// (`false`) until the crate sends `--include-bounds`. `None` for [`PairType::Physical`].
+    /// Whether runs where a site was seen in only one form entered as tied bounds: `true` with
+    /// [`PairsOptions::include_bounds`], else mzLib's default (`false`). `None` for
+    /// [`PairType::Physical`].
     #[serde(default)]
     pub include_bounds: Option<bool>,
     /// mzLib's `PtmPairEngine.MinUntiedShare`, a fraction of the shared runs (0 to 1): with bounds,
@@ -727,8 +934,8 @@ pub struct PtmPairs {
     /// its largest tie. `None` when bounds were not included (or for [`PairType::Physical`]).
     #[serde(default)]
     pub min_untied_share: Option<f64>,
-    /// Absolute path of the run covariate table, or `None` without one (the crate does not send
-    /// `--run-covariate` yet).
+    /// Absolute path of the run covariate table, or `None` without
+    /// [`PairsOptions::run_covariate`].
     #[serde(default)]
     pub run_covariate_file: Option<String>,
     /// The covariate's name, the run covariate table's second header, or `None` without one.
@@ -926,8 +1133,9 @@ pub struct TraitEffects {
     pub exclude_ceiling: bool,
     /// The scale every effect, standard error and variance is in: `"natural_log_odds"` (mzLib's
     /// default, `SiteTraitOptions.Scale`; the logit, so `effect.exp()` is the odds ratio) or
-    /// `"log2_odds"` (an effect of +1 doubles the odds; mzLib #1464). The crate does not send
-    /// `--scale` yet, so this is mzLib's default. Empty from a bridge before pyMzLib 0.7.0.
+    /// `"log2_odds"` (an effect of +1 doubles the odds; mzLib #1464), one of [`OCCUPANCY_SCALES`]:
+    /// [`TraitEffectsOptions::scale`], or mzLib's default when it was `None`. Empty from a bridge
+    /// before pyMzLib 0.7.0.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub scale: String,
     /// Sites per status, in sites, keyed by [`TRAIT_STATUSES`].
@@ -1153,6 +1361,13 @@ fn pairs_request(
     if options.keep_ceiling {
         args.push("--keep-ceiling".to_owned());
     }
+    if options.include_bounds {
+        args.push("--include-bounds".to_owned());
+    }
+    if let Some(covariate) = &options.run_covariate {
+        args.push("--run-covariate".to_owned());
+        args.push(path_text(covariate, "run_covariate")?);
+    }
     if options.remove_run_level {
         args.push("--remove-run-level".to_owned());
     }
@@ -1201,6 +1416,10 @@ fn trait_effects_request(
     }
     if options.keep_ceiling {
         args.push("--keep-ceiling".to_owned());
+    }
+    if let Some(scale) = options.scale {
+        args.push("--scale".to_owned());
+        args.push(scale.as_str().to_owned());
     }
     Ok(args)
 }
@@ -1297,12 +1516,14 @@ pub fn pairs(observations: impl AsRef<Path>, pair_type: PairType) -> Result<PtmP
 ///   (or oppositely) across runs. `statistic` is Spearman's rho on the runs where both are
 ///   quantified, with a Benjamini-Hochberg `q` per family. Floors, undetected cells and, by
 ///   default, ceilings are left out: two unrelated sites both read 1 in low-load runs, which would
-///   correlate them through detection alone.
+///   correlate them through detection alone. [`PairsOptions::include_bounds`] lets them in as tied
+///   bounds instead, and [`PairsOptions::run_covariate`] correlates given each run's depth.
 ///
 /// `observations` is [`occupancy_with`]'s table, with the same rules; occupancy is computed inside
 /// by the same mzLib call.
 ///
-/// Needs the bridge from pyMzLib 0.6.0 or later.
+/// Needs the bridge from pyMzLib 0.6.0 or later; [`PairsOptions::include_bounds`] and
+/// [`PairsOptions::run_covariate`] need pyMzLib 0.7.0's.
 #[doc = include_str!("../docs/reference/ptmqtl.pairs.md")]
 ///
 /// # Examples
@@ -1328,8 +1549,10 @@ pub fn pairs(observations: impl AsRef<Path>, pair_type: PairType) -> Result<PtmP
 /// empty list or holds a blank name or one with a tab or line break,
 /// [`PairsOptions::run_level_group`] is not one of [`RUN_LEVEL_GROUPS`],
 /// [`PairsOptions::min_quantified_fraction`] is not finite, a path is blank or not UTF-8, or the
-/// bridge predates the verb. A co-varying option with [`PairType::Physical`], a run-level grouping
-/// without [`PairsOptions::remove_run_level`], and both groupings are the bridge's refusals.
+/// bridge predates the verb. A co-varying option with [`PairType::Physical`] (among them
+/// [`PairsOptions::include_bounds`] and [`PairsOptions::run_covariate`]), a run-level grouping
+/// without [`PairsOptions::remove_run_level`], and both groupings are the bridge's refusals; a run
+/// covariate value that is not finite is mzLib's.
 #[doc = include_str!("../docs/reference/ptmqtl.pairs.see-also.md")]
 pub fn pairs_with(
     observations: impl AsRef<Path>,
@@ -1366,7 +1589,8 @@ pub fn trait_effects(occupancy: impl AsRef<Path>, runs: impl AsRef<Path>) -> Res
 /// one row per run: the run, its biological replicate, the trait (its header names it; any unit),
 /// then any covariates (each header names one). A run with a blank trait is not used.
 ///
-/// Needs the bridge from pyMzLib 0.6.0 or later.
+/// Needs the bridge from pyMzLib 0.6.0 or later; [`TraitEffectsOptions::scale`] needs pyMzLib
+/// 0.7.0's.
 #[doc = include_str!("../docs/reference/ptmqtl.trait-effects.md")]
 ///
 /// # Examples
@@ -1415,6 +1639,14 @@ mod tests {
     const RUN_LEVEL: &str = include_str!("../tests/fixtures/ptmqtl_pairs_batch_run_level.json");
     const EFFECTS: &str = include_str!("../tests/fixtures/ptmqtl_trait_effects.json");
     const STRICT: &str = include_str!("../tests/fixtures/ptmqtl_trait_effects_strict.json");
+    const LOG2: &str = include_str!("../tests/fixtures/ptmqtl_trait_effects_log2.json");
+    const BOUNDS_PLAIN: &str = include_str!("../tests/fixtures/ptmqtl_pairs_bounds_plain.json");
+    const BOUNDS: &str = include_str!("../tests/fixtures/ptmqtl_pairs_bounds.json");
+    const DEPTH: &str = include_str!("../tests/fixtures/ptmqtl_pairs_depth.json");
+    const DEPTH_COVARIATE: &str =
+        include_str!("../tests/fixtures/ptmqtl_pairs_depth_covariate.json");
+    const DEPTH_BOTH: &str =
+        include_str!("../tests/fixtures/ptmqtl_pairs_depth_covariate_run_level.json");
 
     #[test]
     fn occupancy_sends_only_what_was_given() {
@@ -1596,6 +1828,40 @@ mod tests {
                 "groups.tsv"
             ]
         );
+        let args = pairs_request(
+            Path::new("depth.tsv"),
+            PairType::Covarying,
+            &PairsOptions {
+                include_bounds: true,
+                run_covariate: Some("psms.tsv".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "ptmqtl",
+                "pairs",
+                "--observations",
+                "depth.tsv",
+                "--type",
+                "covarying",
+                "--include-bounds",
+                "--run-covariate",
+                "psms.tsv"
+            ]
+        );
+        // Left out, neither is sent: mzLib's defaults (no bounds, no covariate) apply.
+        let plain = pairs_request(
+            Path::new("o.tsv"),
+            PairType::Covarying,
+            &PairsOptions::default(),
+        )
+        .unwrap();
+        assert!(!plain
+            .iter()
+            .any(|a| a == "--include-bounds" || a == "--run-covariate"));
     }
 
     #[test]
@@ -1614,11 +1880,87 @@ mod tests {
                 categories: Some(vec!["b".into()]),
                 ..Default::default()
             },
+            PairsOptions {
+                run_covariate: Some(" ".into()),
+                ..Default::default()
+            },
         ] {
             let error =
                 pairs_request(Path::new("o.tsv"), PairType::Covarying, &options).unwrap_err();
             assert!(matches!(error, MzLibError::Usage(_)), "{options:?}");
         }
+    }
+
+    #[test]
+    fn pairs_with_bounds_tests_what_the_guard_kept_out() {
+        // mzLib's BoundsEnterTypeAAsTiedRanks: six values in ten runs is below the 70% guard.
+        let plain: PtmPairs = serde_json::from_str(BOUNDS_PLAIN).unwrap();
+        assert_eq!(
+            (
+                plain.row_count,
+                plain.include_bounds,
+                plain.min_untied_share
+            ),
+            (0, Some(false), None)
+        );
+        let bounded: PtmPairs = serde_json::from_str(BOUNDS).unwrap();
+        assert_eq!(
+            (bounded.include_bounds, bounded.min_untied_share),
+            (Some(true), Some(0.5))
+        );
+        assert_eq!(bounded.exclude_ceiling, None);
+        let rows = bounded.rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        let pair = &rows[0];
+        assert_eq!(
+            (pair.n, pair.test_status.as_deref(), pair.bounds_included),
+            (9, Some("tested"), true)
+        );
+        assert!(pair.statistic.is_some() && !pair.run_covariate_removed);
+        assert!(bounded
+            .caveats
+            .iter()
+            .any(|c| c.starts_with("With --include-bounds, a pair is tested only if")));
+    }
+
+    #[test]
+    fn pairs_given_a_run_covariate() {
+        // mzLib's ARunCovariateIsPartialledOut: two sites that rise with each run's depth and a batch.
+        let pair = |result: &PtmPairs| -> PtmPair {
+            result
+                .rows()
+                .unwrap()
+                .into_iter()
+                .find(|r| r.site_a.starts_with("DEPTH_S") && r.site_b.starts_with("DEPTH_T"))
+                .unwrap()
+        };
+        let plain: PtmPairs = serde_json::from_str(DEPTH).unwrap();
+        assert_eq!(
+            (
+                plain.run_covariate_file.as_deref(),
+                plain.run_covariate_name.as_deref()
+            ),
+            (None, None)
+        );
+        assert!(!pair(&plain).run_covariate_removed);
+
+        let given: PtmPairs = serde_json::from_str(DEPTH_COVARIATE).unwrap();
+        assert!(given
+            .run_covariate_file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("depth_psms.tsv")));
+        assert_eq!(given.run_covariate_name.as_deref(), Some("target_psms"));
+        assert_eq!(given.run_covariate_runs_missing, Some(Vec::new()));
+        assert_eq!(
+            (given.min_runs_for_run_level, given.min_sites_for_run_level),
+            (Some(10), None)
+        );
+        assert!(pair(&given).run_covariate_removed && !pair(&given).run_level_removed);
+        assert_ne!(pair(&given).statistic, pair(&plain).statistic);
+
+        let both: PtmPairs = serde_json::from_str(DEPTH_BOTH).unwrap();
+        assert!(pair(&both).run_covariate_removed && pair(&both).run_level_removed);
+        assert!(pair(&both).statistic.unwrap().abs() < 0.1);
     }
 
     #[test]
@@ -1730,6 +2072,20 @@ mod tests {
                 "--keep-ceiling"
             ]
         );
+        let args = trait_effects_request(
+            Path::new("occ.tsv"),
+            Path::new("runs.tsv"),
+            &TraitEffectsOptions {
+                scale: Some(OccupancyScale::Log2Odds),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(&args[6..], ["--scale", "log2_odds"]);
+        assert_eq!(
+            [OccupancyScale::NaturalLogOdds, OccupancyScale::Log2Odds].map(OccupancyScale::as_str),
+            OCCUPANCY_SCALES
+        );
         assert!(trait_effects_request(
             Path::new("occ.tsv"),
             Path::new(""),
@@ -1758,5 +2114,35 @@ mod tests {
             (below.effect, below.df, below.p_value, below.q),
             (None, None, None, None)
         );
+    }
+
+    #[test]
+    fn trait_effects_on_log2_odds_is_the_natural_fit_over_ln2() {
+        // mzLib's TraitFitOnLog2OddsIsTheNaturalLogFitDividedByLn2: a change of unit, not a refit.
+        let natural: TraitEffects = serde_json::from_str(EFFECTS).unwrap();
+        let log2: TraitEffects = serde_json::from_str(LOG2).unwrap();
+        assert_eq!(log2.scale, "log2_odds");
+        assert!(log2
+            .caveats
+            .iter()
+            .any(|c| c.starts_with("scale is log2_odds")));
+        let close = |a: Option<f64>, b: Option<f64>| {
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert!((a - b).abs() <= 1e-12 * b.abs(), "{a} {b}");
+        };
+        let ln2 = std::f64::consts::LN_2;
+        let natural_rows = natural.rows().unwrap();
+        let log2_rows = log2.rows().unwrap();
+        assert_eq!(natural_rows.len(), log2_rows.len());
+        for (n, r) in natural_rows.iter().zip(&log2_rows) {
+            assert_eq!(n.site_key, r.site_key);
+            close(r.effect, n.effect.map(|e| e / ln2));
+            close(r.standard_error, n.standard_error.map(|e| e / ln2));
+            close(
+                r.replicate_variance,
+                n.replicate_variance.map(|v| v / (ln2 * ln2)),
+            );
+            assert_eq!((r.df, r.p_value, r.q), (n.df, n.p_value, n.q));
+        }
     }
 }

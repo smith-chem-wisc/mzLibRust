@@ -1,6 +1,7 @@
 //! Differential abundance with no R: limma's moderated t-test with contrasts, Benjamini-Hochberg,
 //! random-effects meta-analysis, p-value combination, Spearman correlation, logistic and mixed
-//! models, and entrapment FDP estimates, computed by mzLib.
+//! models (also on a latent scale, with counted samples), and entrapment FDP estimates, computed by
+//! mzLib.
 //!
 //! | You want to know | Call | mzLib computes it with |
 //! |---|---|---|
@@ -12,19 +13,22 @@
 //! | Which features rise or fall with a per-sample trait? | [`correlate_with`] | `SpearmanCorrelation.Correlate` / `.PartialCorrelate` |
 //! | Does a 0/1 outcome (detected or not) follow a coefficient? | [`fit_logistic_with`] | `LogisticRegression.Fit` |
 //! | Which features change, when samples come in groups? | [`fit_mixed_with`] | `MixedModel.Fit` (a random intercept per group) |
+//! | The same, when some samples are counted (k of n trials)? | [`fit_latent_mixed_with`] | `LogitNormalMixedModel.Fit` |
+//! | How does a count's chance of success follow the latent? | [`fit_link_with`] | `LogitNormalMixedModel.FitLink` |
 //! | Does a search really control its FDR (entrapment)? | [`entrapment_fdp_with`] | `EntrapmentFdp.Sweep` |
 //!
 //! Every number on this page is mzLib's (`StatisticalModels`, mzLib #1341, #1357, #1367, #1368,
-//! #1385, #1446 and #1452). This crate sends your tables to the bridge and types what comes back; it
-//! does no arithmetic of its own.
+//! #1385, #1446, #1452 and #1469). This crate sends your tables to the bridge and types what comes
+//! back; it does no arithmetic of its own.
 //!
 //! [`fit_with`] already adjusts its own p-values, so you need [`adjust`] only for p-values from
 //! somewhere else, and [`meta_with`] only when you have one estimate per study. [`combine_p`] is for
 //! when you have only p-values (and the direction of each effect), and [`correlate_with`] for a trait
 //! measured on a scale rather than in groups. [`fit_logistic_with`] models a yes/no outcome, such as
 //! whether a protein was detected; [`fit_mixed_with`] is [`fit_with`] for samples that share a
-//! baseline within groups; and [`entrapment_fdp_with`] checks a search's identifications rather than
-//! its quantities.
+//! baseline within groups; [`fit_latent_mixed_with`] is [`fit_mixed_with`] on a latent scale when
+//! some samples are only counted, with [`fit_link_with`] to fit how the counts follow that scale;
+//! and [`entrapment_fdp_with`] checks a search's identifications rather than its quantities.
 //!
 //! ## It is limma, checked
 //!
@@ -552,6 +556,188 @@
 //! - `log_likelihood` is restricted under `"reml"`; pass [`FitMixedOptions::estimator`] `"ml"` to
 //!   compare designs.
 //!
+//! ## When some samples are only counted
+//!
+//! Some quantities are measured in some runs and only counted in others. A PTM site's occupancy is
+//! the usual case: where the modified and unmodified peptides were both quantified, you have a
+//! number; where they were not, you may know only that 3 of 8 covering peptidoforms carried the
+//! modification. [`fit_mixed_with`] has to drop the counted runs. [`fit_latent_mixed_with`], mzLib's
+//! `LogitNormalMixedModel.Fit` (mzLib #1469), uses both kinds.
+//!
+//! It models a **latent** value per run, such as the log-odds of the site's occupancy, with
+//! [`fit_mixed_with`]'s structure: fixed effects from your design, a random intercept per group (an
+//! animal, a donor), and run-to-run scatter. A measured run reads the latent value. A counted run
+//! has k of its n trials succeed, each with a chance g set by the latent value through a **link**:
+//! logit g = intercept + slope x latent + depth_slope x depth. With the identity link (0, 1), a
+//! count samples the same probability a measurement reads. The model is a binomial generalized
+//! linear mixed model (Breslow and Clayton 1993), the kind R users fit with `lme4::glmer`.
+//!
+//! **You choose which cells are counted, and the link.** This crate builds neither. mzLib's
+//! PTM-QTL code does not yet do it either, so the counts table is yours to write.
+//!
+//! mzLib's own test of this model simulates 16 animals of 4 runs each, with a trait that is 0 or 1
+//! per animal and a true trait effect of 1.0 on the latent scale. Every other run is measured; the
+//! rest are counted, 5 trials each, through the link (0.4, 0.6). The crate ships three of those
+//! simulations, one per feature. The counts table has the responses table's layout, each cell
+//! `successes/trials`:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # let counts_file = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/stats/lnmm_simulated_counts.tsv");
+//! use mzlib::stats::{fit_latent_mixed_with, fit_mixed, DetectionLink, FitLatentMixedOptions};
+//!
+//! let text = std::fs::read_to_string(counts_file).unwrap();
+//! let rows: Vec<Vec<&str>> = text.lines().map(|line| line.split('\t').collect()).collect();
+//! assert_eq!(rows[0][..5], ["feature", "s1", "s2", "s3", "s4"]);
+//! assert_eq!(rows[1][..5], ["seed1", "", "3/5", "", "2/5"]);
+//!
+//! let latent = fit_latent_mixed_with(
+//!     "lnmm_simulated_design.tsv",
+//!     "lnmm_simulated_groups.tsv",
+//!     &["Intercept", "trait"],
+//!     [0.4, 0.6],
+//!     &FitLatentMixedOptions {
+//!         responses: Some("lnmm_simulated_responses.tsv".into()),
+//!         counts: Some("lnmm_simulated_counts.tsv".into()),
+//!         ..Default::default()
+//!     },
+//! )?;
+//! assert_eq!((latent.measured_cells, latent.counted_cells, latent.estimator.as_str()), (96, 96, "reml"));
+//! // What mzLib used: the two numbers given, and its defaults for the rest.
+//! let used = DetectionLink { intercept: 0.4, slope: 0.6, depth_slope: 0.0, overdispersion: 0.0 };
+//! assert_eq!(latent.link, used);
+//!
+//! // The measured runs alone, with fit_mixed.
+//! let measured = fit_mixed(
+//!     "lnmm_simulated_responses.tsv",
+//!     "lnmm_simulated_design.tsv",
+//!     "lnmm_simulated_groups.tsv",
+//!     &["Intercept", "trait"],
+//! )?;
+//! for (ours, theirs) in latent.rows("trait")?.iter().zip(measured.rows("trait")?) {
+//!     println!(
+//!         "{}  fit_latent_mixed {:+.2} +- {:.2} ({} + {} runs)   fit_mixed {:+.2} +- {:.2} ({} runs)",
+//!         ours.feature, ours.estimate.unwrap(), ours.standard_error.unwrap(), ours.measured,
+//!         ours.counted, theirs.estimate.unwrap(), theirs.standard_error.unwrap(), theirs.observed
+//!     );
+//! }
+//! //   seed1  fit_latent_mixed +1.61 +- 0.33 (32 + 32 runs)   fit_mixed +1.63 +- 0.33 (32 runs)
+//! //   seed2  fit_latent_mixed +0.73 +- 0.26 (32 + 32 runs)   fit_mixed +0.77 +- 0.27 (32 runs)
+//! //   seed3  fit_latent_mixed +1.26 +- 0.28 (32 + 32 runs)   fit_mixed +1.36 +- 0.28 (32 runs)
+//! let latent_df: Vec<Option<f64>> = latent.rows("Intercept")?.iter().map(|r| r.df).collect();
+//! let measured_df: Vec<Option<f64>> = measured.rows("Intercept")?.iter().map(|r| r.df).collect();
+//! assert_eq!((latent_df, measured_df), (vec![Some(48.0); 3], vec![Some(16.0); 3]));
+//!
+//! // Every trait estimate is within 2 standard errors of the true 1.0 (mzLib's own test asks for 3).
+//! assert!(latent
+//!     .rows("trait")?
+//!     .iter()
+//!     .all(|r| (r.estimate.unwrap() - 1.0).abs() < 2.0 * r.standard_error.unwrap()));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! [`LatentMixedModelFit::link`] echoes what mzLib used: the depth slope and overdispersion were
+//! not given, so they are mzLib's defaults. **The counted runs barely shrink the trait's standard
+//! error, and that is correct.** The trait is constant within each animal, so it is tested between
+//! animals, on 16 animals minus 2 coefficients, 14 df in both fits. More runs per animal sharpen
+//! each animal's baseline, but the number of animals limits how sure you can be about the trait.
+//! Effects that vary within animals gain more: the intercept is tested on 48 df with the counts,
+//! against 16 without.
+//!
+//! What each row says, beyond [`fit_mixed_with`]'s columns ([`LatentMixedRow`]):
+//!
+//! - `estimate` and `standard_error` are on the **latent** scale: natural log-odds here, so
+//!   `estimate.exp()` is an odds ratio of occupancy.
+//! - `measured` and `counted` are the runs of each kind the feature contributed. `df` counts both.
+//! - `residual_variance_given` is `true` when sigma² came from your
+//!   [`FitLatentMixedOptions::residual_variance`] table rather than the fit. Give it for a feature
+//!   with too few measured runs to estimate its scatter.
+//! - `status` can be `separated`: the counts are split by the design (every run of one group all
+//!   0, of another all full), so the estimate runs to infinity. You get the status, never a p-value.
+//!
+//! **Check it against lme4 and glmmTMB.** mzLib's reference input is 16 simulated features over 23
+//! runs in 8 animals, every run counted, through the link (-0.4, 0.6, 0.3) with a depth term, and
+//! R's `glmer` fit of each with 25-point adaptive quadrature. [`fit_latent_mixed_with`]'s example
+//! holds every estimate to within 1e-5 of glmer's standard error from glmer's own. With run-to-run
+//! scatter estimated from counts alone, the reference is `glmmTMB`, which integrates by a Laplace
+//! approximation where mzLib uses quadrature, so they agree to about 1%:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # let tmb_output = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/stats/lnmm_scatter_fit.tsv");
+//! use mzlib::stats::{fit_latent_mixed_with, FitLatentMixedOptions, Link};
+//!
+//! let scatter = fit_latent_mixed_with(
+//!     "lnmm_reference_design.tsv",
+//!     "lnmm_reference_groups.tsv",
+//!     &["Intercept", "trait", "x"],
+//!     Link::Identity,
+//!     &FitLatentMixedOptions { counts: Some("lnmm_scatter_counts.tsv".into()), ..Default::default() },
+//! )?;
+//! let text = std::fs::read_to_string(tmb_output).unwrap();
+//! let mut lines = text.lines();
+//! let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+//! let column = |name: &str| header.iter().position(|h| *h == name).unwrap();
+//! let tmb: Vec<Vec<&str>> =
+//!     lines.map(|l| l.split('\t').collect::<Vec<_>>()).filter(|r| r[column("method")] == "REML").collect();
+//! let worst = |ours: Vec<f64>, theirs: &str| -> f64 {
+//!     ours.iter()
+//!         .zip(&tmb)
+//!         .map(|(o, r)| {
+//!             let t: f64 = r[column(theirs)].parse().unwrap();
+//!             (o - t).abs() / t
+//!         })
+//!         .fold(0.0, f64::max)
+//! };
+//! let rows = scatter.rows("trait")?;
+//! assert!(worst(rows.iter().map(|r| r.group_variance.unwrap()).collect(), "tau2") < 0.03);
+//! assert!(worst(rows.iter().map(|r| r.standard_error.unwrap()).collect(), "se1") < 0.03);
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! ### Fitting the link
+//!
+//! The identity link says a count samples the very probability a measurement reads. Often it does
+//! not: whether a modified form is seen at all depends on how much of it there is, not only on its
+//! share. [`fit_link_with`] fits the link from **cells**: each with a count and the normal its
+//! latent value is taken to sit at (a mean and an SD, such as its feature's mean and SD over the
+//! measured runs, mzLib's own suggestion). By default it fits on **detection**: whether any trial
+//! succeeded, the event that makes a covered zero. mzLib's own test of `FitLink` simulates 4,000
+//! cells through the link (-0.5, 0.5, 0.3) with a depth term:
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::stats::{fit_link_with, FitLinkOptions};
+//!
+//! let fit = fit_link_with("link_cells.tsv", &FitLinkOptions { with_depth: Some(true), ..Default::default() })?;
+//! assert_eq!(
+//!     (fit.cell_count, fit.with_depth, fit.with_overdispersion, fit.detection_only),
+//!     (4000, true, false, true)
+//! );
+//! let link = fit.link.expect("the search converged");
+//! let two = |x: f64| (x * 100.0).round() / 100.0;
+//! assert_eq!((two(link.intercept), two(link.slope), two(link.depth_slope)), (-0.51, 0.51, 0.33));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! The link is recovered from detection alone. `with_overdispersion` and `detection_only` were left
+//! `None`, so they are mzLib's defaults, which the result reports. [`LinkFit::link`] goes straight
+//! into [`fit_latent_mixed_with`] as its `link`: it is `None` only when mzLib's search did not
+//! converge. Before you trust a latent-scale mixed model:
+//!
+//! - **The inputs are on the latent scale.** Send logit occupancy, not a fraction or an intensity.
+//! - **The link is a modelling choice.** The identity link assumes a count samples the latent value
+//!   itself; a fitted one depends on the cells you chose.
+//! - **Standard errors are at the estimated variances.** They do not include those variances' own
+//!   uncertainty, so they are not `glmmTMB`'s `vcov()`.
+//! - **Under `"reml"`, the fixed effects are integrated out by a Laplace approximation,** as
+//!   `glmmTMB`'s `REML = TRUE` does. With nothing counted it is exactly [`fit_mixed_with`]'s REML,
+//!   and the two agree to about 1e-5. Under `"ml"`, estimates and variances agree with
+//!   [`fit_mixed_with`]'s, but its standard errors are scaled differently.
+//! - **The integrals are adaptive Gauss-Hermite quadrature** (Liu and Pierce 1994): 40 nodes over
+//!   each animal's baseline, 12 over each count's run scatter, as `glmer`'s `nAGQ`.
+//! - **Not adjusted across features.** Send `p_value` to [`adjust`].
+//!
 //! ## Does a search really control its FDR?
 //!
 //! A search engine reports q-values, and a 1% threshold should mean that about 1% of the
@@ -610,6 +796,9 @@
 //!   [`correlate_with`] does not report how many covariates mzLib kept. **[`fit_logistic_with`] has
 //!   no Firth correction** and **[`fit_mixed_with`] one random intercept**. None of them adjusts
 //!   across features: that is [`adjust`].
+//! - **[`fit_latent_mixed_with`] does not build the counts or choose the link.** Which cells are
+//!   counted, and the link, are yours; [`fit_link_with`] returns a point estimate with no standard
+//!   errors.
 //! - **[`entrapment_fdp_with`] estimates; it does not build the entrapment database**, and has no
 //!   k-fold paired estimator.
 //!
@@ -672,6 +861,23 @@ pub const MIXED_STATUSES: [&str; 6] = [
 /// The variance estimators [`FitMixedOptions::estimator`] takes: mzLib's `VarianceEstimator` `Reml`
 /// and `MaximumLikelihood`. Leave the option `None` for mzLib's default.
 pub const MIXED_ESTIMATORS: [&str; 2] = ["reml", "ml"];
+
+/// Every value of [`fit_latent_mixed_with`]'s `status` column: the outcomes mzLib's
+/// `LogitNormalMixedModel.Fit` can give a feature, read from its code (mzLib does not list them per
+/// model yet, mzLib #1487). It never reports `variance_ratio_at_limit`. Only `"fitted"` rows carry
+/// statistics.
+pub const LATENT_MIXED_STATUSES: [&str; 6] = [
+    "fitted",
+    "too_few_observations",
+    "rank_deficient",
+    "separated",
+    "not_converged",
+    "too_few_groups",
+];
+
+/// The pyMzLib release whose bridge first has `stats fit-latent-mixed` and `stats fit-link`
+/// (mzLib 1.0.596): their specs' `since.pymzlib`.
+const MZLIB_1_0_596_BRIDGE: &str = "0.7.0";
 
 /// The pyMzLib release whose bridge first has `stats combine-p`, `correlate`, `fit-logistic`,
 /// `fit-mixed` and `entrapment-fdp`, and whose `stats fit` first reads `--contrasts`, `--confidence`
@@ -1547,6 +1753,318 @@ impl MixedModelFit {
     }
 }
 
+/// How a latent value sets the chance that one trial of a counted cell succeeds: mzLib's
+/// `DetectionLink`.
+///
+/// logit g = [`Self::intercept`] + [`Self::slope`] x latent + [`Self::depth_slope`] x depth, and the
+/// trials of one cell are correlated by [`Self::overdispersion`] (a beta-binomial; 0 is the
+/// binomial). Every number is in natural log-odds. [`fit_link_with`] returns one
+/// ([`LinkFit::link`]); [`fit_latent_mixed_with`] takes one as its `link`, and echoes the one it
+/// used ([`LatentMixedModelFit::link`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+pub struct DetectionLink {
+    /// a, the per-trial log-odds at latent 0 and depth 0, in natural log-odds.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub intercept: f64,
+    /// b, how fast the per-trial log-odds follow the latent, in natural log-odds per latent unit: 1
+    /// for the identity link, below 1 when the chance of a success rises more slowly than the latent.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub slope: f64,
+    /// c, the depth term's coefficient, in natural log-odds per depth unit; 0 when the link has none
+    /// (exactly 0 from [`fit_link_with`] when the depth slope was not fitted).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub depth_slope: f64,
+    /// rho, the correlation of the trials within one cell, a fraction (intra-cell correlation, 0 to
+    /// below 1); 0 is the binomial (exactly 0 from [`fit_link_with`] when it was not fitted).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub overdispersion: f64,
+}
+
+/// The `link` [`fit_latent_mixed_with`] reads every count through (mzLib's `DetectionLink`, in
+/// natural log-odds). There is no default: mzLib has none.
+///
+/// Build one from a [`DetectionLink`] (such as [`fit_link_with`]'s [`LinkFit::link`]), or from 2 to
+/// 4 numbers `[intercept, slope, depth_slope, overdispersion]`: a number left out is sent as
+/// nothing, so it is mzLib's own default (0 at the pin).
+///
+/// ```
+/// use mzlib::stats::{DetectionLink, Link};
+///
+/// assert_eq!(Link::from([-0.4, 0.6, 0.3]), Link::Numbers(vec![-0.4, 0.6, 0.3]));
+/// let fitted = DetectionLink { intercept: 0.1, slope: 0.9, depth_slope: 0.0, overdispersion: 0.0 };
+/// assert_eq!(Link::from(fitted), Link::Numbers(vec![0.1, 0.9, 0.0, 0.0]));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum Link {
+    /// `"identity"`: mzLib's `DetectionLink.Identity`, intercept 0 and slope 1. A count then
+    /// samples the same probability a measurement reads.
+    Identity,
+    /// 2 to 4 numbers, in natural log-odds: intercept, slope, then optionally depth slope and
+    /// overdispersion. Sent comma-separated, only those given.
+    Numbers(Vec<f64>),
+}
+
+impl From<DetectionLink> for Link {
+    fn from(link: DetectionLink) -> Self {
+        Self::Numbers(vec![
+            link.intercept,
+            link.slope,
+            link.depth_slope,
+            link.overdispersion,
+        ])
+    }
+}
+
+impl From<&DetectionLink> for Link {
+    fn from(link: &DetectionLink) -> Self {
+        Self::from(*link)
+    }
+}
+
+impl From<[f64; 2]> for Link {
+    fn from(numbers: [f64; 2]) -> Self {
+        Self::Numbers(numbers.to_vec())
+    }
+}
+
+impl From<[f64; 3]> for Link {
+    fn from(numbers: [f64; 3]) -> Self {
+        Self::Numbers(numbers.to_vec())
+    }
+}
+
+impl From<[f64; 4]> for Link {
+    fn from(numbers: [f64; 4]) -> Self {
+        Self::Numbers(numbers.to_vec())
+    }
+}
+
+/// What [`fit_link_with`] returns: the detection link mzLib fitted, and how.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LinkFit {
+    /// Absolute path of the cells table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub cells_file: String,
+    /// Rows read, in cells.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub cell_count: u64,
+    /// Whether the cells file has a `depth` column.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub depth_given: bool,
+    /// Whether the depth slope was fitted: [`FitLinkOptions::with_depth`], else mzLib's declared
+    /// default.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub with_depth: bool,
+    /// Whether rho was fitted: [`FitLinkOptions::with_overdispersion`], else mzLib's declared
+    /// default.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub with_overdispersion: bool,
+    /// Whether the fit was on detection (any success or none) rather than on the full counts:
+    /// [`FitLinkOptions::detection_only`], else mzLib's declared default.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub detection_only: bool,
+    /// The fitted [`DetectionLink`], ready for [`fit_latent_mixed_with`]'s `link`; `None` when
+    /// mzLib's search did not converge within its iteration limit (`FitLink` returned null).
+    #[serde(default)]
+    pub link: Option<DetectionLink>,
+    /// What the fit is and is not, plus one each when the depth slope or overdispersion was not
+    /// fitted, when the depth slope was fitted without a depth column, and when the search did not
+    /// converge.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// What [`fit_latent_mixed_with`] returns: one row per (reported coefficient, feature).
+///
+/// [`Self::columns`] holds one block of [`Self::feature_count`] rows per coefficient you named, in
+/// that order, each block in the feature order of the responses file (of the counts file, without
+/// one); [`Self::rows`] gives one coefficient's block as typed [`LatentMixedRow`]s.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LatentMixedModelFit {
+    /// Absolute path of the responses table, or `None` without
+    /// [`FitLatentMixedOptions::responses`]: nothing was measured.
+    #[serde(default)]
+    pub responses_file: Option<String>,
+    /// Absolute path of the counts table, or `None` without [`FitLatentMixedOptions::counts`]:
+    /// nothing was counted.
+    #[serde(default)]
+    pub counts_file: Option<String>,
+    /// Absolute path of the design table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub design_file: String,
+    /// Absolute path of the groups table.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub groups_file: String,
+    /// Absolute path of the depth table, or `None`: no [`FitLatentMixedOptions::depth`] was given.
+    #[serde(default)]
+    pub depth_file: Option<String>,
+    /// Absolute path of the residual-variance table, or `None` without
+    /// [`FitLatentMixedOptions::residual_variance`]: every sigma² was estimated.
+    #[serde(default)]
+    pub residual_variance_file: Option<String>,
+    /// The groups file's label column header, e.g. `"animal"`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub grouping: String,
+    /// The distinct labels, in order of first appearance over the samples.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub group_names: Vec<String>,
+    /// Distinct labels over all samples, in groups. A feature's own count is
+    /// [`LatentMixedRow::groups`].
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub group_count: u64,
+    /// Feature rows read, in features.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub feature_count: u64,
+    /// Sample columns read, in samples.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sample_count: u64,
+    /// The samples, in the responses header's order (the counts header's, without responses).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sample_names: Vec<String>,
+    /// Every design column, in order: the model always fits all of them.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub coefficient_names: Vec<String>,
+    /// The coefficients you asked to report, in order.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub tested_coefficients: Vec<String>,
+    /// `"reml"` or `"ml"`, one of [`MIXED_ESTIMATORS`]: the estimator mzLib reports it fitted with,
+    /// its default when [`FitLatentMixedOptions::estimator`] was `None`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub estimator: String,
+    /// The [`DetectionLink`] every count was read through, as mzLib reports it: a number you left
+    /// out of the `link` is mzLib's default here.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub link: DetectionLink,
+    /// The thread count used, in threads; the answer is identical at any count.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub threads: i64,
+    /// Feature x sample cells with a finite response, in cells.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub measured_cells: u64,
+    /// Feature x sample cells with a count, in cells.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub counted_cells: u64,
+    /// Cells with neither a response nor a count, in cells, left out of their feature's fit.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub missing_count: u64,
+    /// Features per status, in features, keyed by [`LATENT_MIXED_STATUSES`], every key present. The
+    /// keys are the bridge's reading of mzLib's code, a stop-gap until mzLib says per model (mzLib
+    /// #1487).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub status_counts: BTreeMap<String, u64>,
+    /// Rows in the table, in rows: [`Self::feature_count`] x the coefficients reported.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// The table, one row per (coefficient, feature), with its column order.
+    #[serde(flatten)]
+    pub columns: Table,
+    /// What the model is and is not, the link and estimator it used, plus counts for this input:
+    /// unfitted features, rows with no df, features at the boundary, residual variances given,
+    /// nothing counted.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// One row of a [`LatentMixedModelFit`]: one feature's latent-scale mixed model, for one
+/// coefficient.
+///
+/// Every statistic is `None` when [`Self::status`] is not `"fitted"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatentMixedRow {
+    /// The feature id from the table's first column.
+    pub feature: String,
+    /// The coefficient this row reports.
+    pub coefficient: String,
+    /// One of [`LATENT_MIXED_STATUSES`]. `separated` means no estimate exists (the counts are split
+    /// by the design, so the estimate runs to infinity): a status, never a p-value.
+    pub status: String,
+    /// The fixed effect within groups, on the latent scale, in latent units per coefficient unit:
+    /// **natural log-odds** for a logit latent, so `estimate.exp()` is an odds ratio.
+    pub estimate: Option<f64>,
+    /// Its standard error, in latent units per coefficient unit, from the inverse Hessian at the
+    /// estimated variances: it does not include their own uncertainty.
+    pub standard_error: Option<f64>,
+    /// nlme's containment degrees of freedom over the samples with a response of either kind, a
+    /// whole number. `None` also when there is no positive df (a group-level coefficient with too
+    /// few groups).
+    pub df: Option<f64>,
+    /// The Wald statistic, estimate / standard_error, in standard errors. Reported even when
+    /// [`Self::df`] is `None`.
+    pub t: Option<f64>,
+    /// Two-sided t test on [`Self::df`], a fraction (0 to 1). **Not adjusted across features.**
+    /// `None` also when `df` is.
+    pub p_value: Option<f64>,
+    /// sigma², the run-to-run variance of the latent within a group, in squared latent units:
+    /// estimated, or the value you gave ([`Self::residual_variance_given`]).
+    pub residual_variance: Option<f64>,
+    /// Whether [`Self::residual_variance`] is the value the
+    /// [`FitLatentMixedOptions::residual_variance`] table gave, not an estimate. Reported whatever
+    /// the status.
+    pub residual_variance_given: bool,
+    /// tau², the variance between the groups' baselines, in squared latent units; 0 is the boundary
+    /// (no group effect).
+    pub group_variance: Option<f64>,
+    /// The maximised log-likelihood (natural log): under `"reml"` the Laplace-approximated
+    /// restricted one (exact when nothing is counted), under `"ml"` the full one.
+    pub log_likelihood: Option<f64>,
+    /// Samples with a finite response for this feature, in samples.
+    pub measured: i64,
+    /// Samples with a count for this feature, in samples.
+    pub counted: i64,
+    /// Distinct groups among this feature's samples with a response of either kind, in groups.
+    pub groups: i64,
+}
+
+impl LatentMixedModelFit {
+    /// The rows reporting one coefficient, typed, in feature order.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Usage`] if `coefficient` was not reported by this fit;
+    /// [`MzLibError::Protocol`] if a column is not the type the wire contract says it is.
+    pub fn rows(&self, coefficient: &str) -> Result<Vec<LatentMixedRow>> {
+        if !self.tested_coefficients.iter().any(|c| c == coefficient) {
+            return Err(not_reported(coefficient, &self.tested_coefficients));
+        }
+        let t = &self.columns;
+        let feature = t.strings("feature")?;
+        let reported = t.strings("coefficient")?;
+        let status = t.strings("status")?;
+        let estimate = t.floats("estimate")?;
+        let standard_error = t.floats("standard_error")?;
+        let df = t.floats("df")?;
+        let t_stat = t.floats("t")?;
+        let p_value = t.floats("p_value")?;
+        let residual_variance = t.floats("residual_variance")?;
+        let residual_variance_given = t.booleans("residual_variance_given")?;
+        let group_variance = t.floats("group_variance")?;
+        let log_likelihood = t.floats("log_likelihood")?;
+        let measured = t.integers("measured")?;
+        let counted = t.integers("counted")?;
+        let groups = t.integers("groups")?;
+        Ok((0..feature.len())
+            .filter(|&i| reported[i].as_deref() == Some(coefficient))
+            .map(|i| LatentMixedRow {
+                feature: feature[i].clone().unwrap_or_default(),
+                coefficient: coefficient.to_owned(),
+                status: status[i].clone().unwrap_or_default(),
+                estimate: estimate[i],
+                standard_error: standard_error[i],
+                df: df[i],
+                t: t_stat[i],
+                p_value: p_value[i],
+                residual_variance: residual_variance[i],
+                residual_variance_given: residual_variance_given[i].unwrap_or_default(),
+                group_variance: group_variance[i],
+                log_likelihood: log_likelihood[i],
+                measured: measured[i].unwrap_or_default(),
+                counted: counted[i].unwrap_or_default(),
+                groups: groups[i].unwrap_or_default(),
+            })
+            .collect())
+    }
+}
+
 /// What [`entrapment_fdp_with`] returns: one row per q-value threshold with a discovery.
 ///
 /// [`Self::rows`] gives the rows as typed [`FdpRow`]s, and [`Self::at`] one threshold's row.
@@ -1892,6 +2410,83 @@ impl Default for FitMixedOptions {
     }
 }
 
+/// Options for [`fit_latent_mixed_with`]: the measured and counted samples, and how to fit them.
+///
+/// Give [`Self::responses`], [`Self::counts`] or both; the default gives neither, which is refused
+/// before anything is spawned. Every model setting left `None` is mzLib's.
+#[derive(Debug, Clone)]
+pub struct FitLatentMixedOptions {
+    /// The measured samples, in latent units (logit occupancy, for example, not a fraction or an
+    /// intensity): [`fit_mixed_with`]'s responses table, the feature id first, then one column per
+    /// sample. A blank cell, `NA` or `NaN` is not measured.
+    pub responses: Option<PathBuf>,
+    /// The counted samples (mzLib's `BinomialCount`), in trials: a table laid out as
+    /// [`Self::responses`], each cell `successes/trials` such as `3/8`, or blank where the sample
+    /// was not counted. With responses too, the two must list the same features and samples, and a
+    /// cell may be measured or counted, not both (mzLib's rule).
+    pub counts: Option<PathBuf>,
+    /// A TSV with a header row and one row per sample: the sample name, then its depth in your
+    /// depth units (log2 target PSMs, say), for the link's depth term. Needed when the link's
+    /// depth slope is not 0 (mzLib refuses otherwise). `None` sends none.
+    pub depth: Option<PathBuf>,
+    /// A TSV with a header row and one row per feature: the feature id, then sigma² to use for it
+    /// instead of estimating it, in squared latent units (borrowed, for a feature with too few
+    /// measured samples). Blank, or a feature not listed, is estimated. `None`: every sigma² is
+    /// estimated.
+    pub residual_variance: Option<PathBuf>,
+    /// `"reml"` or `"ml"`, one of [`MIXED_ESTIMATORS`]. `None` (the default) sends nothing, so
+    /// mzLib's default applies (`"reml"` at the pin, the fixed effects integrated out by a Laplace
+    /// approximation); [`LatentMixedModelFit::estimator`] says which was used.
+    pub estimator: Option<String>,
+    /// Features fitted at once, in threads, or `-1` for every core. The answer is identical at any
+    /// value. 1 by default, the bridge's default.
+    pub threads: i32,
+    /// How long to allow; `None` waits indefinitely. Ten minutes by default.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for FitLatentMixedOptions {
+    fn default() -> Self {
+        Self {
+            responses: None,
+            counts: None,
+            depth: None,
+            residual_variance: None,
+            estimator: None,
+            threads: 1,
+            timeout: Some(FIT_TIMEOUT),
+        }
+    }
+}
+
+/// Options for [`fit_link_with`]. The default sends none of the three switches, so each is mzLib's
+/// declared default, which [`LinkFit`] reports.
+#[derive(Debug, Clone)]
+pub struct FitLinkOptions {
+    /// Fit the depth slope (mzLib's `withDepth`); else it is 0. `None` (the default) sends nothing:
+    /// mzLib's default, `false` at the pin, which [`LinkFit::with_depth`] reports.
+    pub with_depth: Option<bool>,
+    /// Fit rho, the beta-binomial correlation of the trials in a cell (mzLib's
+    /// `withOverdispersion`); else it is 0. `None`: mzLib's default, `false` at the pin.
+    pub with_overdispersion: Option<bool>,
+    /// `true` fits on whether any trial succeeded, the event that makes a covered zero; `false` on
+    /// the full counts (mzLib's `detectionOnly`). `None`: mzLib's default, `true` at the pin.
+    pub detection_only: Option<bool>,
+    /// How long to allow; `None` waits indefinitely. Ten minutes by default.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for FitLinkOptions {
+    fn default() -> Self {
+        Self {
+            with_depth: None,
+            with_overdispersion: None,
+            detection_only: None,
+            timeout: Some(FIT_TIMEOUT),
+        }
+    }
+}
+
 /// Options for [`entrapment_fdp_with`].
 #[derive(Debug, Clone)]
 pub struct EntrapmentFdpOptions {
@@ -2183,6 +2778,104 @@ fn mixed_request<S: AsRef<str>>(
         args.push(estimator.clone());
     }
     Ok((args, stdin))
+}
+
+/// `--link`: `identity`, or the numbers given, comma-separated (only those given).
+fn link_argument(link: &Link) -> Result<String> {
+    match link {
+        Link::Identity => Ok("identity".to_owned()),
+        Link::Numbers(numbers) => {
+            if !(2..=4).contains(&numbers.len()) {
+                return Err(MzLibError::Usage(format!(
+                    "link takes Link::Identity, a DetectionLink, or 2 to 4 numbers (intercept, \
+                     slope[, depth_slope[, overdispersion]]); got {} numbers.",
+                    numbers.len()
+                )));
+            }
+            Ok(numbers
+                .iter()
+                .enumerate()
+                .map(|(i, n)| bridge::format_number(*n, &format!("link[{i}]")))
+                .collect::<Result<Vec<_>>>()?
+                .join(","))
+        }
+    }
+}
+
+fn latent_mixed_request<S: AsRef<str>>(
+    design: &Path,
+    groups: &Path,
+    coefficients: &[S],
+    link: &Link,
+    options: &FitLatentMixedOptions,
+) -> Result<(Vec<String>, String)> {
+    let stdin = reported_coefficients(coefficients, "fit_latent_mixed")?;
+    if options.responses.is_none() && options.counts.is_none() {
+        return Err(MzLibError::Usage(
+            "fit_latent_mixed needs FitLatentMixedOptions::responses (measured samples), ::counts \
+             (counted samples), or both."
+                .to_owned(),
+        ));
+    }
+    let mut args = vec![
+        "stats".to_owned(),
+        "fit-latent-mixed".to_owned(),
+        "--design".to_owned(),
+        path_text(design, "design")?,
+        "--groups".to_owned(),
+        path_text(groups, "groups")?,
+        "--link".to_owned(),
+        link_argument(link)?,
+        "--threads".to_owned(),
+        options.threads.to_string(),
+    ];
+    for (name, what, value) in [
+        ("--responses", "responses", &options.responses),
+        ("--counts", "counts", &options.counts),
+        ("--depth", "depth", &options.depth),
+        (
+            "--residual-variance",
+            "residual_variance",
+            &options.residual_variance,
+        ),
+    ] {
+        if let Some(path) = value {
+            args.push(name.to_owned());
+            args.push(path_text(path, what)?);
+        }
+    }
+    if let Some(estimator) = &options.estimator {
+        if !MIXED_ESTIMATORS.contains(&estimator.as_str()) {
+            return Err(MzLibError::Usage(format!(
+                "estimator must be one of {} (mzLib's VarianceEstimator Reml or \
+                 MaximumLikelihood), or None for mzLib's default; got {estimator:?}.",
+                MIXED_ESTIMATORS.join(", ")
+            )));
+        }
+        args.push("--estimator".to_owned());
+        args.push(estimator.clone());
+    }
+    Ok((args, stdin))
+}
+
+fn link_request(cells: &Path, options: &FitLinkOptions) -> Result<Vec<String>> {
+    let mut args = vec![
+        "stats".to_owned(),
+        "fit-link".to_owned(),
+        "--cells".to_owned(),
+        path_text(cells, "cells")?,
+    ];
+    for (name, value) in [
+        ("--with-depth", options.with_depth),
+        ("--with-overdispersion", options.with_overdispersion),
+        ("--detection-only", options.detection_only),
+    ] {
+        if let Some(value) = value {
+            args.push(name.to_owned());
+            args.push(value.to_string());
+        }
+    }
+    Ok(args)
 }
 
 fn entrapment_request(
@@ -2814,6 +3507,178 @@ pub fn fit_mixed_with<S: AsRef<str>>(
     )?;
     bridge::require_verb("stats fit-mixed", MZLIB_1_0_595_BRIDGE)?;
     call(&args, &stdin, options.timeout)
+}
+
+/// Fit one random-intercept mixed model per feature on a latent scale, from samples that are
+/// measured on it, counted through it, or both.
+///
+/// mzLib's `LogitNormalMixedModel.Fit` is the mixed model of [`fit_mixed_with`] (fixed effects
+/// from your design, one baseline per group drawn from N(0, tau²), run-to-run scatter sigma²) on a
+/// **latent** value, such as the log-odds of a site's occupancy. A sample can be **measured** (its
+/// latent value is in [`FitLatentMixedOptions::responses`]) or **counted**: k of its n trials
+/// succeeded ([`FitLatentMixedOptions::counts`]), each with a chance g set by the latent through
+/// the `link`, logit g = intercept + slope x latent + depth_slope x depth, in natural log-odds. It
+/// is `lme4::glmer` (a binomial GLMM, with an observation-level random effect for sigma²) and
+/// `lmer` in one model, which mzLib checks against both and against `glmmTMB`.
+///
+/// Use it when some of your cells carry a number and others only a count: a PTM site whose
+/// occupancy was quantified in some runs, while in others you only know that 3 of 8 covering
+/// peptidoforms carried the modification. [`fit_mixed_with`] has to drop the counted runs; this
+/// uses them. **Which cells are counted, and the link, are your choices**: this crate builds
+/// neither. [`fit_link_with`] fits a link from cells.
+///
+/// `design` is [`fit_with`]'s design (one row per sample, the sample name then one numeric column
+/// per fixed-effect coefficient; do not add a column per group). `groups` is [`fit_mixed_with`]'s
+/// groups table (the sample name, then ONE column with its group label). `coefficients` are the
+/// design columns to report, each one block of rows; every design column is fitted whatever you
+/// name. They travel on stdin. `link` is mzLib's `DetectionLink`, in natural log-odds:
+/// [`Link::Identity`], a [`DetectionLink`] (such as [`LinkFit::link`]), or 2 to 4 numbers
+/// `[intercept, slope, depth_slope, overdispersion]`, a number left out being mzLib's default. It
+/// is required: mzLib has no default link.
+///
+/// Needs the bridge from pyMzLib 0.7.0 or later.
+#[doc = include_str!("../docs/reference/stats.fit-latent-mixed.md")]
+///
+/// # Examples
+///
+/// mzLib's own reference input: 16 simulated features, 23 samples in 8 animals, every sample
+/// counted, read through the link (-0.4, 0.6, 0.3) with a depth term, and lme4's `glmer` output for
+/// it (25-point adaptive quadrature, maximum likelihood), which this crate ships:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// # let glmer_output = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/stats/lnmm_counted_fit.tsv");
+/// use mzlib::stats::{fit_latent_mixed_with, FitLatentMixedOptions};
+///
+/// let fit = fit_latent_mixed_with(
+///     "lnmm_reference_design.tsv",
+///     "lnmm_reference_groups.tsv",
+///     &["Intercept", "trait", "x"],
+///     [-0.4, 0.6, 0.3],
+///     &FitLatentMixedOptions {
+///         counts: Some("lnmm_link_counts.tsv".into()),
+///         depth: Some("lnmm_link_depth.tsv".into()),
+///         residual_variance: Some("lnmm_link_residual_variance.tsv".into()),
+///         estimator: Some("ml".into()),
+///         ..Default::default()
+///     },
+/// )?;
+/// assert_eq!((fit.status_counts["fitted"], fit.measured_cells, fit.counted_cells), (16, 0, 338));
+///
+/// // glmer's ML fits through the link: columns link, feature, method, status, b0.., se0..
+/// let text = std::fs::read_to_string(glmer_output).unwrap();
+/// let mut lines = text.lines();
+/// let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+/// let column = |name: &str| header.iter().position(|h| *h == name).unwrap();
+/// let glmer: Vec<Vec<&str>> = lines
+///     .map(|l| l.split('\t').collect::<Vec<_>>())
+///     .filter(|r| r[column("link")] == "link" && r[column("method")] == "ML")
+///     .collect();
+/// let worst = fit
+///     .rows("trait")?
+///     .iter()
+///     .zip(&glmer)
+///     .map(|(ours, r)| {
+///         let (b1, se1): (f64, f64) = (r[column("b1")].parse().unwrap(), r[column("se1")].parse().unwrap());
+///         (ours.estimate.unwrap() - b1).abs() / se1
+///     })
+///     .fold(0.0, f64::max);
+/// assert!(worst < 1e-5);
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// Every trait estimate is within 1e-5 standard errors of glmer's.
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`], before anything is spawned, when `coefficients` is empty or holds a blank
+/// name or one with a newline; neither [`FitLatentMixedOptions::responses`] nor
+/// [`FitLatentMixedOptions::counts`] is given; the `link` holds other than 2 to 4 numbers, or one
+/// that is not finite; [`FitLatentMixedOptions::estimator`] is not one of [`MIXED_ESTIMATORS`]; a
+/// path is blank or not UTF-8; or the bridge predates the verb. mzLib's own refusals (a cell both
+/// measured and counted, a count with more successes than trials, a link with slope 0 or a depth
+/// term and no depth, a design not of full rank) are [`MzLibError::Usage`] from the bridge.
+#[doc = include_str!("../docs/reference/stats.fit-latent-mixed.see-also.md")]
+pub fn fit_latent_mixed_with<S: AsRef<str>>(
+    design: impl AsRef<Path>,
+    groups: impl AsRef<Path>,
+    coefficients: &[S],
+    link: impl Into<Link>,
+    options: &FitLatentMixedOptions,
+) -> Result<LatentMixedModelFit> {
+    let (args, stdin) = latent_mixed_request(
+        design.as_ref(),
+        groups.as_ref(),
+        coefficients,
+        &link.into(),
+        options,
+    )?;
+    bridge::require_verb("stats fit-latent-mixed", MZLIB_1_0_596_BRIDGE)?;
+    call(&args, &stdin, options.timeout)
+}
+
+/// [`fit_link_with`] with each switch left to mzLib.
+///
+/// # Errors
+///
+/// As [`fit_link_with`].
+pub fn fit_link(cells: impl AsRef<Path>) -> Result<LinkFit> {
+    fit_link_with(cells, &FitLinkOptions::default())
+}
+
+/// Fit the detection link: how a cell's latent value sets the chance that a trial succeeds.
+///
+/// mzLib's `LogitNormalMixedModel.FitLink` finds the [`DetectionLink`] (logit g = intercept +
+/// slope x latent + depth_slope x depth, in natural log-odds) that makes your cells' counts most
+/// likely, each cell's latent value taken as a normal with the mean and SD you give, by maximum
+/// likelihood (Nelder-Mead over 12-node adaptive Gauss-Hermite quadrature). By default it fits on
+/// **detection**: whether any trial succeeded, which is what makes a covered zero. Pass
+/// [`LinkFit::link`] to [`fit_latent_mixed_with`] as its `link`.
+///
+/// A slope below 1 says the chance of a success rises more slowly than the latent: on PTM data,
+/// for example, whether a modified form is seen depends on how much of it there is, not only on its
+/// share. **The cells, and their latent means and SDs, are your choice**: this crate does not build
+/// them. mzLib's own example is a covered cell's feature mean and SD over its measured cells.
+///
+/// `cells` is a TSV whose header names `latent_mean`, `latent_sd`, `successes` and `trials`, and
+/// optionally `depth`, in any order and no other column (so a misspelt optional column cannot fall
+/// back to the default silently): one row per covered cell. The latent mean and SD are in latent
+/// units, successes of trials is the cell's count, and depth is in your depth units. Without a
+/// depth column every depth is mzLib's default (0 at the pin).
+///
+/// Needs the bridge from pyMzLib 0.7.0 or later.
+#[doc = include_str!("../docs/reference/stats.fit-link.md")]
+///
+/// # Examples
+///
+/// mzLib's own test cells: 4,000 cells simulated through the link (-0.5, 0.5, 0.3), which this
+/// crate ships:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::stats::{fit_link_with, FitLinkOptions};
+///
+/// let fit = fit_link_with("link_cells.tsv", &FitLinkOptions { with_depth: Some(true), ..Default::default() })?;
+/// assert_eq!((fit.cell_count, fit.detection_only), (4000, true)); // detection_only: mzLib's default
+/// let link = fit.link.expect("the search converged");
+/// let two = |x: f64| (x * 100.0).round() / 100.0;
+/// assert_eq!((two(link.intercept), two(link.slope), two(link.depth_slope)), (-0.51, 0.51, 0.33));
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// The link that made the cells is recovered from detection alone.
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`], before anything is spawned, when `cells` is blank or not UTF-8, or the
+/// bridge predates the verb. A cells file with a missing or unknown column, and mzLib's own
+/// refusals (an SD below 0, no trials, more successes than trials), are [`MzLibError::Usage`] from
+/// the bridge.
+#[doc = include_str!("../docs/reference/stats.fit-link.see-also.md")]
+pub fn fit_link_with(cells: impl AsRef<Path>, options: &FitLinkOptions) -> Result<LinkFit> {
+    let args = link_request(cells.as_ref(), options)?;
+    bridge::require_verb("stats fit-link", MZLIB_1_0_596_BRIDGE)?;
+    parse(bridge::invoke(&args, None, options.timeout)?)
 }
 
 /// [`entrapment_fdp_with`] at mzLib's default thresholds.
@@ -3526,6 +4391,331 @@ mod tests {
             }
         }
         assert!(matches!(reml.rows("sex"), Err(MzLibError::Usage(_))));
+    }
+
+    // ---- stats fit-latent-mixed and fit-link --------------------------------------------------
+
+    const LATENT_SCATTER: &str =
+        include_str!("../tests/fixtures/stats_fit_latent_mixed_scatter.json");
+    const LATENT_LINK_ML: &str =
+        include_str!("../tests/fixtures/stats_fit_latent_mixed_link_ml.json");
+    const LATENT_SIMULATED: &str =
+        include_str!("../tests/fixtures/stats_fit_latent_mixed_simulated.json");
+    const LINK: &str = include_str!("../tests/fixtures/stats_fit_link_simulated.json");
+
+    fn latent(link: impl Into<Link>, options: &FitLatentMixedOptions) -> Result<Vec<String>> {
+        latent_mixed_request(
+            Path::new("d.tsv"),
+            Path::new("g.tsv"),
+            &["trait"],
+            &link.into(),
+            options,
+        )
+        .map(|(args, _)| args)
+    }
+
+    fn counted() -> FitLatentMixedOptions {
+        FitLatentMixedOptions {
+            counts: Some("c.tsv".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fit_latent_mixed_sends_only_what_was_given() {
+        let (args, stdin) = latent_mixed_request(
+            Path::new("d.tsv"),
+            Path::new("g.tsv"),
+            &["trait"],
+            &Link::Identity,
+            &counted(),
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "stats",
+                "fit-latent-mixed",
+                "--design",
+                "d.tsv",
+                "--groups",
+                "g.tsv",
+                "--link",
+                "identity",
+                "--threads",
+                "1",
+                "--counts",
+                "c.tsv"
+            ]
+        );
+        assert_eq!(stdin, "trait\n");
+
+        let (args, stdin) = latent_mixed_request(
+            Path::new("d.tsv"),
+            Path::new("g.tsv"),
+            &["trait", "x"],
+            &Link::from([-0.4, 0.6, 0.3]),
+            &FitLatentMixedOptions {
+                responses: Some("r.tsv".into()),
+                counts: Some("c.tsv".into()),
+                depth: Some("depth.tsv".into()),
+                residual_variance: Some("s.tsv".into()),
+                estimator: Some("ml".into()),
+                threads: -1,
+                timeout: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            &args[6..],
+            [
+                "--link",
+                "-0.4,0.6,0.3",
+                "--threads",
+                "-1",
+                "--responses",
+                "r.tsv",
+                "--counts",
+                "c.tsv",
+                "--depth",
+                "depth.tsv",
+                "--residual-variance",
+                "s.tsv",
+                "--estimator",
+                "ml"
+            ]
+        );
+        assert_eq!(stdin, "trait\nx\n");
+    }
+
+    #[test]
+    fn a_link_sends_only_the_numbers_it_holds() {
+        let sent = |link: Link| {
+            let args = latent(link, &counted()).unwrap();
+            let at = args.iter().position(|a| a == "--link").unwrap();
+            args[at + 1].clone()
+        };
+        // A link sends what it holds: the rest is mzLib's default.
+        assert_eq!(sent(Link::from([0.4, 0.6])), "0.4,0.6");
+        assert_eq!(sent(Link::from([1.0, 2.0, 0.5, 0.1])), "1.0,2.0,0.5,0.1");
+        let given = DetectionLink {
+            intercept: 0.1,
+            slope: 0.9,
+            depth_slope: 0.0,
+            overdispersion: 0.0,
+        };
+        assert_eq!(sent(Link::from(given)), "0.1,0.9,0.0,0.0");
+        let fitted: LinkFit = serde_json::from_str(LINK).unwrap();
+        let link = fitted.link.unwrap();
+        assert_eq!(
+            sent(Link::from(&link)),
+            format!(
+                "{:?},{:?},{:?},{:?}",
+                link.intercept, link.slope, link.depth_slope, link.overdispersion
+            )
+        );
+    }
+
+    #[test]
+    fn fit_latent_mixed_refuses_bad_input_before_anything_is_spawned() {
+        let usage = |result: Result<Vec<String>>, needle: &str| {
+            assert!(
+                matches!(&result, Err(MzLibError::Usage(m)) if m.contains(needle)),
+                "{needle}: {result:?}"
+            );
+        };
+        usage(
+            latent(Link::Numbers(vec![1.0]), &counted()),
+            "2 to 4 numbers",
+        );
+        usage(
+            latent(Link::Numbers(vec![1.0, 2.0, 3.0, 4.0, 5.0]), &counted()),
+            "2 to 4 numbers",
+        );
+        usage(
+            latent(Link::Numbers(vec![0.0, f64::NAN]), &counted()),
+            "link[1] must be a finite number",
+        );
+        usage(
+            latent(
+                Link::Identity,
+                &FitLatentMixedOptions {
+                    estimator: Some("REML".into()),
+                    ..counted()
+                },
+            ),
+            "estimator must be one of reml, ml",
+        );
+        usage(
+            latent(
+                Link::Identity,
+                &FitLatentMixedOptions {
+                    depth: Some(" ".into()),
+                    ..counted()
+                },
+            ),
+            "depth",
+        );
+        usage(
+            latent(Link::Identity, &FitLatentMixedOptions::default()),
+            "responses (measured samples), ::counts (counted samples), or both",
+        );
+        let none: [&str; 0] = [];
+        let error = latent_mixed_request(
+            Path::new("d.tsv"),
+            Path::new("g.tsv"),
+            &none,
+            &Link::Identity,
+            &counted(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, MzLibError::Usage(_)));
+    }
+
+    #[test]
+    fn fit_latent_mixed_parses_the_recordings() {
+        let fit: LatentMixedModelFit = serde_json::from_str(LATENT_SIMULATED).unwrap();
+        assert_eq!(fit.estimator, "reml"); // absent, mzLib's default, as mzLib reports it
+        assert_eq!(
+            fit.link,
+            DetectionLink {
+                intercept: 0.4,
+                slope: 0.6,
+                depth_slope: 0.0,
+                overdispersion: 0.0
+            }
+        );
+        assert_eq!((fit.grouping.as_str(), fit.group_count), ("animal", 16));
+        assert_eq!(
+            (fit.measured_cells, fit.counted_cells, fit.missing_count),
+            (96, 96, 0)
+        );
+        assert!(fit.depth_file.is_none() && fit.residual_variance_file.is_none());
+        assert!(fit.responses_file.is_some() && fit.counts_file.is_some());
+        let mut keys: Vec<&str> = fit.status_counts.keys().map(String::as_str).collect();
+        let mut statuses = LATENT_MIXED_STATUSES.to_vec();
+        keys.sort_unstable();
+        statuses.sort_unstable();
+        assert_eq!(keys, statuses);
+        assert_eq!(
+            fit.columns.names(),
+            [
+                "feature",
+                "coefficient",
+                "status",
+                "estimate",
+                "standard_error",
+                "df",
+                "t",
+                "p_value",
+                "residual_variance",
+                "residual_variance_given",
+                "group_variance",
+                "log_likelihood",
+                "measured",
+                "counted",
+                "groups"
+            ]
+        );
+        for row in fit.rows("trait").unwrap() {
+            assert_eq!((row.measured, row.counted, row.df), (32, 32, Some(14.0)));
+            assert!(!row.residual_variance_given);
+        }
+        assert!(matches!(fit.rows("x"), Err(MzLibError::Usage(_))));
+
+        let ml: LatentMixedModelFit = serde_json::from_str(LATENT_LINK_ML).unwrap();
+        assert_eq!(
+            (
+                ml.estimator.as_str(),
+                ml.responses_file.as_deref(),
+                ml.measured_cells
+            ),
+            ("ml", None, 0)
+        );
+        assert_eq!(
+            ml.link,
+            DetectionLink {
+                intercept: -0.4,
+                slope: 0.6,
+                depth_slope: 0.3,
+                overdispersion: 0.0
+            }
+        );
+        for coefficient in &ml.tested_coefficients {
+            assert!(ml
+                .rows(coefficient)
+                .unwrap()
+                .iter()
+                .all(|r| r.residual_variance_given));
+        }
+        assert!(ml
+            .caveats
+            .iter()
+            .any(|c| c
+                .starts_with("16 of 16 features were fitted at the residual_variance you gave")));
+
+        let scatter: LatentMixedModelFit = serde_json::from_str(LATENT_SCATTER).unwrap();
+        // Link::Identity is mzLib's DetectionLink.Identity: intercept 0, slope 1.
+        assert_eq!(
+            scatter.link,
+            DetectionLink {
+                intercept: 0.0,
+                slope: 1.0,
+                depth_slope: 0.0,
+                overdispersion: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn fit_link_sends_each_option_only_when_given() {
+        let args = link_request(Path::new("cells.tsv"), &FitLinkOptions::default()).unwrap();
+        assert_eq!(args, ["stats", "fit-link", "--cells", "cells.tsv"]);
+        let args = link_request(
+            Path::new("cells.tsv"),
+            &FitLinkOptions {
+                with_depth: Some(true),
+                with_overdispersion: Some(false),
+                detection_only: Some(false),
+                timeout: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            &args[4..],
+            [
+                "--with-depth",
+                "true",
+                "--with-overdispersion",
+                "false",
+                "--detection-only",
+                "false"
+            ]
+        );
+        assert!(link_request(Path::new(""), &FitLinkOptions::default()).is_err());
+    }
+
+    #[test]
+    fn fit_link_parses_the_recording_and_a_search_that_did_not_converge() {
+        let fit: LinkFit = serde_json::from_str(LINK).unwrap();
+        assert_eq!(
+            (fit.cell_count, fit.depth_given, fit.with_depth),
+            (4000, true, true)
+        );
+        // mzLib's defaults, reported.
+        assert_eq!((fit.with_overdispersion, fit.detection_only), (false, true));
+        let link = fit.link.unwrap();
+        assert!((link.intercept + 0.5).abs() < 0.15 && (link.slope - 0.5).abs() < 0.1);
+        assert_eq!(link.overdispersion, 0.0);
+        assert!(fit
+            .caveats
+            .iter()
+            .any(|c| c.starts_with("overdispersion was not fitted")));
+
+        let mut wire: Value = serde_json::from_str(LINK).unwrap();
+        wire["link"] = Value::Null;
+        let unconverged: LinkFit = serde_json::from_value(wire).unwrap();
+        assert!(unconverged.link.is_none());
     }
 
     // ---- stats entrapment-fdp -----------------------------------------------------------------

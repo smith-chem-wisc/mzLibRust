@@ -5,4 +5,7 @@ tests/fixtures/proteins/** -text
 # fixtures record (orthology/PROVENANCE.txt), as pyMzLib's .gitattributes says. The spectral
 # libraries are binary.
 tests/fixtures/orthology/** -text
+# The genes map-residues inputs: a cut of Ensembl release 116, whose sha256s the recordings carry
+# (map_residues/PROVENANCE.txt), as pyMzLib's .gitattributes says.
+tests/fixtures/map_residues/** -text
 *.msl binary

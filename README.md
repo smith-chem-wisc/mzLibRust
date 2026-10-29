@@ -67,6 +67,10 @@ println!("{} scans", scans.scan_count);
 // Spectral libraries (.msl): every precursor, or every fragment ion, with "not available" as None.
 let library = mzlib::library::read("predicted.msl")?;
 println!("{:?}", library.columns.strings("retention_time_unit")?);   // iRT or minutes, per row
+// ... and a run's minutes on the library's iRT scale, from anchors you choose, and back.
+use mzlib::library::{calibrate_rt, RtAnchor, RtQuery};
+let calibration = calibrate_rt(&[RtAnchor::new("run_3", 28.71, 33.98) /* , ... */],
+                               &[RtQuery::irt_to_minutes("run_3", 11.89)], &Default::default())?;
 
 let info = mzlib::readers::identify("psm.tsv")?;
 println!("{} {:?}", info.file_type, info.views);   // MsFraggerPsm ["quantifiable"]
@@ -119,6 +123,9 @@ let parsed = mzlib::proteins::parse_accessions(&["P04637-2", "NP_000537.3_R72P"]
 
 // Orthologs across species, exactly as Ensembl Compara states them, from every species' dump.
 let snap = mzlib::proteins::build_orthology_with("116", &orthology_options)?;
+// Human p53's Ser15 in mouse, through Compara's gene-tree alignment: Ser18, or why there is none.
+let site = mzlib::proteins::map_residues_with(&[("ENSP00000269305", 15, "ENSMUSP00000104298")],
+                                              &map_residues_options)?;
 
 // Gene Ontology for each MetaMorpheus protein group, every member kept, against a go.obo you pin.
 let go = mzlib::proteins::annotate_go("AllQuantifiedProteinGroups.tsv", "human.xml", "go.obo")?;
@@ -142,6 +149,13 @@ let pairs = mzlib::stats::fit_with("log2_intensities.tsv", stratum.design_file.a
 // Every peptide in every sample, log2 or None with the reason; MBR values in or out, your call.
 let runs = [mzlib::diff::ObservationRun::new("run1", "ctrl_1"), mzlib::diff::ObservationRun::new("run2", "drug_1")];
 let table = mzlib::diff::observations("QuantifiedPeptides.tsv", &runs, mzlib::diff::QuantBasis::MsmsOnly)?;
+
+// A mixed model on logit occupancy, when some runs only counted k of n peptidoforms.
+let latent = mzlib::stats::fit_latent_mixed_with("design.tsv", "animals.tsv", &["trait"],
+    mzlib::stats::Link::Identity, &mzlib::stats::FitLatentMixedOptions {
+        responses: Some("logit_occupancy.tsv".into()), counts: Some("counts.tsv".into()),
+        ..Default::default()
+    })?;
 
 // PTM site occupancy per run, a floor never read as 0; then pairs of sites across runs.
 let occ = mzlib::ptmqtl::occupancy("observations.tsv")?;
@@ -211,8 +225,11 @@ tests contrasts with confidence intervals, and takes mzLib's marginal-likelihood
 `combine_p` combines p-values across studies by Fisher or Stouffer, signed by each effect;
 `correlate_with` is Spearman against a per-sample trait, partial on request; `fit_logistic_with`
 and `fit_mixed_with` fit a logistic regression (a detection table) and a random-intercept mixed
-model per feature; and `entrapment_fdp_with` checks a search's FDR claim from its entrapment hits.
-Each is held to its R reference (`glm`, `nlme`, `pchisq`, `cor.test`, ppcor) in the live tests.
+model per feature; `fit_latent_mixed_with` fits that mixed model on a latent scale (logit
+occupancy) from samples measured on it, counted through it (k of n), or both, through a link that
+`fit_link_with` fits; and `entrapment_fdp_with` checks a search's FDR claim from its entrapment
+hits. Each is held to its R reference (`glm`, `nlme`, `glmer`, `glmmTMB`, `pchisq`, `cor.test`,
+ppcor) in the live tests.
 
 **The design and the observations have their own module**, `diff`: `design_with` turns a sample
 sheet and a model into mzLib's design matrix per stratum, which equals R's `model.matrix`, says
@@ -223,8 +240,13 @@ shared-peptide normalization shifts.
 
 **PTM site occupancy has its own module**, `ptmqtl`: `occupancy_with` computes every site's
 occupancy per run with its censoring state, `pairs_with` finds modifications on one molecule or
-co-varying across runs, and `trait_effects_with` fits the effect of a per-run trait on each site's
-logit occupancy with a random intercept per biological replicate.
+co-varying across runs (counting one-form runs as tied bounds, or given each run's depth, on
+request), and `trait_effects_with` fits the effect of a per-run trait on each site's log odds of
+occupancy, natural or log2, with a random intercept per biological replicate.
+
+**Spectral libraries**, `library`: `read` gives one row per precursor (or per fragment ion), and
+`calibrate_rt` fits each run's map from minutes onto the library's iRT scale from anchors you
+choose, with mzLib's robust LOWESS or line, converting the times you send either way.
 
 **Protein databases have their own module**, `proteins`: `read` gives one row per protein —
 organism, NCBI taxon, genes, mass — with GO terms and Ensembl gene links on request;
@@ -235,7 +257,8 @@ reported in `absent_fields`, never as an empty answer. `annotate_go_with` annota
 MetaMorpheus protein-group table with GO terms: one row per (group, term) that any member holds,
 directly or through an ancestor, naming the members that carry it, so consensus and direct-only
 views are filters rather than a pick. It reads only a go.obo you keep; `update_go` is the one call
-that fetches a release.
+that fetches a release. `map_residues_with` carries a residue to another species through Ensembl
+Compara's gene-tree alignment, saying `GapInTarget` rather than offering the nearest residue.
 
 Because the column set depends on the format, a read returns a `Table` rather than a struct with
 named fields — with typed accessors that project a wire `null` onto `Option`, so a missing cell can

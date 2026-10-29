@@ -70,7 +70,17 @@ const DEVIATIONS: &[&[Deviation]] = &[
     STATS,
     DIFF,
     PTMQTL,
+    LIBRARY,
 ];
+
+/// Deviations: library.
+const LIBRARY: &[Deviation] = &[dev(
+    "library calibrate-rt",
+    "param.stdin",
+    Some("anchors"),
+    "one stdin line per RtAnchor in calibrate_rt's anchors, then a `--` line and one per RtQuery \
+     in its queries",
+)];
 
 /// Deviations: conventions that hold for every verb.
 const COMMON: &[Deviation] = &[
@@ -238,6 +248,12 @@ const STATS: &[Deviation] = &[
         Some("coefficients"),
         "one stdin line per element of fit_mixed_with's coefficients",
     ),
+    dev(
+        "stats fit-latent-mixed",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_latent_mixed_with's coefficients",
+    ),
 ];
 
 /// Deviations: diff.
@@ -347,6 +363,13 @@ const PROTEINS: &[Deviation] = &[
         Some("gtfs"),
         "the species lines are rendered from OrthologyOptions::gtfs and ::gene_sets, two lists of \
          (production name, path), as pyMzLib renders them from its gtfs= and gene_sets=",
+    ),
+    dev(
+        "genes map-residues",
+        "param.species",
+        Some("gtfs"),
+        "the species lines are rendered from MapResiduesOptions::gtfs and ::gene_sets, as for \
+         genes orthology; none (both empty) is mzLib's default, every gene kept",
     ),
 ];
 
@@ -683,13 +706,8 @@ const QUANT: &[Deviation] = &[
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
 const PENDING: &[(&str, &str)] = &[
-    // pyMzLib 0.7.0's new ptmqtl options (bridge specs at 45833ca, mzLib #1464 and #1468): vendored
-    // with the repin, whose scope is the answers that changed; the options come with the 0.7.0
-    // verbs (genes map-residues, library calibrate-rt, stats fit-latent-mixed, stats fit-link).
-    // Their output echoes (include_bounds, min_untied_share, run_covariate_*, scale) are projected.
-    ("ptmqtl pairs", "param.include-bounds"),
-    ("ptmqtl pairs", "param.run-covariate"),
-    ("ptmqtl trait-effects", "param.scale"),
+    // Empty: pyMzLib 0.7.0's ptmqtl options (include-bounds, run-covariate, scale) came with its
+    // four verbs, and every spec fact is projected.
 ];
 
 // =================================================================================================
@@ -2014,7 +2032,16 @@ fn every_param_and_field_is_documented_with_its_unit() {
         };
 
         // ---- parameters: the options struct, or the function's own arguments ------------------
-        let options = spec.rust("options");
+        // A spec that names no options struct (library calibrate-rt's, recorded before the port)
+        // still has its options checked: the struct is the argument whose type is named *Options,
+        // as the bulk form finds its own below.
+        let options = spec.rust("options").or_else(|| {
+            function
+                .inputs
+                .iter()
+                .filter_map(|(_, ty)| base_struct(ty))
+                .find(|name| name.ends_with("Options"))
+        });
         let option_fields = options
             .as_deref()
             .map(|o| rust.fields_deep(&module, o))
