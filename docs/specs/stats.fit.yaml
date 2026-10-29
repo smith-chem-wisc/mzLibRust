@@ -22,7 +22,7 @@ summary: >-
   Fit one linear model per feature of a feature-by-sample table and test each named coefficient, and
   each contrast of a contrasts file with its confidence interval, with limma's empirical-Bayes
   moderated t, Benjamini-Hochberg adjusted, in one call.
-since: {protocol: 1, pymzlib: "0.3.0", mzlibrust: null, mzlibr: null}
+since: {protocol: 1, pymzlib: "0.3.0", mzlibrust: "0.1.0", mzlibr: "0.1.0"}
 wraps:
   - {symbol: LinearModel.Fit, path: mzLib/StatisticalModels/LinearModel.cs, pin: 0a808fec}
   - {symbol: EmpiricalBayes.Moderate, path: mzLib/StatisticalModels/EmpiricalBayes.cs, pin: d10017ce}
@@ -208,8 +208,8 @@ caveats:
 
 bindings:
   py: {name: pymzlib.stats.fit}
-  rust: {name: "mzlib::stats::fit_with", options: FitOptions, note: "on main (mzLibRust #31), not yet released; contrasts, confidence and estimator not yet ported"}
-  r: {name: stats_fit, note: "on main (mzLibR #31), not yet released; contrasts, confidence and estimator not yet ported"}
+  rust: {name: "mzlib::stats::fit_with", options: FitOptions}
+  r: {name: stats_fit}
 
 examples:
   - fixture: stats_fit_malat.json
