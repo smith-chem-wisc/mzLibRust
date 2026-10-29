@@ -170,8 +170,8 @@ caveats:
 
 bindings:
   py: {name: pymzlib.ptmqtl.trait_effects}
-  rust: {name: "mzlib::ptmqtl::trait_effects_with", options: TraitEffectsOptions, note: "scale (pyMzLib 0.7.0) is not yet ported."}
-  r: {name: ptmqtl_trait_effects, note: "scale (pyMzLib 0.7.0) is not yet ported."}
+  rust: {name: "mzlib::ptmqtl::trait_effects_with", options: TraitEffectsOptions, note: "scale is the OccupancyScale enum."}
+  r: {name: ptmqtl_trait_effects}
 
 examples:
   - fixture: ptmqtl_trait_effects.json
