@@ -5307,8 +5307,9 @@ mod tests {
 
     #[test]
     fn malformed_map_residues_arguments_are_usage_errors_before_the_bridge_runs() {
-        let none: [(&str, i64, &str); 0] = [];
-        let cases: Vec<(Vec<(&str, i64, &str)>, MapResiduesOptions, &str)> = vec![
+        type Query<'a> = (&'a str, i64, &'a str);
+        let none: [Query; 0] = [];
+        let cases: Vec<(Vec<Query>, MapResiduesOptions, &str)> = vec![
             (none.to_vec(), map_options(), "queries is empty"),
             (
                 vec![("", 15, TRP53)],

@@ -291,12 +291,13 @@
 //! covered-zeros co-occur across unrelated sites, and any site that rises with depth correlates with
 //! every other. [`PairsOptions::run_covariate`] takes a per-run value, such as the run's target
 //! PSMs, and correlates the two sites **given** it: a partial Spearman correlation, as for the run
-//! level. The file has a header row whose second field names the covariate, then one row per run:
+//! level. The file is tab-separated, with a header row whose second field names the covariate,
+//! then one row per run (`depth_psms.tsv`, tabs shown as spaces):
 //!
 //! ```text
-//! run	target_psms
-//! r00	9000
-//! r01	12000
+//! run   target_psms
+//! r00   9000
+//! r01   12000
 //! ```
 //!
 //! The example is mzLib's `ARunCovariateIsPartialledOut`: twelve runs in two batches, and two sites
