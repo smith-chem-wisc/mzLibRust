@@ -11,6 +11,7 @@
 //! | carry a position to an isoform, an ortholog or a newer release | [`align_with`], [`align`] | `PairwiseAligner` |
 //! | read an accession back into entry, isoform or version, and variants | [`parse_accessions`] | `VariantApplication.ParseAccession` |
 //! | know which genes are orthologous across species, as Compara states it | [`build_orthology_with`] | `OrthologySnapshot` |
+//! | know which mouse residue is human p53's Ser15, by Compara's gene-tree alignment | [`map_residues_with`] | `ComparaGeneTreeAlignment` |
 //!
 //! Questions a search result cannot answer on its own, each answered by mzLib from the protein
 //! database you searched.
@@ -663,6 +664,215 @@
 //!   mzLib reports about 20 s to build and 40 s more to write 13 files (9.0 MB). Leave the timeout
 //!   at `None` and set `restrict_gene_trees` when memory is short.
 //!
+//! ## Map a residue across species: Compara's gene-tree alignment
+//!
+//! **The problem.** You have a site in a human protein, human p53's phosphoserine 15, and a mouse
+//! experiment. Which mouse residue is it? Counting along the two sequences fails as soon as one has
+//! an insertion. Aligning just the two proteins works ([`align_with`]), but it is your alignment,
+//! made with your parameters. Ensembl Compara has already aligned every protein of each gene tree,
+//! across all its species, to build the tree. A residue's column in that alignment is the published
+//! answer.
+//!
+//! [`map_residues_with`] reads Compara's peptide alignments (`ComparaGeneTreeAlignment.Load`,
+//! mzLib #1465), keeping only the canonical proteins of your species' genes, and answers each query
+//! with mzLib's `MapResidue`. This example is a real cut of Ensembl release 116
+//! (`tests/fixtures/map_residues/`): the TP53 and GAPDH gene trees' alignments, with the human,
+//! mouse and rat rows exactly as Ensembl publishes them. The same queries on the full files give the
+//! same rows.
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! use mzlib::proteins::{map_residues_with, MapResiduesOptions, COLUMN_OUTCOMES};
+//!
+//! let gtfs = vec![
+//!     ("homo_sapiens".to_owned(), "Homo_sapiens.GRCh38.116.gtf".into()),
+//!     ("mus_musculus".to_owned(), "Mus_musculus.GRCm39.116.gtf".into()),
+//!     ("rattus_norvegicus".to_owned(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+//! ];
+//! let (tp53, trp53, rat_tp53) = ("ENSP00000269305", "ENSMUSP00000104298", "ENSRNOP00000074031");
+//! let queries = [
+//!     (tp53, 15, trp53), (tp53, 20, trp53), (tp53, 46, trp53), (tp53, 392, trp53),
+//!     (trp53, 18, tp53),                     // and back
+//!     (tp53, 15, rat_tp53),
+//!     (tp53, 15, "ENSMUSP00000113213"),      // mouse GAPDH: another gene tree
+//!     ("ENSP00000352610", 15, trp53),        // a TP53 isoform Compara did not align
+//!     (tp53, 15, "ENSMUSP00000005371"),      // a Trp53 isoform, likewise
+//! ];
+//! let mapped = map_residues_with(
+//!     &queries,
+//!     &MapResiduesOptions {
+//!         alignment: "Compara.116.protein_default.aa.fasta.gz".into(),
+//!         gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+//!         gtfs,
+//!         proteins: true,
+//!         ..Default::default()
+//!     },
+//! )?;
+//! for r in mapped.rows()? {
+//!     println!("{} {} {} {} {:?} {:?} {:?}", r.source_protein_id, r.position, r.target_protein_id,
+//!              r.outcome, r.column, r.target_position, r.target_residue);
+//! }
+//! //   ENSP00000269305 15 ENSMUSP00000104298 Aligned Some(476) Some(18) Some("S")
+//! //   ENSP00000269305 20 ENSMUSP00000104298 Aligned Some(547) Some(23) Some("S")
+//! //   ENSP00000269305 46 ENSMUSP00000104298 GapInTarget Some(863) None None
+//! //   ENSP00000269305 392 ENSMUSP00000104298 Aligned Some(3036) Some(389) Some("S")
+//! //   ENSMUSP00000104298 18 ENSP00000269305 Aligned Some(476) Some(15) Some("S")
+//! //   ENSP00000269305 15 ENSRNOP00000074031 Aligned Some(476) Some(15) Some("S")
+//! //   ENSP00000269305 15 ENSMUSP00000113213 DifferentAlignments None None None
+//! //   ENSP00000352610 15 ENSMUSP00000104298 SourceNotInAlignment None None None
+//! //   ENSP00000269305 15 ENSMUSP00000005371 TargetNotInAlignment None None None
+//! let rows = mapped.rows()?;
+//! assert_eq!(
+//!     rows.iter().map(|r| r.target_position).collect::<Vec<_>>(),
+//!     [Some(18), Some(23), None, Some(389), Some(15), Some(15), None, None, None]
+//! );
+//! assert_eq!((rows[2].outcome.as_str(), rows[2].column), ("GapInTarget", Some(863)));
+//!
+//! // Every outcome is counted, zeros included.
+//! let counts: Vec<u64> = COLUMN_OUTCOMES.iter().map(|o| mapped.outcome_counts[*o]).collect();
+//! assert_eq!(counts, [5, 1, 1, 1, 1]);
+//! assert_eq!(
+//!     (mapped.alignment.release.as_deref(), mapped.alignment.protein_count, mapped.gene_trees.member_count),
+//!     (Some("116"), 5, 5)
+//! );
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! Reading it row by row:
+//!
+//! - **Human Ser15 is mouse Ser18**, Ser20 is Ser23, and Ser392 is Ser389. The mouse protein is
+//!   three residues shorter near its N-terminus, so the numbers shift, and the column says by how
+//!   much.
+//! - **Human Ser46 faces a gap in mouse.** No mouse residue sits in column 863, and the outcome is
+//!   `GapInTarget`. It never offers the nearest residue instead.
+//! - **Mapping back gives the residue you started from.** Mouse residue 18 is in the same column,
+//!   476.
+//! - **Rat is a separate query** against the same alignment: human Ser15 is rat Ser15.
+//! - **GAPDH is in another gene tree**, so the alignment says nothing about it:
+//!   `DifferentAlignments`.
+//! - **Only each gene's canonical protein is aligned.** `ENSP00000352610` is a real TP53 protein,
+//!   but not the one Compara used, so it is `SourceNotInAlignment`. It is not mapped through the
+//!   canonical protein. The gene-tree file names each gene's canonical protein, in the row flagged
+//!   `Y`.
+//!
+//! | outcome | what it means | `column` | `target_position`, `target_residue` |
+//! |---|---|---|---|
+//! | `Aligned` | the target has a residue in the source residue's column | set | set |
+//! | `GapInTarget` | the target has a gap in that column: no residue corresponds | set | `None` |
+//! | `DifferentAlignments` | the two proteins are in different gene trees | `None` | `None` |
+//! | `SourceNotInAlignment` | the source protein was not kept: not in the file, not canonical, or outside your gene sets | `None` | `None` |
+//! | `TargetNotInAlignment` | the target protein was not kept | `None` | `None` |
+//!
+//! The outcome names are mzLib's own (`ComparaColumnOutcome`), and [`COLUMN_OUTCOMES`] lists them in
+//! mzLib's order.
+//!
+//! ### From a UniProt position to a UniProt position
+//!
+//! Compara's positions are positions in **Ensembl** proteins. A site from a search against UniProt
+//! needs two more steps around [`map_residues_with`], each an alignment:
+//!
+//! 1. Align the UniProt sequence to the canonical Ensembl protein, and map the position across.
+//! 2. Map the Ensembl position through the gene-tree column with [`map_residues_with`].
+//! 3. Align the target's canonical Ensembl protein to its UniProt sequence, and map across again.
+//!
+//! Any of the three can meet a gap. [`MapResiduesOptions::proteins`] returned the Ensembl
+//! sequences, so no second file is needed for them. The UniProt sequences come from UniProt's FASTA
+//! for human p53 (P04637) and mouse p53 (P02340):
+//!
+//! ```
+//! # mzlib_replay::activate();
+//! # use mzlib::proteins::{map_residues_with, MapResiduesOptions};
+//! # let gtfs = vec![
+//! #     ("homo_sapiens".to_owned(), "Homo_sapiens.GRCh38.116.gtf".into()),
+//! #     ("mus_musculus".to_owned(), "Mus_musculus.GRCm39.116.gtf".into()),
+//! #     ("rattus_norvegicus".to_owned(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+//! # ];
+//! # let (tp53, trp53, rat_tp53) = ("ENSP00000269305", "ENSMUSP00000104298", "ENSRNOP00000074031");
+//! # let queries = [
+//! #     (tp53, 15, trp53), (tp53, 20, trp53), (tp53, 46, trp53), (tp53, 392, trp53), (trp53, 18, tp53),
+//! #     (tp53, 15, rat_tp53), (tp53, 15, "ENSMUSP00000113213"), ("ENSP00000352610", 15, trp53),
+//! #     (tp53, 15, "ENSMUSP00000005371"),
+//! # ];
+//! # let options = MapResiduesOptions {
+//! #     alignment: "Compara.116.protein_default.aa.fasta.gz".into(),
+//! #     gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+//! #     gtfs,
+//! #     ..Default::default()
+//! # };
+//! # let mapped = map_residues_with(&queries, &MapResiduesOptions { proteins: true, ..options.clone() })?;
+//! use mzlib::proteins::{align_with, read_with, AlignOptions, ProteinReadOptions};
+//!
+//! let uniprot = read_with(
+//!     &["P04637.fasta", "P02340.fasta"],
+//!     &ProteinReadOptions { sequences: true, ..Default::default() },
+//! )?;
+//! let sequences = uniprot.columns.strings("sequence")?;
+//! let (p04637, p02340) = (sequences[0].clone().unwrap(), sequences[1].clone().unwrap());
+//! let ensembl = mapped.proteins.as_ref().expect("proteins: true").sequences()?;
+//! let legs = align_with(
+//!     &[
+//!         (p04637.as_str(), ensembl[tp53].as_str()),  // leg 1: UniProt human -> Ensembl human
+//!         (ensembl[trp53].as_str(), p02340.as_str()), // leg 3: Ensembl mouse -> UniProt mouse
+//!     ],
+//!     &AlignOptions::default(),
+//! )?
+//! .alignments()?;
+//! let (leg1, leg3) = (&legs[0], &legs[1]);
+//! assert_eq!((leg1.identical, leg1.source_length, leg3.identical, leg3.target_length), (393, 393, 390, 390));
+//!
+//! let ensembl_position = leg1.map_source_to_target(15)?.expect("no gap in leg 1");
+//! let site = map_residues_with(&[(tp53, ensembl_position as i64, trp53)], &options)?;
+//! let mouse_position = site.rows()?[0].target_position.expect("Aligned") as usize;
+//! let uniprot_mouse = leg3.map_source_to_target(mouse_position)?.expect("no gap in leg 3");
+//! assert_eq!((uniprot_mouse, &p02340[uniprot_mouse - 1..uniprot_mouse]), (18, "S"));
+//! # Ok::<(), mzlib::MzLibError>(())
+//! ```
+//!
+//! For p53 the UniProt and Ensembl canonical sequences are identical in both species, so legs 1 and
+//! 3 map every residue to itself. That is common for canonical sequences, but check it every time
+//! (`identical` equal to both lengths) rather than assume it. For an isoform, or an entry whose
+//! sequence UniProt and Ensembl annotate differently, those legs shift positions or meet gaps, as
+//! the [alignment section](#map-a-residue-from-one-sequence-onto-another) shows. **Check the residue
+//! at every step.** A column pairs positions the alignment puts together, which is homology, not
+//! identity. Here it is serine on both sides. Where the target residue is a different amino acid,
+//! the site does not carry over: a phosphosite on S is not a site on A.
+//!
+//! **What to download, once per release.** Nothing is downloaded for you. For release 116, from
+//! `https://ftp.ensembl.org/pub/release-116/`:
+//!
+//! | Input | Path under the release | Option |
+//! |---|---|---|
+//! | The peptide alignments of every gene tree | `emf/ensembl-compara/homologies/Compara.116.protein_default.aa.fasta.gz` | [`MapResiduesOptions::alignment`] |
+//! | The gene trees, one file for all species | `compara/vertebrates.GeneTree_content.default.e116.txt.gz` | [`MapResiduesOptions::gene_trees`] |
+//! | Each species' primary-assembly GTF | `gtf/homo_sapiens/Homo_sapiens.GRCh38.116.gtf.gz` | [`MapResiduesOptions::gtfs`] |
+//!
+//! - **Use the alignment and the gene trees of one release.** mzLib does not compare them, and a
+//!   gene's canonical protein and tree can change between releases. Keep Ensembl's file names: the
+//!   result reports the release each name carries, and a caveat says when they differ or one is
+//!   missing.
+//! - **Give your species' gene sets.** They are used only to choose what is kept. Without them,
+//!   mzLib's default keeps every gene in the gene-tree file, millions for the vertebrates, and every
+//!   canonical protein in the alignment, and a caveat says so. The answers for your species'
+//!   proteins are the same either way. A compact gene table ([`MapResiduesOptions::gene_sets`])
+//!   works as it does for [`build_orthology_with`].
+//! - **Batch your queries.** Reading the alignment is the cost: for human, mouse and rat at release
+//!   116, the whole call took about a minute. Each query after that is a lookup, so send them all
+//!   in one call.
+//!
+//! **The traps.**
+//!
+//! - **A position past the end of the source protein fails the whole call.** mzLib's `MapResidue`
+//!   throws for it rather than returning an outcome, so the call returns [`MzLibError::Usage`] with
+//!   mzLib's message (*"ENSP00000269305 has 393 residues."*) and no row, not even for the queries
+//!   that were fine. This crate does not check lengths itself. Keep each position within its
+//!   protein: with [`MapResiduesOptions::proteins`], a sequence's length is the last valid position.
+//! - **Use Ensembl ids and Ensembl positions.** A UniProt accession is `SourceNotInAlignment`, never
+//!   an error. Cross over with [`align_with`] first, as above.
+//! - **Sharing a gene tree is not orthology.** A tree holds a gene family, paralogs included, so an
+//!   `Aligned` answer between two proteins of one tree does not make them orthologs. Ask
+//!   [`build_orthology_with`] which genes are orthologs, then map their residues here.
+//! - **`DifferentAlignments` is not "unrelated".** It says only that this alignment cannot answer.
+//!
 //! # What these functions will not tell you, and say so instead
 //!
 //! - **A FASTA knows no GO terms and no Ensembl genes.** Its headers carry organism (`OS=`),
@@ -681,8 +891,9 @@
 //! - **GO annotation takes exactly one database**, because every row carries its sha256. A
 //!   contaminant member whose entry is not in that XML reads `no_entry`, not `no_go_terms`.
 //!
-//! Wire verbs: `proteins read`, `genes resolve`, `genes orthology`, `proteins classify-peptides`,
-//! `proteins annotate-go`, `proteins update-go`, `proteins align` and `proteins parse-accession`.
+//! Wire verbs: `proteins read`, `genes resolve`, `genes orthology`, `genes map-residues`,
+//! `proteins classify-peptides`, `proteins annotate-go`, `proteins update-go`, `proteins align` and
+//! `proteins parse-accession`.
 //!
 //! ## Cite
 //!
@@ -3089,24 +3300,15 @@ fn species_name(name: &str, what: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-/// The arguments and stdin of a `genes orthology` call: the species lines
-/// (`species<TAB>gtf|gene-set<TAB>path`), a `--` line, then one dump per line.
-fn orthology_request(
-    release: &str,
-    options: &OrthologyOptions,
-) -> Result<(Vec<String>, Option<String>)> {
-    let release = release.trim();
-    if release.is_empty() || release.contains(char::is_whitespace) {
-        return Err(MzLibError::Usage(format!(
-            "release must be an Ensembl release, e.g. \"116\"; got {release:?}."
-        )));
-    }
+/// The stdin species lines, `species<TAB>gtf|gene-set<TAB>path`, in the order given: the GTFs,
+/// then the gene sets. `genes orthology` and `genes map-residues` read them the same way.
+fn species_lines(
+    gtfs: &[(String, PathBuf)],
+    gene_sets: &[(String, PathBuf)],
+) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     let mut seen: Vec<String> = Vec::new();
-    for (kind, list, what) in [
-        ("gtf", &options.gtfs, "gtfs"),
-        ("gene-set", &options.gene_sets, "gene_sets"),
-    ] {
+    for (kind, list, what) in [("gtf", gtfs, "gtfs"), ("gene-set", gene_sets, "gene_sets")] {
         for (species, path) in list {
             let name = species_name(species, what)?;
             if seen.contains(&name) {
@@ -3124,6 +3326,22 @@ fn orthology_request(
             seen.push(name);
         }
     }
+    Ok(lines)
+}
+
+/// The arguments and stdin of a `genes orthology` call: the species lines
+/// (`species<TAB>gtf|gene-set<TAB>path`), a `--` line, then one dump per line.
+fn orthology_request(
+    release: &str,
+    options: &OrthologyOptions,
+) -> Result<(Vec<String>, Option<String>)> {
+    let release = release.trim();
+    if release.is_empty() || release.contains(char::is_whitespace) {
+        return Err(MzLibError::Usage(format!(
+            "release must be an Ensembl release, e.g. \"116\"; got {release:?}."
+        )));
+    }
+    let mut lines = species_lines(&options.gtfs, &options.gene_sets)?;
     if lines.is_empty() {
         return Err(MzLibError::Usage(
             "At least one species is required: gtfs: vec![(\"homo_sapiens\".into(), \
@@ -3263,6 +3481,376 @@ pub fn build_orthology_with(
 ) -> Result<OrthologySnapshot> {
     let request = orthology_request(release, options)?;
     bridge::require_verb("genes orthology", ORTHOLOGY_SINCE)?;
+    call(request, options.timeout)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Residues across species: Compara's gene-tree alignment (mzLib 1.0.596, #1465)
+// ---------------------------------------------------------------------------------------------
+
+/// The pyMzLib release whose bridge first dispatches `genes map-residues`.
+const MAP_RESIDUES_SINCE: &str = "0.7.0";
+
+/// Every outcome [`map_residues_with`] can report: mzLib's `ComparaColumnOutcome` names, verbatim
+/// and in mzLib's order. Every query gets exactly one: a residue (`Aligned`), a gap in the target's
+/// row (`GapInTarget`), proteins in different gene trees (`DifferentAlignments`), or a protein the
+/// alignment does not hold (`SourceNotInAlignment`, `TargetNotInAlignment`).
+pub const COLUMN_OUTCOMES: [&str; 5] = [
+    "Aligned",
+    "GapInTarget",
+    "DifferentAlignments",
+    "SourceNotInAlignment",
+    "TargetNotInAlignment",
+];
+
+/// What [`map_residues_with`] reads. Every default is mzLib's.
+///
+/// `alignment` and `gene_trees` are required; the default leaves them empty, which is refused
+/// before anything is spawned. Give your species' gene sets in `gtfs` or `gene_sets`: they choose
+/// what is kept, and without them mzLib keeps every gene.
+#[derive(Debug, Clone, Default)]
+pub struct MapResiduesOptions {
+    /// Compara's peptide alignments of its gene trees,
+    /// `Compara.<release>.protein_<collection>.aa.fasta.gz` (plain or `.gz`), from
+    /// `emf/ensembl-compara/homologies/`: one gapped multiple alignment per tree, read whole by
+    /// mzLib's `ComparaGeneTreeAlignment.Load`, which keeps only the canonical proteins of the genes
+    /// kept. 908 MB compressed for `protein_default` in release 116. Required.
+    pub alignment: PathBuf,
+    /// Compara's gene-tree file of the same release,
+    /// `<collection>.GeneTree_content.default.e<release>.txt.gz` (plain or `.gz`). It names each
+    /// gene's tree and its canonical protein (the row flagged `Y`), the only protein of the gene the
+    /// alignment holds. Required.
+    pub gene_trees: PathBuf,
+    /// Each species, as its Ensembl production name (`"homo_sapiens"`), with its Ensembl
+    /// primary-assembly GTF, as for [`build_orthology_with`]. Only the genes in these are kept, and
+    /// so only their canonical proteins. Empty with no `gene_sets` (the default): mzLib's default
+    /// keeps every gene in the gene-tree file, millions for the vertebrates, and a caveat says so.
+    pub gtfs: Vec<(String, PathBuf)>,
+    /// Instead of a GTF, a compact gene table mzLib's `EnsemblGeneSetWriter` made from one. A
+    /// species may be in `gtfs` or `gene_sets`, not both.
+    pub gene_sets: Vec<(String, PathBuf)>,
+    /// Also return the kept proteins with their ungapped sequences
+    /// ([`ResidueMappings::proteins`]), to align a UniProt sequence to an Ensembl one with
+    /// [`align_with`] without a second file. `false` (the default): `proteins` is `None`.
+    pub proteins: bool,
+    /// Time to allow. `None` (the default) waits: for human, mouse and rat at release 116 the whole
+    /// call takes about a minute, nearly all of it reading the alignment.
+    pub timeout: Option<Duration>,
+}
+
+/// Compara's gene-tree alignment file a [`map_residues_with`] call read, and what was kept.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ComparaAlignment {
+    /// The file's name, e.g. `Compara.116.protein_default.aa.fasta.gz`
+    /// (`ComparaGeneTreeAlignment.SourceFileName`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub source_file_name: String,
+    /// Lower-case hex sha256 of the file's bytes as read (the compressed bytes for a `.gz`).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub sha256: String,
+    /// The Ensembl release in the file name (`Compara.116.`); `None` when the name does not start
+    /// `Compara.<release>.`.
+    #[serde(default)]
+    pub release: Option<String>,
+    /// The collection in the file name, e.g. `"protein_default"`; `None` when the name does not
+    /// match `Compara.<release>.<collection>.aa.fasta`.
+    #[serde(default)]
+    pub collection: Option<String>,
+    /// Alignments (gene trees) in the file, kept proteins or not, in alignments.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub alignment_count: u64,
+    /// Proteins kept, in proteins: the canonical proteins of the genes kept from the gene-tree
+    /// file that the alignment holds.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub protein_count: u64,
+    /// The sha256 of the gene-tree file whose canonical proteins were kept; the same as
+    /// [`ResidueMappings::gene_trees`]' `sha256`.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub restricted_to_gene_tree_content: String,
+}
+
+/// The proteins a [`map_residues_with`] call kept from the alignment, with
+/// [`MapResiduesOptions::proteins`].
+///
+/// [`Self::columns`] has one row per kept protein, in ordinal order of protein id: `protein_id`
+/// (the Ensembl protein stable id, as the alignment's header gives it), `alignment_index` (which
+/// alignment holds it, from 0 in file order; two proteins share a column only when they share
+/// this), `tree_id` (its gene's Compara gene tree, e.g. `ENSGT00950000183153`) and `sequence` (its
+/// residues with the alignment's gaps removed: the sequence every position counts in).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlignedProteins {
+    /// Proteins kept, in proteins.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// The table, one row per protein; its column order is [`Table::names`].
+    #[serde(flatten)]
+    pub columns: Table,
+}
+
+impl AlignedProteins {
+    /// Protein id to its ungapped sequence, to align with a UniProt sequence by [`align_with`]. A
+    /// sequence's length is the last position a query may name in it.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is missing or not a string column.
+    pub fn sequences(&self) -> Result<BTreeMap<String, String>> {
+        let ids = self.columns.strings("protein_id")?;
+        let sequences = self.columns.strings("sequence")?;
+        Ok(ids
+            .into_iter()
+            .zip(sequences)
+            .filter_map(|(id, sequence)| Some((id?, sequence?)))
+            .collect())
+    }
+}
+
+/// What [`map_residues_with`] returns: each query's residue in the other protein, or why there is
+/// none.
+///
+/// [`Self::columns`] has one row per query, in the order given; [`Self::rows`] gives them as typed
+/// [`ResidueMapping`]s.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResidueMappings {
+    /// The alignment file, and what was kept from it.
+    pub alignment: ComparaAlignment,
+    /// The gene-tree file, and what was kept from it: [`GeneTrees::restricted_to_gene_sets`] is
+    /// `None` when no gene set was given, and every gene was kept.
+    pub gene_trees: GeneTrees,
+    /// Species to the [`GeneSet`] its genes were kept from, the type [`resolve_genes_with`]
+    /// reports; empty when no gene set was given.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub gene_sets: BTreeMap<String, GeneSet>,
+    /// Queries, one row each, in queries.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub row_count: u64,
+    /// Outcome to the queries with it, in queries. Every key in [`COLUMN_OUTCOMES`] is present,
+    /// zeros included.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub outcome_counts: BTreeMap<String, u64>,
+    /// The mapping table, one row per query; its column order is [`Table::names`].
+    #[serde(flatten)]
+    pub columns: Table,
+    /// Whether the call asked for [`Self::proteins`] ([`MapResiduesOptions::proteins`]).
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub proteins_included: bool,
+    /// The kept proteins with their sequences; `None` without [`MapResiduesOptions::proteins`].
+    #[serde(default)]
+    pub proteins: Option<AlignedProteins>,
+    /// This call's traps: gene trees read unrestricted (every gene kept), an alignment and
+    /// gene-tree file named for different releases or for none, queries naming a protein the
+    /// alignment did not keep.
+    #[serde(default, deserialize_with = "bridge::null_to_default")]
+    pub caveats: Vec<String>,
+}
+
+/// One row of [`ResidueMappings`]: one query, and its answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResidueMapping {
+    /// The query's source protein id, as given.
+    pub source_protein_id: String,
+    /// The query's 1-based residue position in the source protein, as given.
+    pub position: i64,
+    /// The query's target protein id, as given.
+    pub target_protein_id: String,
+    /// One of [`COLUMN_OUTCOMES`], mzLib's `ComparaColumnOutcome` name, verbatim.
+    pub outcome: String,
+    /// The source residue's 1-based column in the gene tree's alignment. `None`: the two proteins do
+    /// not share an alignment (`DifferentAlignments`, `SourceNotInAlignment` or
+    /// `TargetNotInAlignment`).
+    pub column: Option<i64>,
+    /// The 1-based position of the target's residue in that column, in the target's ungapped
+    /// sequence. `None`: the outcome is not `Aligned` (a gap is `None`, **never** the nearest
+    /// residue).
+    pub target_position: Option<i64>,
+    /// The target's residue there, one letter as the alignment writes it. It may differ from the
+    /// source's residue: a column pairs homologous positions, not identical ones. `None`: the
+    /// outcome is not `Aligned`.
+    pub target_residue: Option<String>,
+}
+
+impl ResidueMappings {
+    /// Every row, typed, in the order the queries were given.
+    ///
+    /// # Errors
+    ///
+    /// [`MzLibError::Protocol`] if a column is not the type the wire contract says it is.
+    pub fn rows(&self) -> Result<Vec<ResidueMapping>> {
+        let t = &self.columns;
+        if t.is_empty() {
+            return Ok(Vec::new());
+        }
+        let source = t.strings("source_protein_id")?;
+        let position = t.integers("position")?;
+        let target = t.strings("target_protein_id")?;
+        let outcome = t.strings("outcome")?;
+        let column = t.integers("column")?;
+        let target_position = t.integers("target_position")?;
+        let target_residue = t.strings("target_residue")?;
+        Ok((0..source.len())
+            .map(|i| ResidueMapping {
+                source_protein_id: source[i].clone().unwrap_or_default(),
+                position: position[i].unwrap_or_default(),
+                target_protein_id: target[i].clone().unwrap_or_default(),
+                outcome: outcome[i].clone().unwrap_or_default(),
+                column: column[i],
+                target_position: target_position[i],
+                target_residue: target_residue[i].clone(),
+            })
+            .collect())
+    }
+}
+
+/// The queries as stdin lines, `source<TAB>position<TAB>target`, refusing what cannot travel. The
+/// position is sent as given: mzLib owns the rule for one outside the source.
+fn query_lines<S: AsRef<str>, T: AsRef<str>>(queries: &[(S, i64, T)]) -> Result<Vec<String>> {
+    if queries.is_empty() {
+        return Err(MzLibError::Usage(
+            "queries is empty. Give at least one (source_protein_id, position, target_protein_id)."
+                .to_owned(),
+        ));
+    }
+    queries
+        .iter()
+        .enumerate()
+        .map(|(index, (source, position, target))| {
+            let mut ids = Vec::with_capacity(2);
+            for (name, value) in [("source", source.as_ref()), ("target", target.as_ref())] {
+                if value.trim().is_empty() {
+                    return Err(MzLibError::Usage(format!(
+                        "Query {index}'s {name} must be a protein id; got {value:?}."
+                    )));
+                }
+                if value.contains(['\t', '\n', '\r']) {
+                    return Err(MzLibError::Usage(format!(
+                        "Query {index}'s {name} contains a tab or line break: {value:?}."
+                    )));
+                }
+                ids.push(value.trim());
+            }
+            Ok(format!("{}\t{position}\t{}", ids[0], ids[1]))
+        })
+        .collect()
+}
+
+/// The arguments and stdin of a `genes map-residues` call: the species lines (none is mzLib's
+/// default, every gene kept), a `--` line, then one query per line.
+fn map_residues_request<S: AsRef<str>, T: AsRef<str>>(
+    queries: &[(S, i64, T)],
+    options: &MapResiduesOptions,
+) -> Result<(Vec<String>, Option<String>)> {
+    let queries = query_lines(queries)?;
+    let mut lines = species_lines(&options.gtfs, &options.gene_sets)?;
+    for (path, what, example) in [
+        (
+            &options.alignment,
+            "alignment",
+            "Compara's Compara.<release>.protein_<collection>.aa.fasta.gz",
+        ),
+        (
+            &options.gene_trees,
+            "gene_trees",
+            "Compara's <collection>.GeneTree_content.default.e<release>.txt.gz",
+        ),
+    ] {
+        if path.as_os_str().is_empty() {
+            return Err(MzLibError::Usage(format!("{what} is required: {example}.")));
+        }
+    }
+    let mut args = vec![
+        "genes".to_owned(),
+        "map-residues".to_owned(),
+        "--alignment".to_owned(),
+        optional_path(&options.alignment, "alignment")?,
+        "--gene-trees".to_owned(),
+        optional_path(&options.gene_trees, "gene_trees")?,
+    ];
+    if options.proteins {
+        args.push("--proteins".to_owned());
+    }
+    lines.push(SECTION.to_owned());
+    lines.extend(queries);
+    Ok((args, Some(lines.join("\n") + "\n")))
+}
+
+/// Map residues across species through Ensembl Compara's gene-tree alignments.
+///
+/// Wraps mzLib's `ComparaGeneTreeAlignment` (mzLib #1465): `Load` reads Compara's peptide alignment
+/// of every gene tree, keeping the canonical proteins of your species' genes, and `MapResidue`
+/// answers, per query, which residue of the target protein sits in the same alignment column as
+/// residue `position` of the source protein. Local files only; nothing is downloaded.
+///
+/// Every query gets exactly one outcome ([`COLUMN_OUTCOMES`]): `Aligned` (with the column, the
+/// target position and its residue), `GapInTarget` (no target residue in that column, **never** the
+/// nearest one), `DifferentAlignments` (the proteins are in different gene trees), or
+/// `SourceNotInAlignment` / `TargetNotInAlignment` (that protein was not kept: only each gene's
+/// canonical protein is aligned).
+///
+/// `queries` are `(source_protein_id, position, target_protein_id)`: Ensembl protein stable ids and
+/// a 1-based residue position in the source. One row each, in this order, duplicates included.
+/// They travel on stdin, after the species lines.
+///
+/// **Positions are Ensembl's.** To start from a UniProt position, align the UniProt sequence to the
+/// canonical Ensembl protein with [`align_with`] first, and align the target's Ensembl protein to
+/// its UniProt sequence after; [`MapResiduesOptions::proteins`] returns the Ensembl sequences for
+/// that. **A position outside the source protein fails the whole call**: mzLib's `MapResidue`
+/// throws for it rather than returning an outcome, and this crate passes positions through
+/// unchecked, so keep them within each source protein.
+///
+/// Needs the bridge from pyMzLib 0.7.0 or later.
+#[doc = include_str!("../docs/reference/genes.map-residues.md")]
+///
+/// # Examples
+///
+/// Human p53's Ser15 (Ensembl's canonical TP53 protein) in mouse p53, through release 116's TP53
+/// gene-tree alignment:
+///
+/// ```
+/// # mzlib_replay::activate();
+/// use mzlib::proteins::{map_residues_with, MapResiduesOptions};
+///
+/// let gtfs = vec![
+///     ("homo_sapiens".to_owned(), "Homo_sapiens.GRCh38.116.gtf".into()),
+///     ("mus_musculus".to_owned(), "Mus_musculus.GRCm39.116.gtf".into()),
+///     ("rattus_norvegicus".to_owned(), "Rattus_norvegicus.GRCr8.116.gtf".into()),
+/// ];
+/// let site = map_residues_with(
+///     &[("ENSP00000269305", 15, "ENSMUSP00000104298")],
+///     &MapResiduesOptions {
+///         alignment: "Compara.116.protein_default.aa.fasta.gz".into(),
+///         gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+///         gtfs,
+///         ..Default::default()
+///     },
+/// )?;
+/// let row = &site.rows()?[0];
+/// assert_eq!(
+///     (row.outcome.as_str(), row.column, row.target_position, row.target_residue.as_deref()),
+///     ("Aligned", Some(476), Some(18), Some("S"))
+/// );
+/// assert_eq!(
+///     (site.alignment.release.as_deref(), site.gene_trees.collection.as_deref()),
+///     (Some("116"), Some("vertebrates"))
+/// );
+/// # Ok::<(), mzlib::MzLibError>(())
+/// ```
+///
+/// # Errors this crate adds
+///
+/// [`MzLibError::Usage`] before anything is spawned for no queries, a query whose source or target
+/// is blank or holds a tab or line break; a blank `alignment` or `gene_trees`; a species given
+/// twice, or a name holding a tab, line break or comma; and when the bridge in use is older than
+/// pyMzLib 0.7.0's, which has no `genes map-residues`. From mzLib: a position outside its source
+/// protein (0, negative, or past its last residue) is [`MzLibError::Usage`] quoting mzLib, and no
+/// row is returned; a file mzLib's reader refuses is [`MzLibError::Bridge`]
+/// (`InvalidDataException`, naming the file and line).
+#[doc = include_str!("../docs/reference/genes.map-residues.see-also.md")]
+pub fn map_residues_with<S: AsRef<str>, T: AsRef<str>>(
+    queries: &[(S, i64, T)],
+    options: &MapResiduesOptions,
+) -> Result<ResidueMappings> {
+    let request = map_residues_request(queries, options)?;
+    bridge::require_verb("genes map-residues", MAP_RESIDUES_SINCE)?;
     call(request, options.timeout)
 }
 
@@ -4597,5 +5185,347 @@ mod tests {
         data["written"] = serde_json::Value::Null;
         let snap: OrthologySnapshot = serde_json::from_value(data).unwrap();
         assert!(snap.written.is_none() && snap.pair_status.is_none());
+    }
+
+    // ---- genes map-residues ---------------------------------------------------------------------
+
+    const TP53: &str = "ENSP00000269305";
+    const TRP53: &str = "ENSMUSP00000104298";
+
+    fn map_options() -> MapResiduesOptions {
+        MapResiduesOptions {
+            alignment: "Compara.116.protein_default.aa.fasta.gz".into(),
+            gene_trees: "vertebrates.GeneTree_content.default.e116.txt.gz".into(),
+            gtfs: vec![
+                ("homo_sapiens".into(), "Homo_sapiens.GRCh38.116.gtf".into()),
+                ("mus_musculus".into(), "Mus_musculus.GRCm39.116.gtf".into()),
+                (
+                    "rattus_norvegicus".into(),
+                    "Rattus_norvegicus.GRCr8.116.gtf".into(),
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn map_residues_sends_the_species_lines_then_the_queries_and_no_option_it_was_not_given() {
+        let (args, stdin) = map_residues_request(&[(TP53, 15, TRP53)], &map_options()).unwrap();
+        assert_eq!(
+            args,
+            [
+                "genes",
+                "map-residues",
+                "--alignment",
+                "Compara.116.protein_default.aa.fasta.gz",
+                "--gene-trees",
+                "vertebrates.GeneTree_content.default.e116.txt.gz"
+            ]
+        );
+        assert_eq!(
+            stdin.unwrap(),
+            "homo_sapiens\tgtf\tHomo_sapiens.GRCh38.116.gtf\n\
+             mus_musculus\tgtf\tMus_musculus.GRCm39.116.gtf\n\
+             rattus_norvegicus\tgtf\tRattus_norvegicus.GRCr8.116.gtf\n\
+             --\nENSP00000269305\t15\tENSMUSP00000104298\n"
+        );
+        assert_eq!(map_options().timeout, None);
+
+        let (args, _) = map_residues_request(
+            &[(TP53, 15, TRP53)],
+            &MapResiduesOptions {
+                proteins: true,
+                ..map_options()
+            },
+        )
+        .unwrap();
+        assert_eq!(args.last().map(String::as_str), Some("--proteins"));
+    }
+
+    #[test]
+    fn without_gene_sets_no_species_line_is_sent_and_mzlib_keeps_every_gene() {
+        let (_, stdin) = map_residues_request(
+            &[(TP53, 15, TRP53)],
+            &MapResiduesOptions {
+                gtfs: Vec::new(),
+                ..map_options()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            stdin.unwrap(),
+            "--\nENSP00000269305\t15\tENSMUSP00000104298\n",
+            "stdin starts with the separator"
+        );
+    }
+
+    #[test]
+    fn a_position_is_sent_as_given_never_checked_against_a_length() {
+        // mzLib owns the rule (MapResidue throws for a position outside the source).
+        let (_, stdin) = map_residues_request(
+            &[
+                (TP53, 0, TRP53),
+                (TP53, -3, TRP53),
+                (TP53, 1_000_000, TRP53),
+            ],
+            &map_options(),
+        )
+        .unwrap();
+        let stdin = stdin.unwrap();
+        let queries: Vec<&str> = stdin.split("--\n").nth(1).unwrap().lines().collect();
+        assert_eq!(
+            queries,
+            [
+                format!("{TP53}\t0\t{TRP53}"),
+                format!("{TP53}\t-3\t{TRP53}"),
+                format!("{TP53}\t1000000\t{TRP53}")
+            ]
+        );
+    }
+
+    #[test]
+    fn gene_sets_are_sent_as_gene_set_lines() {
+        let (_, stdin) = map_residues_request(
+            &[(TP53, 15, TRP53)],
+            &MapResiduesOptions {
+                gtfs: vec![("homo_sapiens".into(), "human.gtf.gz".into())],
+                gene_sets: vec![("mus_musculus".into(), "mouse.genes.tsv".into())],
+                ..map_options()
+            },
+        )
+        .unwrap();
+        let stdin = stdin.unwrap();
+        let species: Vec<&str> = stdin.split("--\n").next().unwrap().lines().collect();
+        assert_eq!(
+            species,
+            [
+                "homo_sapiens\tgtf\thuman.gtf.gz",
+                "mus_musculus\tgene-set\tmouse.genes.tsv"
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_map_residues_arguments_are_usage_errors_before_the_bridge_runs() {
+        let none: [(&str, i64, &str); 0] = [];
+        let cases: Vec<(Vec<(&str, i64, &str)>, MapResiduesOptions, &str)> = vec![
+            (none.to_vec(), map_options(), "queries is empty"),
+            (
+                vec![("", 15, TRP53)],
+                map_options(),
+                "source must be a protein id",
+            ),
+            (
+                vec![(TP53, 15, " ")],
+                map_options(),
+                "target must be a protein id",
+            ),
+            (
+                vec![(TP53, 15, "ENSMUSP\t1")],
+                map_options(),
+                "contains a tab or line break",
+            ),
+            (
+                vec![(TP53, 15, TRP53)],
+                MapResiduesOptions {
+                    alignment: PathBuf::new(),
+                    ..map_options()
+                },
+                "alignment is required",
+            ),
+            (
+                vec![(TP53, 15, TRP53)],
+                MapResiduesOptions {
+                    gene_trees: PathBuf::new(),
+                    ..map_options()
+                },
+                "gene_trees is required",
+            ),
+            (
+                vec![(TP53, 15, TRP53)],
+                MapResiduesOptions {
+                    gene_sets: vec![("homo_sapiens".into(), "h.tsv".into())],
+                    ..map_options()
+                },
+                "'homo_sapiens' is given twice in gtfs and gene_sets",
+            ),
+        ];
+        for (queries, options, needle) in cases {
+            match map_residues_request(&queries, &options) {
+                Err(MzLibError::Usage(message)) => assert!(message.contains(needle), "{message}"),
+                other => panic!("{needle}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_outcome_is_mzlibs_name_and_a_gap_is_never_the_nearest_residue() {
+        let mapped: ResidueMappings = recorded("genes_map_residues_tp53.json");
+        assert_eq!(mapped.row_count, 9);
+        assert_eq!(
+            mapped.columns.names(),
+            [
+                "source_protein_id",
+                "position",
+                "target_protein_id",
+                "outcome",
+                "column",
+                "target_position",
+                "target_residue"
+            ]
+        );
+        let rows = mapped.rows().unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>(),
+            [
+                "Aligned",
+                "Aligned",
+                "GapInTarget",
+                "Aligned",
+                "Aligned",
+                "Aligned",
+                "DifferentAlignments",
+                "SourceNotInAlignment",
+                "TargetNotInAlignment"
+            ]
+        );
+        let mut keys: Vec<&str> = mapped.outcome_counts.keys().map(String::as_str).collect();
+        let mut outcomes = COLUMN_OUTCOMES.to_vec();
+        keys.sort_unstable();
+        outcomes.sort_unstable();
+        assert_eq!(keys, outcomes, "every outcome");
+        assert_eq!(
+            COLUMN_OUTCOMES.map(|o| mapped.outcome_counts[o]),
+            [5, 1, 1, 1, 1]
+        );
+        // Human S15, S20 and S392 are mouse S18, S23 and S389; S46 faces a gap in mouse.
+        assert_eq!(
+            rows.iter().map(|r| r.target_position).collect::<Vec<_>>(),
+            [
+                Some(18),
+                Some(23),
+                None,
+                Some(389),
+                Some(15),
+                Some(15),
+                None,
+                None,
+                None
+            ]
+        );
+        assert_eq!(
+            rows.iter().map(|r| r.column).collect::<Vec<_>>(),
+            [
+                Some(476),
+                Some(547),
+                Some(863),
+                Some(3036),
+                Some(476),
+                Some(476),
+                None,
+                None,
+                None
+            ]
+        );
+        assert_eq!(
+            rows[2],
+            ResidueMapping {
+                source_protein_id: TP53.into(),
+                position: 46,
+                target_protein_id: TRP53.into(),
+                outcome: "GapInTarget".into(),
+                column: Some(863),
+                target_position: None,
+                target_residue: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_map_residues_envelope_says_what_went_in() {
+        let mapped: ResidueMappings = recorded("genes_map_residues_tp53.json");
+        let a = &mapped.alignment;
+        assert_eq!(
+            (
+                a.source_file_name.as_str(),
+                a.release.as_deref(),
+                a.collection.as_deref()
+            ),
+            (
+                "Compara.116.protein_default.aa.fasta.gz",
+                Some("116"),
+                Some("protein_default")
+            )
+        );
+        assert_eq!((a.alignment_count, a.protein_count), (2, 5));
+        assert_eq!(a.restricted_to_gene_tree_content, mapped.gene_trees.sha256);
+        assert_eq!(mapped.gene_trees.member_count, 5);
+        let mut set_hashes: Vec<String> = mapped
+            .gene_sets
+            .values()
+            .map(|g| g.sha256.clone())
+            .collect();
+        set_hashes.sort();
+        assert_eq!(mapped.gene_trees.restricted_to_gene_sets, Some(set_hashes));
+        assert_eq!(
+            mapped.gene_sets["homo_sapiens"].genome_build.as_deref(),
+            Some("GRCh38.p14")
+        );
+        assert_eq!(
+            mapped.gene_sets.keys().collect::<Vec<_>>(),
+            ["homo_sapiens", "mus_musculus", "rattus_norvegicus"]
+        );
+        assert!(mapped
+            .caveats
+            .iter()
+            .any(|c| c.contains("2 queries name a protein the alignment did not keep")));
+    }
+
+    #[test]
+    fn proteins_hold_the_kept_canonical_proteins_with_their_ungapped_sequences() {
+        let mapped: ResidueMappings = recorded("genes_map_residues_tp53.json");
+        let kept = mapped.proteins.as_ref().unwrap();
+        assert_eq!(kept.row_count, 5);
+        let ids = kept.columns.strings("protein_id").unwrap();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted, "mzLib's ordinal order");
+        let sequences = kept.sequences().unwrap();
+        assert_eq!((sequences[TP53].len(), sequences[TRP53].len()), (393, 390));
+        assert!(sequences.values().all(|s| !s.contains('-')));
+        assert_eq!(
+            (&sequences[TP53][14..15], &sequences[TRP53][17..18]),
+            ("S", "S")
+        );
+        let trees: BTreeMap<String, String> = ids
+            .into_iter()
+            .zip(kept.columns.strings("tree_id").unwrap())
+            .filter_map(|(id, tree)| Some((id?, tree?)))
+            .collect();
+        assert_eq!(trees[TP53], "ENSGT00950000183153");
+        assert_eq!(trees[TRP53], trees[TP53]);
+        assert!(
+            !sequences.contains_key("ENSP00000352610"),
+            "a TP53 isoform Compara did not align"
+        );
+    }
+
+    #[test]
+    fn without_proteins_the_block_is_none() {
+        let site: ResidueMappings = recorded("genes_map_residues_chain.json");
+        assert!(!site.proteins_included && site.proteins.is_none());
+        assert_eq!(
+            site.rows().unwrap(),
+            [ResidueMapping {
+                source_protein_id: TP53.into(),
+                position: 15,
+                target_protein_id: TRP53.into(),
+                outcome: "Aligned".into(),
+                column: Some(476),
+                target_position: Some(18),
+                target_residue: Some("S".into()),
+            }]
+        );
+        assert!(site.caveats.is_empty());
     }
 }

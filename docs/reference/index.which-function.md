@@ -11,7 +11,7 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Map a residue of one protein to the residue of another protein in the same column of Ensembl Compara's gene-tree alignment, or say why there is none, for a batch of queries. | `mzlib::proteins::map_residues_with` (not yet) | `pymzlib.proteins.map_residues` | `proteins_map_residues` | `genes map-residues` |
+| Map a residue of one protein to the residue of another protein in the same column of Ensembl Compara's gene-tree alignment, or say why there is none, for a batch of queries. | [`mzlib::proteins::map_residues_with`](crate::proteins::map_residues_with) | `pymzlib.proteins.map_residues` | `proteins_map_residues` | `genes map-residues` |
 | Build an Ensembl Compara orthology snapshot for a set of species from their gene sets, the gene trees and every species' homology dump, and optionally write it as Parquet and say, gene by gene, how far Compara's inference got in another species. | [`mzlib::proteins::build_orthology_with`](crate::proteins::build_orthology_with) | `pymzlib.proteins.build_orthology` | `proteins_build_orthology` | `genes orthology` |
 | Resolve every protein in the given databases to stable Ensembl gene ids, counted against a caller-supplied, release-pinned gene set, with one outcome per protein and the hash of every input. | [`mzlib::proteins::resolve_genes_with`](crate::proteins::resolve_genes_with) | `pymzlib.proteins.resolve_genes` | `proteins_resolve_genes` | `genes resolve` |
 

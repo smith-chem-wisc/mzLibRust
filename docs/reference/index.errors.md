@@ -22,7 +22,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `genes map-residues` · `mzlib::proteins::map_residues_with` (not yet)
+### `genes map-residues` · [`mzlib::proteins::map_residues_with`](crate::proteins::map_residues_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|

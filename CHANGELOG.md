@@ -61,6 +61,19 @@ A wire verb's first appearance here is the version its spec in the bridge record
   library guide gains "Calibrate a run onto library iRT", on two DIA-NN reports from mzLib's test
   data (`tests/fixtures/calibration/`, pyMzLib 0.7.0's, byte for byte). Wire verb
   `library calibrate-rt`.
+- **`proteins::map_residues_with`, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1465): which
+  residue of a target protein sits in the same column of Ensembl Compara's gene-tree alignment as
+  a source residue, or why none does (`COLUMN_OUTCOMES`, mzLib's `ComparaColumnOutcome` names
+  verbatim: a gap is `GapInTarget`, never the nearest residue), for a batch of
+  `(source, position, target)` queries. `MapResiduesOptions` takes the alignment, the gene-tree
+  file, the species' `gtfs` or `gene_sets` (none is mzLib's default, every gene kept) and
+  `proteins` (the kept proteins' ungapped sequences, `AlignedProteins::sequences()`). Returns
+  `ResidueMappings` (`ComparaAlignment`, `GeneTrees`, `GeneSet`s; `rows()` giving
+  `ResidueMapping`s). A position outside its source protein fails the whole call, as mzLib's
+  `MapResidue` throws: positions are sent unchecked. The proteins guide gains "Map a residue
+  across species", with the UniProt-to-UniProt chain through `read_with` and `align_with`, on a
+  byte-exact cut of Ensembl release 116 (`tests/fixtures/map_residues/`, `-text` in
+  `.gitattributes`, pyMzLib 0.7.0's). Wire verb `genes map-residues`.
 - **The replay bridge learns pyMzLib 0.7.0's matching rules**: `--link` held to the recording's
   `link` echo by value, a `true`/`false` option held to its boolean echo (`--with-depth`),
   `genes map-residues`' `--proteins` choice and alignment file, and the stdin echoes of

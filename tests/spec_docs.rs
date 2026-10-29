@@ -364,6 +364,13 @@ const PROTEINS: &[Deviation] = &[
         "the species lines are rendered from OrthologyOptions::gtfs and ::gene_sets, two lists of \
          (production name, path), as pyMzLib renders them from its gtfs= and gene_sets=",
     ),
+    dev(
+        "genes map-residues",
+        "param.species",
+        Some("gtfs"),
+        "the species lines are rendered from MapResiduesOptions::gtfs and ::gene_sets, as for \
+         genes orthology; none (both empty) is mzLib's default, every gene kept",
+    ),
 ];
 
 /// Deviations: pride.

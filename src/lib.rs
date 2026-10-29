@@ -53,8 +53,9 @@
 //! SDRF experimental-design files have their own module, [`sdrf`], because `read_records`
 //! cannot carry them without loss. Protein databases — what an accession is, which Ensembl gene
 //! it resolves to, and whether a peptide is unique — are the [`proteins`] module, which also
-//! carries a residue across isoforms and orthologs ([`proteins::align_with`]) and builds an
-//! Ensembl Compara orthology snapshot ([`proteins::build_orthology_with`]).
+//! carries a residue across isoforms and orthologs ([`proteins::align_with`]), builds an
+//! Ensembl Compara orthology snapshot ([`proteins::build_orthology_with`]), and maps a residue
+//! across species through Compara's gene-tree alignment ([`proteins::map_residues_with`]).
 //! [`sdrf::design_with`] reads a label-free experimental design out of an SDRF, ready for
 //! FlashLFQ, or every reason it cannot; [`sdrf::isobaric_design_with`] does the same for a TMT
 //! design, and [`sdrf::restrict_with`] first cuts the SDRF to the files a search read.
@@ -62,11 +63,13 @@
 //! isobaric labelling kits mzLib can name
 //! — TMT, TMTpro, iTRAQ, DiLeu — with their reporter-ion m/z, are the [`isobaric`] module.
 //! mzLib's binary spectral libraries (`.msl`), one row per precursor or per fragment ion, with
-//! mzLib's "not available" values as `None`, are the [`library`] module.
+//! mzLib's "not available" values as `None`, are the [`library`] module, which also maps a run's
+//! minutes onto a library's iRT scale ([`library::calibrate_rt`]).
 //! Differential abundance without R — limma's moderated t with contrasts and confidence
 //! intervals, Benjamini-Hochberg and DerSimonian-Laird meta-analysis, p-value combination,
-//! Spearman correlation, logistic and mixed models per feature, and entrapment FDP estimates, each
-//! held by mzLib to the R reference — is the [`stats`] module. The design and contrasts files it
+//! Spearman correlation, logistic and mixed models per feature (also on a latent scale, with
+//! counted samples), and entrapment FDP estimates, each held by mzLib to the R reference — is the
+//! [`stats`] module. The design and contrasts files it
 //! reads, from a sample sheet, and every peptide in every sample, from a FlashLFQ or MetaMorpheus
 //! peptide table, are the [`diff`] module. PTM site occupancy, PTM-PTM pairs and the effect of a
 //! per-run trait on each site's occupancy are the [`ptmqtl`] module.
