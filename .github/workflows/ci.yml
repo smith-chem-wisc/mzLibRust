@@ -25,7 +25,7 @@ env:
 
 jobs:
   # The offline suite must pass with no network and no bridge staged. That is the contract: a
-  # contributor should be able to clone, `cargo test`, and be green without a 130 MB payload.
+  # contributor should be able to clone, `cargo test`, and be green without a 65 MB download.
   test:
     name: test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -128,7 +128,7 @@ jobs:
             --pattern 'mzlib-bridge-linux-x64.tar.gz' --pattern 'SHA256SUMS'
 
           # Verified against the published manifest, not taken on the strength of HTTPS. `-c` fails
-          # the job on a mismatch, which is the point: a corrupted 160 MB payload should stop here
+          # the job on a mismatch, which is the point: a corrupted 60 MB payload should stop here
           # rather than surface later as an inexplicable test failure.
           grep 'mzlib-bridge-linux-x64.tar.gz' SHA256SUMS | sha256sum -c -
 

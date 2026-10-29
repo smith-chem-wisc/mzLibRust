@@ -304,7 +304,7 @@ peptide roll-up drops most transfers.
 **You do not need one to build, test, document or lint the crate.** `cargo test` runs the whole
 offline suite with no network and no .NET on the machine. A bridge is required only for calls that
 actually reach mzLib, and a missing one is a runtime error with instructions, never a build failure
-— so contributors are never blocked by a 130 MB payload they may not want.
+— so contributors are never blocked by a 65 MB download they may not want.
 
 The simplest way to get one:
 
@@ -315,7 +315,7 @@ let bridge = mzlib::install::install_bridge()?;
 It downloads the bridge pyMzLib published for your platform, verifies it against a checksum recorded
 in this crate, unpacks it and caches it per-user. **It asks first, and nothing calls it for you** —
 fetching the bridge is a user action, never a side effect of building. A built-in default download
-would make a first `cargo check` pull 130 MB and break vendored and air-gapped builds, so `build.rs`
+would make a first `cargo check` pull 65 MB and break vendored and air-gapped builds, so `build.rs`
 has no default URL and never will. mzLibR's `mzlibr_install_bridge()` is the same function for the
 same reasons.
 

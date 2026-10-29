@@ -4,7 +4,7 @@
 //! written in C#. mzLibRust makes its functionality callable from Rust with **no .NET installation**
 //! — what it needs is a self-contained bridge executable, which
 //! [`install::install_bridge`] fetches for your platform on request. The crate cannot carry it:
-//! crates.io allows about 10 MB and the payload is roughly 130 MB. Nothing downloads it for you,
+//! crates.io allows about 10 MB and the payload is roughly 65 MB. Nothing downloads it for you,
 //! and the whole offline test suite passes without it.
 //!
 //! It is the sibling of [pyMzLib](https://github.com/smith-chem-wisc/pyMzLib) and speaks the same

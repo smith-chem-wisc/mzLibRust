@@ -6,7 +6,7 @@
 //! then a staged `_dotnet/<rid>/`, then `MZLIB_BRIDGE_URL` — all caller-supplied, with no default.
 //! That is deliberate: the build script never fails the build, and `cargo check`, `cargo doc`,
 //! `cargo clippy` and the whole offline suite must pass on a machine that has never seen a .NET
-//! binary. Giving it a built-in URL would make the crate download roughly 130 MB the first time
+//! binary. Giving it a built-in URL would make the crate download roughly 65 MB the first time
 //! anybody compiled it, and break vendored and air-gapped builds.
 //!
 //! So the fetch moves out of the build and becomes something a person does: this module.
@@ -85,10 +85,11 @@ pub const BRIDGE_ASSETS: &[(&str, &str)] = &[
 
 /// How much the download weighs, for the consent prompt.
 ///
-/// Measured, not guessed: a real `linux-x64` install of `v0.1.0.dev4` pulled 129.5 MB. The
-/// platforms differ — the macOS x64 payload is larger, because mzLib copies native content files
-/// regardless of runtime identifier (`bridge/UPSTREAM.md` U7) — so this is deliberately "about".
-const APPROXIMATE_SIZE: &str = "about 130 MB";
+/// Measured, not guessed: pyMzLib 0.7.0's archives are 59.3 MiB (`linux-x64`) to 64.8 MiB
+/// (`osx-x64`) to download, and unpack to 81 MiB (`win-x64`) to 105 MiB (`linux-x64`). The
+/// platforms differ, so this is deliberately "about". It was 130 MB until the bridge stopped
+/// carrying libtorch.
+const APPROXIMATE_SIZE: &str = "about 65 MB (about 110 MB once unpacked)";
 
 /// The tarball that carries the bridge for a runtime identifier.
 ///
@@ -177,7 +178,7 @@ impl Default for InstallOptions {
             url: None,
             sha256: None,
             quiet: false,
-            // R raises its 60-second default for the same reason: a 130 MB payload will not meet it.
+            // R raises its 60-second default for the same reason: a 65 MB download often will not meet it.
             timeout: Duration::from_secs(1800),
         }
     }
@@ -413,7 +414,7 @@ fn download(url: &str, destination: &Path, timeout: Duration) -> std::result::Re
 
 /// The SHA-256 of a file, as lowercase hex.
 ///
-/// Verification is never skipped quietly: a 130 MB executable that is about to be run is not
+/// Verification is never skipped quietly: a 100 MB executable that is about to be run is not
 /// something to accept on the strength of HTTPS alone. If no hasher exists this returns an error
 /// and the install refuses, exactly as mzLibR does.
 fn sha256(path: &Path) -> std::result::Result<String, String> {
@@ -512,7 +513,7 @@ mod tests {
     use super::*;
 
     // Nothing here downloads anything. The parts worth testing are the refusals — mzLibRust must
-    // never install an executable it has not verified, and must never write 130 MB anywhere without
+    // never install an executable it has not verified, and must never write 110 MB anywhere without
     // being asked — and every one of those is reachable before a byte moves.
 
     #[test]
