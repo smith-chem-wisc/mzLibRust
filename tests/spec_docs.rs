@@ -238,6 +238,12 @@ const STATS: &[Deviation] = &[
         Some("coefficients"),
         "one stdin line per element of fit_mixed_with's coefficients",
     ),
+    dev(
+        "stats fit-latent-mixed",
+        "param.stdin",
+        Some("coefficients"),
+        "one stdin line per element of fit_latent_mixed_with's coefficients",
+    ),
 ];
 
 /// Deviations: diff.

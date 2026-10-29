@@ -30,6 +30,32 @@ A wire verb's first appearance here is the version its spec in the bridge record
   example, on mzLib's `BoundsEnterTypeAAsTiedRanks`, `ARunCovariateIsPartialledOut` and
   `TraitDesign` cases (`bounds.tsv`, `depth.tsv` and `depth_psms.tsv` vendored byte for byte from
   pyMzLib 0.7.0), and `PENDING` in `tests/spec_docs.rs` is empty.
+- **`stats` gains two latent-scale verbs, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1469),
+  with a guide section ("When some samples are only counted") whose examples run, and live
+  canaries against lme4's `glmer` and `glmmTMB`:
+  - **`stats::fit_latent_mixed_with`**: one random-intercept mixed model per feature on a latent
+    scale (logit occupancy, say), from samples measured on it
+    (`FitLatentMixedOptions::responses`), counted through it, k of n trials
+    (`FitLatentMixedOptions::counts`), or both; mzLib's `LogitNormalMixedModel.Fit`. The `link`
+    argument is required (mzLib has none): `Link::Identity`, a `DetectionLink`, or 2 to 4 numbers
+    (`[f64; 2..=4]`), a number left out being mzLib's default. `depth`, `residual_variance` and
+    `estimator` are sent only when set. Returns `LatentMixedModelFit` (with the `DetectionLink`
+    mzLib used), whose `rows(coefficient)` gives `LatentMixedRow`s; `LATENT_MIXED_STATUSES`.
+    Wire verb `stats fit-latent-mixed`.
+  - **`stats::fit_link` / `fit_link_with`**: the detection link fitted from cells by maximum
+    likelihood, mzLib's `LogitNormalMixedModel.FitLink`. `FitLinkOptions::with_depth`,
+    `with_overdispersion` and `detection_only` are `None` (mzLib's declared defaults, which
+    `LinkFit` reports) unless you set them. `LinkFit::link` is `None` when mzLib's search did not
+    converge. Wire verb `stats fit-link`.
+  The recordings and inputs (`stats/lnmm_*`, `stats/link_cells.tsv`, and
+  `stats_fit_mixed_lnmm_simulated.json` for the guide's comparison) are pyMzLib 0.7.0's, byte for
+  byte.
+- **The replay bridge learns pyMzLib 0.7.0's matching rules**: `--link` held to the recording's
+  `link` echo by value, a `true`/`false` option held to its boolean echo (`--with-depth`),
+  `genes map-residues`' `--proteins` choice and alignment file, and the stdin echoes of
+  `stats fit-latent-mixed` (coefficients), `genes map-residues` (species and queries) and
+  `library calibrate-rt` (anchors and queries, compared as numbers). `--restrict-gene-trees` is
+  checked only for `genes orthology`, as pyMzLib's rule says.
 
 - **The bridge pin is pyMzLib v0.7.0** (mzLib 1.0.596, tag commit `cc67b7a2`; bridge-watch's
   repin, mzLibRust #37). `install_bridge()` fetches it, and its bridge dispatches 57 verbs. Every

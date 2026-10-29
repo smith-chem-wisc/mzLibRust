@@ -1061,3 +1061,270 @@ fn the_new_verbs_cross_their_refusals_as_usage_errors() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- pyMzLib 0.7.0's latent-scale verbs ----------------------------------------------------------
+//
+// test_stats_latent_live.py, test for test. Each skips on a bridge without the verb.
+
+use mzlib::stats::{
+    fit_latent_mixed_with, fit_link_with, DetectionLink, FitLatentMixedOptions, FitLinkOptions,
+    LatentMixedModelFit, Link,
+};
+
+/// `FitLink`'s estimate is Nelder-Mead's stopping point, with no polishing step: its last digits
+/// follow the platform's math library further than a polished optimum's.
+const CROSS_PLATFORM_SIMPLEX: f64 = 1e-4;
+
+fn latent_scatter() -> mzlib::Result<LatentMixedModelFit> {
+    fit_latent_mixed_with(
+        stats_file("lnmm_reference_design.tsv"),
+        stats_file("lnmm_reference_groups.tsv"),
+        &["Intercept", "trait", "x"],
+        Link::Identity,
+        &FitLatentMixedOptions {
+            counts: Some(stats_file("lnmm_scatter_counts.tsv")),
+            threads: -1,
+            ..Default::default()
+        },
+    )
+}
+
+fn latent_link_ml() -> mzlib::Result<LatentMixedModelFit> {
+    fit_latent_mixed_with(
+        stats_file("lnmm_reference_design.tsv"),
+        stats_file("lnmm_reference_groups.tsv"),
+        &["Intercept", "trait", "x"],
+        [-0.4, 0.6, 0.3],
+        &FitLatentMixedOptions {
+            counts: Some(stats_file("lnmm_link_counts.tsv")),
+            depth: Some(stats_file("lnmm_link_depth.tsv")),
+            residual_variance: Some(stats_file("lnmm_link_residual_variance.tsv")),
+            estimator: Some("ml".into()),
+            threads: -1,
+            ..Default::default()
+        },
+    )
+}
+
+fn latent_simulated() -> mzlib::Result<LatentMixedModelFit> {
+    fit_latent_mixed_with(
+        stats_file("lnmm_simulated_design.tsv"),
+        stats_file("lnmm_simulated_groups.tsv"),
+        &["Intercept", "trait"],
+        [0.4, 0.6],
+        &FitLatentMixedOptions {
+            responses: Some(stats_file("lnmm_simulated_responses.tsv")),
+            counts: Some(stats_file("lnmm_simulated_counts.tsv")),
+            threads: -1,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn the_latent_mixed_recordings_are_what_the_bridge_returns_today() {
+    let Some(()) = require_verb("stats fit-latent-mixed") else {
+        return;
+    };
+    for (fixture, live) in [
+        ("stats_fit_latent_mixed_scatter.json", latent_scatter()),
+        ("stats_fit_latent_mixed_link_ml.json", latent_link_ml()),
+        ("stats_fit_latent_mixed_simulated.json", latent_simulated()),
+    ] {
+        let live = live.unwrap();
+        let recorded = recording(fixture);
+        let names: Vec<&str> = recorded["column_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(live.columns.names(), names, "{fixture}");
+        // A variance near its boundary sits where the likelihood is flat, so its last digits move
+        // far more than the other columns' between platforms: the two variance columns are held on
+        // the scale of the feature's larger variance, as mzLib's own reference test holds tau².
+        let column = |name: &str| recorded["columns"][name].as_array().unwrap().clone();
+        let scales: Vec<f64> = column("residual_variance")
+            .iter()
+            .zip(column("group_variance"))
+            .map(|(r, g)| {
+                r.as_f64()
+                    .unwrap_or(0.0)
+                    .abs()
+                    .max(g.as_f64().unwrap_or(0.0).abs())
+            })
+            .collect();
+        for name in &names {
+            let ours = live.columns.raw(name).unwrap();
+            let theirs = column(name);
+            assert_eq!(ours.len(), theirs.len(), "{fixture} {name}");
+            let variance = matches!(*name, "residual_variance" | "group_variance");
+            for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+                match (a.as_f64(), b.as_f64(), a.is_boolean()) {
+                    (Some(a), Some(b), false) => {
+                        let scale = if variance { scales[i] } else { b.abs() };
+                        assert!(
+                            (a - b).abs() <= CROSS_PLATFORM_OPTIMISED * scale.max(1e-300),
+                            "{fixture} {name}[{i}]: {a} {b}"
+                        );
+                    }
+                    _ => assert_eq!(a, b, "{fixture} {name}[{i}]"),
+                }
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&live.caveats).unwrap(),
+            recorded["caveats"],
+            "{fixture}"
+        );
+        // Its keys are the bridge's reading of mzLib's code (mzLib #1487); a change must not slip
+        // past.
+        assert_eq!(
+            serde_json::to_value(&live.status_counts).unwrap(),
+            recorded["status_counts"],
+            "{fixture}"
+        );
+        let link: DetectionLink = serde_json::from_value(recorded["link"].clone()).unwrap();
+        assert_eq!(live.link, link, "{fixture}");
+    }
+}
+
+#[test]
+fn the_link_recording_is_what_the_bridge_returns_today() {
+    let Some(()) = require_verb("stats fit-link") else {
+        return;
+    };
+    let recorded = recording("stats_fit_link_simulated.json");
+    let live = fit_link_with(
+        stats_file("link_cells.tsv"),
+        &FitLinkOptions {
+            with_depth: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let link = live.link.expect("the search converged");
+    for (name, ours) in [
+        ("intercept", link.intercept),
+        ("slope", link.slope),
+        ("depth_slope", link.depth_slope),
+        ("overdispersion", link.overdispersion),
+    ] {
+        let theirs = recorded["link"][name].as_f64().unwrap();
+        assert!(
+            (ours - theirs).abs() <= CROSS_PLATFORM_SIMPLEX * theirs.abs().max(1e-300),
+            "{name}: {ours} {theirs}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&live.caveats).unwrap(),
+        recorded["caveats"]
+    );
+    assert_eq!(
+        (
+            live.with_depth,
+            live.with_overdispersion,
+            live.detection_only
+        ),
+        (
+            recorded["with_depth"].as_bool().unwrap(),
+            recorded["with_overdispersion"].as_bool().unwrap(),
+            recorded["detection_only"].as_bool().unwrap()
+        )
+    );
+}
+
+#[test]
+fn fit_latent_mixed_matches_glmer_and_glmmtmb() {
+    let Some(()) = require_verb("stats fit-latent-mixed") else {
+        return;
+    };
+    let ml = latent_link_ml().unwrap();
+    let glmer: Vec<_> = tsv("lnmm_counted_fit.tsv")
+        .into_iter()
+        .filter(|r| r["link"] == "link" && r["method"] == "ML")
+        .collect();
+    for (j, coefficient) in ["Intercept", "trait", "x"].iter().enumerate() {
+        for (ours, theirs) in ml.rows(coefficient).unwrap().iter().zip(&glmer) {
+            if theirs["status"] != "fitted" {
+                continue;
+            }
+            let se: f64 = theirs[&format!("se{j}")].parse().unwrap();
+            let b: f64 = theirs[&format!("b{j}")].parse().unwrap();
+            assert!(
+                (ours.estimate.unwrap() - b).abs() < 1e-5 * se,
+                "{coefficient}"
+            );
+            assert!(
+                (ours.standard_error.unwrap() - se).abs() / se < 5e-5,
+                "{coefficient}"
+            );
+        }
+    }
+    let reml = latent_scatter().unwrap();
+    let tmb: Vec<_> = tsv("lnmm_scatter_fit.tsv")
+        .into_iter()
+        .filter(|r| r["method"] == "REML")
+        .collect();
+    for (ours, theirs) in reml.rows("trait").unwrap().iter().zip(&tmb) {
+        let tau2: f64 = theirs["tau2"].parse().unwrap();
+        assert!((ours.group_variance.unwrap() - tau2).abs() < 0.03 * tau2 + 0.003);
+    }
+}
+
+#[test]
+fn the_latent_verbs_cross_their_refusals_as_usage_errors() {
+    let Some(()) = require_verb("stats fit-link") else {
+        return;
+    };
+    let (design, groups) = (
+        stats_file("lnmm_simulated_design.tsv"),
+        stats_file("lnmm_simulated_groups.tsv"),
+    );
+    let dir = scratch("latent-refusals");
+    let counts = dir.join("counts.tsv");
+    std::fs::write(&counts, "feature\ts1\nA\t6/5\n").unwrap();
+    usage_containing(
+        fit_latent_mixed_with(
+            &design,
+            &groups,
+            &["trait"],
+            Link::Identity,
+            &FitLatentMixedOptions {
+                responses: Some(stats_file("lnmm_simulated_responses.tsv")),
+                counts: Some(counts),
+                ..Default::default()
+            },
+        ),
+        "must list exactly the responses' features",
+    );
+    let simulated_counts = FitLatentMixedOptions {
+        counts: Some(stats_file("lnmm_simulated_counts.tsv")),
+        ..Default::default()
+    };
+    usage_containing(
+        fit_latent_mixed_with(&design, &groups, &["trait"], [0.0, 0.0], &simulated_counts),
+        "non-zero slope",
+    );
+    usage_containing(
+        fit_latent_mixed_with(
+            &design,
+            &groups,
+            &["trait"],
+            [0.0, 1.0, 0.2],
+            &simulated_counts,
+        ),
+        "supply one depth per sample",
+    );
+    let cells = dir.join("cells.tsv");
+    std::fs::write(
+        &cells,
+        "latent_mean\tlatent_sd\tsuccesses\ttrials\tfeature\n0\t1\t1\t2\tA\n",
+    )
+    .unwrap();
+    usage_containing(
+        fit_link_with(&cells, &FitLinkOptions::default()),
+        "Not a column this file takes: feature",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

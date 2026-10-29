@@ -552,7 +552,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `stats fit-latent-mixed` · `mzlib::stats::fit_latent_mixed_with` (not yet)
+### `stats fit-latent-mixed` · [`mzlib::stats::fit_latent_mixed_with`](crate::stats::fit_latent_mixed_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
@@ -563,7 +563,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `stats fit-link` · `mzlib::stats::fit_link_with` (not yet)
+### `stats fit-link` · [`mzlib::stats::fit_link_with`](crate::stats::fit_link_with)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
