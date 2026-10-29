@@ -754,13 +754,27 @@ fn stdin_mismatch(recording: &Recording, stdin: &str, verb: &str) -> Option<Stri
             };
             sent.push(format!("{group}\t{role}\t{rt}\t{irt}"));
         }
-        if sent.as_slice() == recording.inputs {
+        // build.rs reads the recording with serde_json's default float parser, which can land one
+        // unit in the last place from the correctly rounded value the call parses, so the times
+        // are compared to 1e-15 relative, not as text.
+        let same_line = |a: &str, b: &str| {
+            let (a, b): (Vec<&str>, Vec<&str>) = (a.split('\t').collect(), b.split('\t').collect());
+            a.len() == b.len()
+                && a.iter().zip(&b).all(|(x, y)| {
+                    x == y
+                        || matches!((x.parse::<f64>(), y.parse::<f64>()),
+                            (Ok(x), Ok(y)) if (x - y).abs() <= 1e-15 * y.abs())
+                })
+        };
+        if sent.len() == recording.inputs.len()
+            && sent.iter().zip(recording.inputs).all(|(a, b)| same_line(a, b))
+        {
             return None;
         }
         let first = sent
             .iter()
             .zip(recording.inputs)
-            .position(|(a, b)| a != b)
+            .position(|(a, b)| !same_line(a, b))
             .unwrap_or(sent.len().min(recording.inputs.len()));
         return Some(format!(
             "recorded for {} other lines (first difference at line {})",

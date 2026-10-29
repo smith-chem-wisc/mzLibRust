@@ -70,7 +70,17 @@ const DEVIATIONS: &[&[Deviation]] = &[
     STATS,
     DIFF,
     PTMQTL,
+    LIBRARY,
 ];
+
+/// Deviations: library.
+const LIBRARY: &[Deviation] = &[dev(
+    "library calibrate-rt",
+    "param.stdin",
+    Some("anchors"),
+    "one stdin line per RtAnchor in calibrate_rt's anchors, then a `--` line and one per RtQuery \
+     in its queries",
+)];
 
 /// Deviations: conventions that hold for every verb.
 const COMMON: &[Deviation] = &[
@@ -2015,7 +2025,16 @@ fn every_param_and_field_is_documented_with_its_unit() {
         };
 
         // ---- parameters: the options struct, or the function's own arguments ------------------
-        let options = spec.rust("options");
+        // A spec that names no options struct (library calibrate-rt's, recorded before the port)
+        // still has its options checked: the struct is the argument whose type is named *Options,
+        // as the bulk form finds its own below.
+        let options = spec.rust("options").or_else(|| {
+            function
+                .inputs
+                .iter()
+                .filter_map(|(_, ty)| base_struct(ty))
+                .find(|name| name.ends_with("Options"))
+        });
         let option_fields = options
             .as_deref()
             .map(|o| rust.fields_deep(&module, o))

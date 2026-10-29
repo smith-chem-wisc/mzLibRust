@@ -25,7 +25,7 @@
 
 | You want to | mzLibRust | pyMzLib | mzLibR | Wire verb |
 |---|---|---|---|---|
-| Fit each run's map from retention time in minutes onto a spectral library's iRT scale from anchors you choose, and convert the times you send with them, in either direction. | `mzlib::library::calibrate_rt` (not yet) | `pymzlib.library.calibrate_rt` | `library_calibrate_rt` | `library calibrate-rt` |
+| Fit each run's map from retention time in minutes onto a spectral library's iRT scale from anchors you choose, and convert the times you send with them, in either direction. | [`mzlib::library::calibrate_rt`](crate::library::calibrate_rt) | `pymzlib.library.calibrate_rt` | `library_calibrate_rt` | `library calibrate-rt` |
 | Read an mzLib spectral library (.msl) as one row per precursor, or with fragments one row per fragment ion, with mzLib's not-available sentinels as nulls. | [`mzlib::library::read_with`](crate::library::read_with) | `pymzlib.library.read` | `library_read` | `library read` |
 
 ## `peptidoform` · guide: [`peptidoform`](crate::peptidoform)

@@ -50,6 +50,17 @@ A wire verb's first appearance here is the version its spec in the bridge record
   The recordings and inputs (`stats/lnmm_*`, `stats/link_cells.tsv`, and
   `stats_fit_mixed_lnmm_simulated.json` for the guide's comparison) are pyMzLib 0.7.0's, byte for
   byte.
+- **`library::calibrate_rt`, ported from pyMzLib 0.7.0** (mzLib 1.0.596, #1387): each run's map
+  from retention time in minutes onto a spectral library's iRT scale, fitted by mzLib's
+  `IrtCalibration.Fit` from anchors you choose (`RtAnchor`: group, minutes, iRT), and the times
+  you send converted with it, either way (`RtQuery::minutes_to_irt`, `RtQuery::irt_to_minutes`).
+  `RtCalibrationOptions`' `kind` (`CALIBRATION_KINDS`), `minimum_anchors`, `bandwidth`, `knots`
+  and `robustness_iterations` are `None` (mzLib's, which the result reports) unless set;
+  `on_error: OnError::Skip` records a refused group's `FitFailure` and fits the rest. Returns
+  `RtCalibration` (one `RtCalibrationGroup` per run, `rows()` giving `RtCalibrationRow`s). The
+  library guide gains "Calibrate a run onto library iRT", on two DIA-NN reports from mzLib's test
+  data (`tests/fixtures/calibration/`, pyMzLib 0.7.0's, byte for byte). Wire verb
+  `library calibrate-rt`.
 - **The replay bridge learns pyMzLib 0.7.0's matching rules**: `--link` held to the recording's
   `link` echo by value, a `true`/`false` option held to its boolean echo (`--with-depth`),
   `genes map-residues`' `--proteins` choice and alignment file, and the stdin echoes of

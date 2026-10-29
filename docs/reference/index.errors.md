@@ -67,7 +67,7 @@ Never returned: `service_unavailable`.
 
 Never returned: `service_unavailable`.
 
-### `library calibrate-rt` · `mzlib::library::calibrate_rt` (not yet)
+### `library calibrate-rt` · [`mzlib::library::calibrate_rt`](crate::library::calibrate_rt)
 
 | Kind | mzLibRust returns | When |
 |---|---|---|
