@@ -683,13 +683,8 @@ const QUANT: &[Deviation] = &[
 /// and the lint skips it only until it is closed. The test fails on an entry that is no longer a
 /// gap, so this list can only shrink.
 const PENDING: &[(&str, &str)] = &[
-    // pyMzLib 0.7.0's new ptmqtl options (bridge specs at 45833ca, mzLib #1464 and #1468): vendored
-    // with the repin, whose scope is the answers that changed; the options come with the 0.7.0
-    // verbs (genes map-residues, library calibrate-rt, stats fit-latent-mixed, stats fit-link).
-    // Their output echoes (include_bounds, min_untied_share, run_covariate_*, scale) are projected.
-    ("ptmqtl pairs", "param.include-bounds"),
-    ("ptmqtl pairs", "param.run-covariate"),
-    ("ptmqtl trait-effects", "param.scale"),
+    // Empty: pyMzLib 0.7.0's ptmqtl options (include-bounds, run-covariate, scale) came with its
+    // four verbs, and every spec fact is projected.
 ];
 
 // =================================================================================================

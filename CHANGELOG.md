@@ -15,6 +15,22 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Added
 
+- **`ptmqtl` takes pyMzLib 0.7.0's three new options** (mzLib #1464, #1468), each sent only
+  when set, so mzLib's default applies otherwise; the echoes the repin projected now report them:
+  - `PairsOptions::include_bounds` (wire `--include-bounds`): co-varying pairs count runs where a
+    site was seen in only one form as tied bounds, never invented values. A pair whose two sites
+    are mostly one bound is `both_sites_mostly_bounds`, untested. `false` is mzLib's default.
+  - `PairsOptions::run_covariate` (wire `--run-covariate`): a per-run covariate table, such as
+    each run's target PSMs; pairs become the partial Spearman correlation given it.
+  - `TraitEffectsOptions::scale` (wire `--scale`), an `OccupancyScale` (`OCCUPANCY_SCALES`):
+    `Log2Odds` reports the same fit in log2 odds, a change of unit, not a refit. `None` is
+    mzLib's natural-log odds.
+
+  The ptmqtl guide gains "Counting one-form runs as bounds", "Given each run's depth" and the log2
+  example, on mzLib's `BoundsEnterTypeAAsTiedRanks`, `ARunCovariateIsPartialledOut` and
+  `TraitDesign` cases (`bounds.tsv`, `depth.tsv` and `depth_psms.tsv` vendored byte for byte from
+  pyMzLib 0.7.0), and `PENDING` in `tests/spec_docs.rs` is empty.
+
 - **The bridge pin is pyMzLib v0.7.0** (mzLib 1.0.596, tag commit `cc67b7a2`; bridge-watch's
   repin, mzLibRust #37). `install_bridge()` fetches it, and its bridge dispatches 57 verbs. Every
   answer it changes for the same call is in `docs/upgrading.md`'s new pyMzLib 0.7.0 section:
