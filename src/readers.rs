@@ -1459,13 +1459,13 @@ impl ReadBatch {
 /// What [`identify_many`] returns: one [`FileInfo`] per path, in the order given.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct IdentifyBatch {
-    /// Paths given.
+    /// Paths given, in files.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub file_count: u64,
-    /// Paths identified.
+    /// Paths identified, in files.
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub read_count: u64,
-    /// Paths that could not be identified — always 0 unless [`OnError::Skip`].
+    /// Paths that could not be identified, in files — always 0 unless [`OnError::Skip`].
     #[serde(default, deserialize_with = "bridge::null_to_default")]
     pub failed_count: u64,
     /// [`OnError::Fail`] or [`OnError::Skip`], as requested.
@@ -1865,6 +1865,7 @@ pub fn identify(path: impl AsRef<Path>) -> Result<FileInfo> {
 /// One bridge process, the answers in the order given — the cheap way to sort a directory of
 /// unknown files before reading any of them. There is no table and no `out`; setting
 /// [`BulkOptions::out`] is refused before anything is spawned.
+#[doc = include_str!("../docs/reference/readers.identify.bulk.md")]
 ///
 /// # Errors
 ///
