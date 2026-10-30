@@ -2,7 +2,7 @@
 //!
 //! # What this does, and what it deliberately does not
 //!
-//! The bridge is a self-contained .NET executable of roughly 130 MB. crates.io will not carry that
+//! The bridge is a self-contained .NET executable of roughly 65 MB. crates.io will not carry that
 //! (the limit is ~10 MB), and `include_bytes!` is obviously out, so a Rust binding has to fetch it.
 //! That is the one part of the design pyMzLib's wheel did not have to solve — a wheel just carries
 //! the payload.

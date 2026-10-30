@@ -584,6 +584,9 @@ A wire verb's first appearance here is the version its spec in the bridge record
   modules.
 - The CI job for the minimum supported Rust version resolves dependencies that support Rust 1.74
   rather than failing on the newest `thiserror`, which needs 1.77.
+- `install_bridge()`'s consent prompt said it downloads about 130 MB. pyMzLib 0.7.0's archives are
+  59-65 MiB to download and 81-105 MiB unpacked, so it now says "about 65 MB (about 110 MB once
+  unpacked)". The README, `build.rs` and the crate docs say the same.
 
 ### Documentation
 
