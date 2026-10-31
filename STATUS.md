@@ -36,8 +36,8 @@ Seven defects, all verified against ground truth before filing, two with fixes p
 
 - **#1111 threatened reproducibility.** With default threading, identical inputs gave different
   protein-level answers roughly 1 run in 6. mzLib #1155 fixed it (PEP training rows built in a
-  fixed order), inside the pinned mzLib. The K562 case has not been re-measured at `-1` on that
-  pin, so `max_threads = 1` stays the conservative choice for published numbers.
+  fixed order), inside the pinned mzLib. Re-measured on 2026-10-30: on the K562 pair, five runs
+  at `-1` and one at `1` gave identical results, so the thread count changes only the speed.
 - **#1112 affects MetaMorpheus, not just the bindings.** Every UniProt XML load silently drops
   glycosylation-site annotations, and reports nothing about it.
 

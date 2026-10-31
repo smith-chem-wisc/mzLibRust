@@ -559,9 +559,9 @@ pub struct QuantifyOptions {
     ///
     /// The thread count used to change answers: at `-1` the peptide roll-up dropped some MBR
     /// intensities nondeterministically (mzLib#1111). mzLib#1155, inside the pinned mzLib, fixed
-    /// that by building PEP training rows in a fixed order. The K562 case has not been re-measured
-    /// at `-1` on this pin, so `max_threads: 1` remains the conservative choice for numbers you
-    /// intend to publish.
+    /// that by building PEP training rows in a fixed order. It no longer does: on mzLib's K562
+    /// pair, five runs at `-1` and one at `1` gave identical results (re-measured through the
+    /// bridge of pyMzLib 0.7.0, which this crate pins).
     pub max_threads: i32,
     /// If given, FlashLFQ also writes `QuantifiedPeaks.tsv`, `QuantifiedPeptides.tsv` and
     /// `QuantifiedProteins.tsv` there, and, with [`Self::bayesian_protein_quant`],

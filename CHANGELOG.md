@@ -590,6 +590,14 @@ A wire verb's first appearance here is the version its spec in the bridge record
 
 ### Documentation
 
+- **`QuantifyOptions::max_threads` no longer calls `1` the conservative choice.** mzLib#1155 fixed
+  the multithreaded nondeterminism of mzLib#1111, and mzLib's K562 pair now re-measures identical:
+  five runs at `-1` and one at `1` gave the same results through pyMzLib 0.7.0's bridge. `STATUS.md`
+  and the vendored `quant.flashlfq` spec (re-synced to bridge `84c3b98`) say the same.
+- **`identify_many` includes its reference facts.** The bridge's `readers identify` spec now declares
+  its many-paths answer (it carries no `record_count`, because identifying reads no records), so the
+  rendered `readers.identify.bulk.md` is on `identify_many`, and `IdentifyBatch`'s counts name their
+  unit.
 - **`docs/upgrading.md` has a pyMzLib 0.7.0 section** (mzLib 1.0.596), entry for entry with
   pyMzLib's, naming each changed answer by its Rust function and field. The `ptmqtl` guide
   describes `not_detected` as mzLib's covered-zero, the peptidoform counts and `test_status`; the
